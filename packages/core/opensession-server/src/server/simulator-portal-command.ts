@@ -32,6 +32,12 @@ export const simulatorPortalInput = {
     ),
 };
 
+/** One simulator Portal per session; the hash keeps sessions sharing a
+ *  checkout from selecting the same viewer. */
+export function simulatorPortalName(sessionId: string): string {
+  return `ios-simulator-${createHash("sha256").update(sessionId).digest("hex").slice(0, 12)}`;
+}
+
 export async function simulatorPortalCommand(
   input: z.infer<z.ZodObject<typeof simulatorPortalInput>> & {
     sessionId: string;
@@ -68,7 +74,7 @@ export async function simulatorPortalCommand(
       "Simulator Portals require the Open Session source checkout that runs this instance.",
     );
   }
-  const name = `ios-simulator-${createHash("sha256").update(input.sessionId).digest("hex").slice(0, 12)}`;
+  const name = simulatorPortalName(input.sessionId);
   const args = [
     ...simulatorPortalArgv(process.execPath, entry),
     "--session",

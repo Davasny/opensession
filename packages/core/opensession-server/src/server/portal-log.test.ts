@@ -6,6 +6,7 @@ import { createMcpRuntime, type McpRuntime } from "./mcp-runtime";
 import {
   parseOomKills,
   readSandboxPortalLog,
+  sandboxPortProbeArgv,
   sandboxPortProbeState,
 } from "./portal-supervisor";
 import {
@@ -113,6 +114,10 @@ describe("sandboxPortProbeState", () => {
       }),
     ).toBe("closed");
     expect(sandboxPortProbeState({ exitCode: 124, stderr: "" })).toBe(
+      "unknown",
+    );
+    // perl's alarm on a macOS guest exits by SIGALRM.
+    expect(sandboxPortProbeState({ exitCode: 142, stderr: "" })).toBe(
       "unknown",
     );
     expect(
@@ -281,5 +286,27 @@ describe("list_portals while a Sandbox Portal start is pending", () => {
     } finally {
       operations.delete(`${sandbox.id}:web`);
     }
+  });
+});
+
+describe("sandboxPortProbeArgv", () => {
+  test("macOS guests bound the probe without GNU timeout", () => {
+    for (const provider of ["tart", "usecomputer"]) {
+      const argv = sandboxPortProbeArgv(provider, 4000);
+      expect(argv[0]).toBe("perl");
+      expect(argv).not.toContain("timeout");
+      expect(argv.slice(-3)).toEqual([
+        "bash",
+        "-c",
+        "exec 3<>/dev/tcp/127.0.0.1/4000",
+      ]);
+    }
+  });
+
+  test("Linux guests keep timeout", () => {
+    expect(sandboxPortProbeArgv("daytona", 4000).slice(0, 2)).toEqual([
+      "timeout",
+      "5",
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createMcpRuntime, type McpRuntime } from "./mcp-runtime";
+import type { Sandbox } from "./sandbox/provider";
 import {
   createPortalsMcpServer,
   type PortalsMcpContext,
@@ -407,14 +408,10 @@ describe("Portals MCP Sandbox readiness", () => {
 });
 
 describe("Simulator Portal MCP", () => {
-  test("the tool is discoverable and refuses Sandbox workspaces without waking them", async () => {
-    let woke = false;
+  test("the tool refuses a Linux Sandbox", async () => {
     const { runtime } = await harness(undefined, {
       hasSandbox: () => true,
-      sandbox: async () => {
-        woke = true;
-        return null;
-      },
+      sandbox: async () => ({ id: "sb", provider: "daytona" }) as Sandbox,
     });
     const response = await runtime.callExact(
       "opensession-portals_start_simulator_portal",
@@ -423,9 +420,24 @@ describe("Simulator Portal MCP", () => {
     );
     expect(response.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("local Mac workspace"),
+      text: expect.stringContaining("need a macOS Sandbox"),
     });
-    expect(woke).toBe(false);
+  });
+
+  test("an unavailable Sandbox explains why", async () => {
+    const { runtime } = await harness(undefined, {
+      hasSandbox: () => true,
+      sandbox: async () => null,
+    });
+    const response = await runtime.callExact(
+      "opensession-portals_start_simulator_portal",
+      { appPath: "Build/App.app" },
+      { toolCallId: "simulator-asleep" },
+    );
+    expect(response.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Could not start simulator Portal"),
+    });
   });
 
   test("no workspace cannot create a simulator on the host", async () => {

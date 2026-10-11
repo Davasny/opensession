@@ -1,4 +1,5 @@
-import { basename, extname, resolve } from "node:path";
+import { readdir } from "node:fs/promises";
+import { basename, extname, join, resolve } from "node:path";
 import { isCompiledBinary } from "../runner-host/exe";
 import {
   EMBEDDED_SIMULATOR_VIEWER,
@@ -117,8 +118,36 @@ export async function buildSimulatorViewerFromSource(): Promise<
   return files;
 }
 
+/**
+ * Environment variable naming a directory of prebuilt viewer assets. A macOS
+ * Sandbox runs the viewer as an uploaded bundle with no source checkout, so the
+ * host ships the built assets beside it (see guest-bundle.ts).
+ */
+export const SIMULATOR_VIEWER_ASSETS_ENV =
+  "OPENSESSION_SIMULATOR_VIEWER_ASSETS";
+
+/** The viewer assets from a prebuilt directory, as guest-bundle.ts writes. */
+export async function prebuiltSimulatorViewerAssets(
+  dir: string,
+): Promise<Map<string, Blob>> {
+  const files = new Map<string, Blob>();
+  for (const name of await readdir(dir))
+    if (!name.startsWith("."))
+      files.set(
+        `/${name}`,
+        Bun.file(join(dir, name), { type: viewerContentType(name) }),
+      );
+  for (const required of ["/main.js", "/main.css", "/utilities.css"])
+    if (!files.has(required))
+      throw new Error(`Simulator viewer assets in ${dir} lack ${required}`);
+  files.set("/", indexHtml());
+  return files;
+}
+
 /** Built inside the supervised viewer process, never on the gateway thread. */
 export async function buildSimulatorViewer(): Promise<Map<string, Blob>> {
+  const prebuilt = process.env[SIMULATOR_VIEWER_ASSETS_ENV];
+  if (prebuilt) return prebuiltSimulatorViewerAssets(prebuilt);
   if (EMBEDDED_SIMULATOR_VIEWER)
     return embeddedSimulatorViewerAssets(EMBEDDED_SIMULATOR_VIEWER);
   if (isCompiledBinary())

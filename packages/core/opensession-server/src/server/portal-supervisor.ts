@@ -40,6 +40,7 @@ import {
   usesOutboundSandboxPortalRelay,
 } from "./sandbox/config";
 import {
+  remoteGuestOsForProvider,
   remoteLayoutForProvider,
   shellQuoteWord,
 } from "./sandbox/adapters/bootstrap";
@@ -392,7 +393,12 @@ export function sandboxPortProbeState(result: {
   stderr: string;
 }): PortProbeState {
   if (result.exitCode === 0) return "listening";
-  if (result.exitCode === 124 || result.exitCode === 137) return "unknown";
+  if (
+    result.exitCode === 124 ||
+    result.exitCode === 137 ||
+    result.exitCode === 142
+  )
+    return "unknown";
   const stderr = result.stderr.trim();
   if (stderr && !/connect|refused|\/dev\/tcp/i.test(stderr)) return "unknown";
   return "closed";
@@ -1782,14 +1788,24 @@ async function probeSandboxPort(
   port: number,
 ): Promise<PortProbeState> {
   return sandboxPortProbeState(
-    await sandbox.exec([
-      "timeout",
-      "5",
-      "bash",
-      "-c",
-      `exec 3<>/dev/tcp/127.0.0.1/${port}`,
-    ]),
+    await sandbox.exec(sandboxPortProbeArgv(sandbox.provider, port)),
   );
+}
+
+/**
+ * The probe command for a Sandbox guest. macOS ships no GNU `timeout`, so a
+ * macOS guest bounds the connect with perl's alarm instead (it exits by
+ * SIGALRM, 142). Without this every probe there failed with "command not
+ * found" and no Portal on a macOS Sandbox ever became ready.
+ */
+export function sandboxPortProbeArgv(
+  provider: string | undefined | null,
+  port: number,
+): string[] {
+  const probe = ["bash", "-c", `exec 3<>/dev/tcp/127.0.0.1/${port}`];
+  return remoteGuestOsForProvider(provider) === "darwin"
+    ? ["perl", "-e", "alarm shift; exec @ARGV", "5", ...probe]
+    : ["timeout", "5", ...probe];
 }
 
 function sandboxPortalOps(sandbox: Sandbox, sessionId?: string): PortalOps {

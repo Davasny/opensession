@@ -9,9 +9,10 @@ does not immediately pin it again. Phones use the full-width Portal view.
 
 ## Host requirements
 
-This first version supports local macOS workspaces. Both install modes work:
-the compiled release binary and a source installation. Sandboxes and remote
-Runners are not supported. It needs:
+It runs in local macOS workspaces and in macOS Sandboxes (Mac VM and
+use.computer). Linux Sandboxes and remote Runners are not supported. On the
+host it needs the items below; a macOS Sandbox needs the same Xcode, runtime and
+idb tools inside the guest, and Bun, which every Sandbox carries. It needs:
 
 - Full Xcode selected with `xcode-select`, with an installed iOS Simulator runtime.
 - `idb` and `idb_companion` on the service's PATH. See
@@ -47,6 +48,18 @@ Neither Xcode nor idb is installed automatically. Verify operation after a Mac
 reboot and without a monitor before relying on unattended use. This integration
 reads the simulator framebuffer through idb, not the Mac desktop via
 ScreenCaptureKit. It does not request Screen Recording or Accessibility access.
+
+## macOS Sandboxes
+
+A Sandbox guest has no Open Session checkout. On the first start the host
+bundles the viewer process and its browser assets
+(`src/simulator-portal/guest-bundle.ts`, in a child process), uploads them to
+the session's guest scratch directory keyed by content hash, and starts them as
+an ordinary Sandbox Portal, reached through the Sandbox Portal relay. A later
+start with the same bundle reuses the upload. Only a source installation can
+build the bundle. The guest images do not ship idb, and Xcode may lack the iOS
+platform it needs (`xcodebuild -downloadPlatform iOS`); install them in the
+guest or bake them into a project snapshot.
 
 ## Agent workflow
 

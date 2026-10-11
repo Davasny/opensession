@@ -47,6 +47,10 @@ import {
   simulatorPortalCommand,
   simulatorPortalInput,
 } from "./simulator-portal-command";
+import {
+  sandboxSimulatorPortalCommand,
+  sandboxSupportsSimulatorPortal,
+} from "./sandbox-simulator-portal";
 
 const verifiedEditorFixtureSchema = z.object({
   leaseId: z.string().regex(/^epfl_[A-Za-z0-9]+$/),
@@ -434,16 +438,41 @@ export function createPortalsMcpServer(ctx: PortalsMcpContext) {
     tools: [
       tool(
         "start_simulator_portal",
-        "Start this session's interactive iOS Simulator Portal on the local Mac. Requires full Xcode, an iOS Simulator runtime, idb and idb_companion on PATH, and an already-built simulator .app inside the workspace. Creates a private simulator, streams its screen and forwards taps, swipes and typing. Returns the authenticated viewer URL; the viewer reports boot or dependency errors. Repeated calls reuse the Portal. Use stop_portal/restart_portal with the returned name. Not available in Sandboxes or remote Runner workspaces. Does not build, sign, release, or enable hot reload.",
+        "Start this session's interactive iOS Simulator Portal on the local Mac or in this session's macOS Sandbox (Mac VM or use.computer). Requires full Xcode, an iOS Simulator runtime, idb and idb_companion on PATH, and an already-built simulator .app inside the workspace. Creates a private simulator, streams its screen and forwards taps, swipes and typing. Returns the authenticated viewer URL; the viewer reports boot or dependency errors. Repeated calls reuse the Portal. Use stop_portal/restart_portal with the returned name. Not available in Linux Sandboxes or remote Runner workspaces. Does not build, sign, release, or enable hot reload.",
         simulatorPortalInput,
         async (args) => {
           const deadline = portalToolDeadline(ctx);
           const dir = workspace(ctx);
           if (dir instanceof Error) return result(dir.message);
-          if (ctx.hasSandbox() || ctx.runner()?.runner)
+          if (ctx.runner()?.runner)
             return result(
-              "Simulator Portals require a local Mac workspace, not a Sandbox or remote Runner.",
+              "Simulator Portals require a local Mac workspace or a macOS Sandbox, not a remote Runner.",
             );
+          if (ctx.hasSandbox()) {
+            const sandbox = await ctx.sandbox({ wake: true });
+            if (!sandbox)
+              return result(
+                `Could not start simulator Portal: ${noSandboxReason(ctx)}`,
+              );
+            if (!sandboxSupportsSimulatorPortal(sandbox))
+              return result(
+                "Simulator Portals need a macOS Sandbox (Mac VM or use.computer) with Xcode, an iOS Simulator runtime, idb and idb_companion.",
+              );
+            try {
+              const input = await sandboxSimulatorPortalCommand({
+                ...args,
+                sessionId: ctx.sessionId,
+                sandbox,
+              });
+              return result(
+                await startPortalForContext(ctx, dir, sandbox, input, deadline),
+              );
+            } catch (error) {
+              return result(
+                `Could not start simulator Portal: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
           if (process.platform !== "darwin")
             return result(
               "Simulator Portals require Open Session running on macOS with full Xcode and idb installed.",

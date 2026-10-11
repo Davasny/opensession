@@ -739,7 +739,7 @@ Supervised HTTP/WebSocket services for this session's workspace.
 
 `mcp__opensession-portals__start_simulator_portal` · input: `appPath` (string, required), `deviceType` (string), `runtime` (string)
 
-Start this session's interactive iOS Simulator Portal on the local Mac. Requires full Xcode, an iOS Simulator runtime, idb and idb_companion on PATH, and an already-built simulator .app inside the workspace. Creates a private simulator, streams its screen and forwards taps, swipes and typing. Returns the authenticated viewer URL; the viewer reports boot or dependency errors. Repeated calls reuse the Portal. Use stop_portal/restart_portal with the returned name. Not available in Sandboxes or remote Runner workspaces. Does not build, sign, release, or enable hot reload.
+Start this session's interactive iOS Simulator Portal on the local Mac or in this session's macOS Sandbox (Mac VM or use.computer). Requires full Xcode, an iOS Simulator runtime, idb and idb_companion on PATH, and an already-built simulator .app inside the workspace. Creates a private simulator, streams its screen and forwards taps, swipes and typing. Returns the authenticated viewer URL; the viewer reports boot or dependency errors. Repeated calls reuse the Portal. Use stop_portal/restart_portal with the returned name. Not available in Linux Sandboxes or remote Runner workspaces. Does not build, sign, release, or enable hot reload.
 
 ### `start_portal`
 
