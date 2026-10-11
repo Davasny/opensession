@@ -61,6 +61,20 @@ final class SessionsListViewModel {
 
     private var pollTask: Task<Void, Never>?
 
+    /// The lens the sidebar shows, applied by the server before it answers.
+    /// Nil asks for the whole live list (dev fixtures and tests only).
+    @ObservationIgnored private(set) var scope: OS1API.SidebarScope?
+
+    /// Point the list at a new lens. A changed one refetches at once rather
+    /// than waiting out the poll, the way the web sidebar re-reads its
+    /// projection when its query changes.
+    func setScope(_ next: OS1API.SidebarScope) {
+        guard next != scope else { return }
+        let first = scope == nil
+        scope = next
+        if !first { Task { await refresh() } }
+    }
+
     /// The server's archived index, kept apart from `archivedSessions` so the
     /// local overlay (a row archived on this device, one restored a moment
     /// ago) can be re-applied without a refetch.
@@ -1010,8 +1024,17 @@ final class SessionsListViewModel {
         if !hasLoaded { diagnoseUnreachableServer() }
         let requestConnection = OS1API.LiveActivityConnection.current()
         do {
-            async let workspaceRequest = try? OS1API.workspaces()
-            let all = try await OS1API.sessions()
+            async let workspaceRequest = try? OS1API.sidebarWorkspaces()
+            let requestScope = scope
+            let all: [Session]
+            if let requestScope {
+                all = try await OS1API.sessions(scope: requestScope)
+            } else {
+                all = try await OS1API.sessions()
+            }
+            // The lens moved while this was in flight; its own refresh is
+            // already on the way, and this answer is for a list no one shows.
+            guard requestScope == scope else { return }
             // A server or account can change while this request is in flight.
             // Never publish the old account's rows into its replacement.
             guard requestConnection == OS1API.LiveActivityConnection.current() else { return }

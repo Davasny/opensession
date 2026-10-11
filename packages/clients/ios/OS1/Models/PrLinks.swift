@@ -56,6 +56,11 @@ enum PrLinks {
             self.drawn = drawn
         }
 
+        /// Replays a remembered rewrite: the PRs it drew are now drawn.
+        func adopt(_ drawn: Set<String>) {
+            self.drawn = drawn
+        }
+
         /// Whether this is the first time the message names `reference`,
         /// recording it either way.
         fileprivate func claim(_ reference: Reference) -> Bool {

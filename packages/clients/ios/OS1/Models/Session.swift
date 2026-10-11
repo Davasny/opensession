@@ -137,6 +137,10 @@ struct Session: Identifiable, Decodable, Equatable, Hashable {
     /// attached, linked, and discovered branches. The native workspace and PR
     /// surfaces use the enriched refs to show the complete series.
     var prs: [SessionPrRef]?
+    /// Wire-only: on a scoped sidebar response, the earlier sibling whose
+    /// `prs` this row shares. `OS1API.restoringSharedPrs` fills `prs` from it
+    /// and clears this before anything reads the row.
+    var prsFrom: String?
     /// The requested sandbox provider and materialized sandbox id. This is a
     /// reference only; Workspace details resolves its live state on demand.
     var sandbox: SessionSandbox?

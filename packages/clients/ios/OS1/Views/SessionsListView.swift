@@ -273,6 +273,31 @@ struct SessionsListView: View {
     /// Whose work the list is showing, as the lens spells it now.
     private var person: String { SidebarPersonLens.stored(peopleFilterRaw) }
 
+    /// The open session, when the lens would leave it out of the list (a
+    /// teammate's session opened from a link or the inbox). Set only when the
+    /// selection changes, so a session that is already listed never makes
+    /// the list request flip between two shapes.
+    @State private var openOutsideLensID: String?
+
+    private var sidebarScope: OS1API.SidebarScope {
+        OS1API.SidebarScope(
+            user: ServerConfig.shared.userName,
+            person: person,
+            repo: repoFilter,
+            showAutoCreated: showAutoCreated,
+            selectedSessionId: openOutsideLensID
+        )
+    }
+
+    private func noteOpened(_ id: String?) {
+        guard let id, !id.isEmpty, !viewModel.sessions.contains(where: { $0.id == id })
+        else {
+            openOutsideLensID = nil
+            return
+        }
+        openOutsideLensID = id
+    }
+
     private var personSelection: Binding<String> {
         Binding(get: { person }, set: { peopleFilterRaw = $0 })
     }
@@ -457,6 +482,7 @@ struct SessionsListView: View {
                 }
             ))
             .task {
+                viewModel.setScope(sidebarScope)
                 #if DEBUG
                 if showsTeamActivityFixture {
                     viewModel.prepareTeamActivityFixture()
@@ -550,15 +576,7 @@ struct SessionsListView: View {
                 #else
                 showSettings = false
                 #endif
-                let known = viewModel.sessions.contains { $0.id == id }
-                    || viewModel.archivedSessions.contains { $0.id == id }
-                if known {
-                    _ = openSessionLink(id: id)
-                } else if let base = ServerConfig.shared.baseURL {
-                    // Not in this list (another person's, or long archived):
-                    // the web route is the same fallback a transcript link has.
-                    systemOpenURL(base.appendingPathComponent("session").appendingPathComponent(id))
-                }
+                _ = openSessionLink(id: id)
             }
             #if os(macOS)
             // File > New Session from the app's account-bound menu command.
@@ -818,6 +836,7 @@ struct SessionsListView: View {
         // otherwise the detail column would keep showing it while the sidebar
         // says something else is selected.
         .onChange(of: selectedSessionID) { _, id in
+            noteOpened(id)
             if let id,
                let draft = allSidebarWorkspaces.first(where: {
                    $0.id == id && $0.isDraftWorkspace
@@ -1514,12 +1533,24 @@ struct SessionsListView: View {
         // dev auto-open), so a session opened by any route marks its row.
         .onChange(of: path) {
             if let open = path.last { lastOpenedSessionID = open.id }
+            noteOpened(path.last?.id)
         }
     }
     #endif
 
-    @ViewBuilder
+    /// The server scopes the list to this lens before it answers, as it does
+    /// for the web sidebar; a lens change refetches at once. Attached here
+    /// rather than on `body`, whose modifier chain is at the type checker's
+    /// limit.
     private var loadingOrList: some View {
+        loadingOrListContent
+            .onChange(of: sidebarScope) { _, scope in
+                viewModel.setScope(scope)
+            }
+    }
+
+    @ViewBuilder
+    private var loadingOrListContent: some View {
         // Screenshot fixtures exercise the finished Team surface without
         // waiting for a production-sized sessions payload to cross into the
         // simulator. This path exists only in DEBUG builds.
@@ -1650,10 +1681,11 @@ struct SessionsListView: View {
             #endif
             return .handled
         }
-        guard let base = ServerConfig.shared.baseURL else { return .handled }
-        return .systemAction(
-            base.appendingPathComponent("session").appendingPathComponent(id)
-        )
+        // Outside this list: the sidebar carries only its own lens, so a
+        // teammate's session is fetched and opened here, with the web as the
+        // fallback for one this account cannot read.
+        openInboxSession(id, fallback: "/session/\(id)")
+        return .handled
     }
 
     #if os(iOS)
@@ -1849,9 +1881,15 @@ struct SessionsListView: View {
     /// opens one of its comment threads, the way a comment link does.
     private func autoOpenFromEnvironment() {
         let env = ProcessInfo.processInfo.environment
-        guard let id = env["OS1_OPEN_SESSION"],
-              let session = viewModel.sessions.first(where: { $0.id == id })
-        else { return }
+        guard let id = env["OS1_OPEN_SESSION"] else { return }
+        guard let session = viewModel.sessions.first(where: { $0.id == id }) else {
+            // Outside the sidebar's lens: open it the way a link would.
+            if let thread = env["OS1_OPEN_THREAD"] {
+                ThreadFocus.shared.note(link: CommentThreads.link(sessionId: id, threadId: thread), sessionId: id)
+            }
+            _ = openSessionLink(id: id)
+            return
+        }
         let focusThread = {
             if let thread = env["OS1_OPEN_THREAD"] {
                 ThreadFocus.shared.note(link: CommentThreads.link(sessionId: id, threadId: thread), sessionId: id)
@@ -2282,12 +2320,15 @@ struct SessionsListView: View {
         return outcome
     }
 
+    /// `inbox` is passed in by a caller grouping several project bands, so
+    /// the whole list is split and sorted once rather than once per band.
     private func sessionGroups(
         for workspaces: [SidebarWorkspace],
-        namespace: String = ""
+        namespace: String = "",
+        inbox precomputed: InboxOutcome? = nil
     ) -> [SessionGroup] {
         let ids = Set(workspaces.map(\.id))
-        let inbox = inboxOutcome
+        let inbox = precomputed ?? inboxOutcome
         let active = inbox.active.filter { ids.contains($0.id) }
         let snoozed = inbox.snoozed.filter { ids.contains($0.id) }
         let snoozedGroup = SessionGroup(
@@ -2344,12 +2385,17 @@ struct SessionsListView: View {
 
     private var repoSessionGroups: [RepoSessionGroup] {
         let byRepo = Dictionary(grouping: filteredWorkspaces, by: \.effectiveRepo)
+        let inbox = inboxOutcome
         return repoBandRepos.map { repo in
             let workspaces = byRepo[repo] ?? []
             return RepoSessionGroup(
                 repo: repo,
                 workspaces: workspaces,
-                sections: sessionGroups(for: workspaces, namespace: "repo-\(repo)-")
+                sections: sessionGroups(
+                    for: workspaces,
+                    namespace: "repo-\(repo)-",
+                    inbox: inbox
+                )
             )
         }
     }
@@ -2700,7 +2746,7 @@ struct SessionsListView: View {
     private func groupRows(_ group: SessionGroup) -> some View {
         let shown = visibleWorkspaces(group.workspaces, collapsedKey: group.id)
         if isActiveSection(group) {
-            let keys = group.workspaces.map(SidebarRowKeys.sharedRowKey)
+            let keys = ActiveOrder.Positions(group.workspaces.map(SidebarRowKeys.sharedRowKey))
             ForEach(shown) { workspace in
                 sessionRow(workspace, activeKeys: keys)
             }
@@ -2749,17 +2795,21 @@ struct SessionsListView: View {
     /// Move up / Move down for a row in the Active section: the same order a
     /// drag writes, reachable from the menu, by keyboard and VoiceOver.
     @ViewBuilder
-    private func activeOrderButtons(_ workspace: SidebarWorkspace, keys: [String]?) -> some View {
-        if let keys {
+    private func activeOrderButtons(
+        _ workspace: SidebarWorkspace,
+        keys positions: ActiveOrder.Positions?
+    ) -> some View {
+        if let positions {
             let key = SidebarRowKeys.sharedRowKey(for: workspace)
-            if ActiveOrder.stepping(keys, key: key, by: -1) != nil {
+            let keys = positions.keys
+            if positions.canStep(key, by: -1) {
                 Button {
                     stepActiveRow(workspace, keys: keys, by: -1)
                 } label: {
                     Label("Move up", systemImage: "arrow.up")
                 }
             }
-            if ActiveOrder.stepping(keys, key: key, by: 1) != nil {
+            if positions.canStep(key, by: 1) {
                 Button {
                     stepActiveRow(workspace, keys: keys, by: 1)
                 } label: {
@@ -2836,7 +2886,7 @@ struct SessionsListView: View {
     @ViewBuilder
     private func sessionRow(
         _ workspace: SidebarWorkspace,
-        activeKeys: [String]? = nil
+        activeKeys: ActiveOrder.Positions? = nil
     ) -> some View {
         let session = workspace.mainSession
         let canArchive = !workspace.isOptimistic && !workspace.isDraftWorkspace
@@ -3098,7 +3148,7 @@ struct SessionsListView: View {
     @ViewBuilder
     private func workspaceMenu(
         _ workspace: SidebarWorkspace,
-        activeKeys: [String]? = nil
+        activeKeys: ActiveOrder.Positions? = nil
     ) -> some View {
         // The same three filing actions as the row: Pin, Snooze, Archive.
         pinButton(workspace)

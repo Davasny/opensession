@@ -204,7 +204,7 @@ struct MarkdownBody: View {
         let config = quoteSelection == nil
             ? base
             : base.withTextContextMenu(value: .os1QuoteSelection)
-        return SwiftStreamingMarkdown.MarkdownView(
+        return CachedMarkdownView(
             text: linkifiedValue,
             config: config,
             listener: quoteSelection?.listener(entryId: anchorEntryId)
@@ -242,8 +242,29 @@ struct MarkdownBody: View {
         // this a row drawn before the first poll — every row of a cold deep
         // link — keeps the chips it could make of empty ones, forever. See
         // `TranscriptLinks` for why one global counter is cheap enough.
-        _ = TranscriptLinks.shared.generation
-        return AssetLinks.linkify(
+        let generation = TranscriptLinks.shared.generation
+        // Six regex passes per message, on every body evaluation of every
+        // row a lazy transcript realizes while scrolling. Their output is a
+        // function of exactly this key, so a row scrolled back in replays
+        // its rewrite (and the PRs it drew) instead of redoing it.
+        let key = LinkifiedCache.Key(
+            text: value,
+            sessionId: openPanel.sessionId,
+            transcriptSessionId: transcriptSessionId,
+            generation: generation,
+            drawnBefore: ledger.drawn
+        )
+        if let hit = LinkifiedCache.entries[key] {
+            ledger.adopt(hit.drawnAfter)
+            return hit.text
+        }
+        let text = rewrite(value, ledger: ledger)
+        LinkifiedCache.store(key, text: text, drawnAfter: ledger.drawn)
+        return text
+    }
+
+    private func rewrite(_ value: String, ledger: PrLinks.Ledger) -> String {
+        AssetLinks.linkify(
             FileLinks.linkify(
                 SessionLinks.linkify(
                     AutomationLinks.linkify(
@@ -270,6 +291,31 @@ struct MarkdownBody: View {
         #else
         12
         #endif
+    }
+}
+
+/// Rewritten message prose, by everything the rewrite reads. Bounded like
+/// the block cache above it.
+@MainActor
+private enum LinkifiedCache {
+    struct Key: Hashable {
+        let text: String
+        let sessionId: String?
+        let transcriptSessionId: String?
+        let generation: Int
+        let drawnBefore: Set<String>
+    }
+
+    struct Entry {
+        let text: String
+        let drawnAfter: Set<String>
+    }
+
+    static var entries: [Key: Entry] = [:]
+
+    static func store(_ key: Key, text: String, drawnAfter: Set<String>) {
+        if entries.count >= 600 { entries.removeAll(keepingCapacity: true) }
+        entries[key] = Entry(text: text, drawnAfter: drawnAfter)
     }
 }
 

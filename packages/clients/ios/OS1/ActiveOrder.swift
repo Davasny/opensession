@@ -106,6 +106,29 @@ enum ActiveOrder {
 
     /// A section's keys with one row stepped up (`by: -1`) or down (`by: 1`).
     /// Nil when it is already at that end.
+    /// One section's row keys with each key's place, built once per section
+    /// so every row's menu can ask "can this move?" without walking the
+    /// section again (asking `stepping` per row made the list quadratic).
+    struct Positions: Equatable {
+        let keys: [String]
+        private let index: [String: Int]
+        private let count: Int
+
+        init(_ keys: [String]) {
+            self.keys = keys
+            var index: [String: Int] = [:]
+            for key in keys where index[key] == nil { index[key] = index.count }
+            self.index = index
+            count = index.count
+        }
+
+        /// Same answer as `stepping(keys, key:, by:) != nil`.
+        func canStep(_ key: String, by step: Int) -> Bool {
+            guard let position = index[key] else { return false }
+            return (0..<count).contains(position + step)
+        }
+    }
+
     static func stepping(_ keys: [String], key: String, by step: Int) -> [String]? {
         var unique: [String] = []
         var seen = Set<String>()

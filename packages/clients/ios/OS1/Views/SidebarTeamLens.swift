@@ -48,6 +48,15 @@ enum TeamActivity {
         let current = member(matching: currentUser, in: members)
         var order: [String] = []
         var grouped: [String: (label: String, active: [Session], all: [Session])] = [:]
+        // A live list has thousands of sessions and a handful of distinct
+        // names on them: resolve each name once.
+        var resolvedNames: [String: Member?] = [:]
+        func resolve(_ value: String) -> Member? {
+            if let known = resolvedNames[value] { return known }
+            let found = member(matching: value, in: members)
+            resolvedNames[value] = found
+            return found
+        }
 
         for session in sessions where session.archived != true && session.desk != true {
             let owner: Member?
@@ -59,7 +68,7 @@ enum TeamActivity {
                         in: .whitespacesAndNewlines
                     )
                 if let configuredOwner, !configuredOwner.isEmpty,
-                   let resolved = member(matching: configuredOwner, in: members) {
+                   let resolved = resolve(configuredOwner) {
                     owner = resolved
                     key = memberKey(resolved)
                     label = resolved.name
@@ -70,7 +79,7 @@ enum TeamActivity {
                 }
             } else {
                 guard let startedBy = session.startedBy,
-                      let resolved = member(matching: startedBy, in: members)
+                      let resolved = resolve(startedBy)
                 else { continue }
                 owner = resolved
                 key = memberKey(resolved)
@@ -84,12 +93,12 @@ enum TeamActivity {
                 order.append(key)
                 grouped[key] = (label, [], [])
             }
-            var group = grouped[key]!
-            group.all.append(session)
+            // Appended in place: copying the group out and back duplicated
+            // its arrays on every session, quadratic in a busy list.
+            grouped[key]!.all.append(session)
             if isRecentlyActive(session, now: now) {
-                group.active.append(session)
+                grouped[key]!.active.append(session)
             }
-            grouped[key] = group
         }
 
         return order.compactMap { key in
