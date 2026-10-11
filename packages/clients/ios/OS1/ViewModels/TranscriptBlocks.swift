@@ -1156,9 +1156,16 @@ final class FoldStateStore {
 
     /// The open/closed state for one work fold, created on first sight with
     /// the preference-derived default and reused forever after.
+    ///
+    /// Keyed apart from `expansion(id:)`: a turn's id is its first item's,
+    /// and when that item is a tool call it is also the tool row's id. One
+    /// shared key made the fold and its first tool call open, close and
+    /// reset each other, so the tool row's closed default also shut the
+    /// fold against an "Open" preference.
     func fold(for turn: WorkTurn, preference: TurnActivity) -> TurnFoldState {
+        let key = Self.foldKey(turn.id)
         let fallback = turn.defaultExpanded(preference: preference)
-        if let existing = states[turn.id] {
+        if let existing = states[key] {
             // Only the live tail may re-derive its default afterwards; a
             // settled fold above the reader must never change height on its
             // own (see the transcript's scroll notes in SessionView).
@@ -1166,9 +1173,11 @@ final class FoldStateStore {
             return existing
         }
         let state = TurnFoldState(expanded: fallback)
-        states[turn.id] = state
+        states[key] = state
         return state
     }
+
+    static func foldKey(_ turnId: String) -> String { "work-fold:\(turnId)" }
 
     /// Expansion for anything else that folds inside a row — a tool call's
     /// detail, a clamped message's body, a long system notice.

@@ -395,6 +395,21 @@ final class FoldStateTests: XCTestCase {
         XCTAssertFalse(live.expanded, "once you decide, the default stops winning")
     }
 
+    func testATurnFoldAndItsFirstToolCallFoldSeparately() {
+        // A turn takes its first item's id, which for a tool-led turn is
+        // also that tool row's id. The two must not share one state.
+        let store = FoldStateStore()
+        let fold = store.fold(for: turn("tool-u1"), preference: TurnActivity(work: .open))
+        let tool = store.expansion(id: "tool-u1", defaultExpanded: false)
+        XCTAssertTrue(fold.expanded, "Open keeps the work open")
+        XCTAssertFalse(tool.expanded, "opening the work leaves its first call closed")
+        tool.toggle()
+        XCTAssertTrue(tool.expanded)
+        XCTAssertTrue(fold.expanded, "opening a call leaves the work as it was")
+        tool.toggle()
+        XCTAssertTrue(fold.expanded, "closing a call does not close the work")
+    }
+
     func testNestedExpansionFollowsItsDefaultUntilYouTouchIt() {
         let store = FoldStateStore()
         let state = store.expansion(id: "run-t1", defaultExpanded: false)

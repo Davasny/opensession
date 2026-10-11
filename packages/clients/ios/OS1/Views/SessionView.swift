@@ -4361,7 +4361,7 @@ private struct SessionInputBar: View {
                 HStack(spacing: 6) {
                     addMenu
                     #if os(iOS)
-                    modelPill
+                    modelPill.layoutPriority(1)
                     #endif
                     Spacer(minLength: 8)
 
@@ -4622,11 +4622,10 @@ private struct SessionInputBar: View {
                 viewModel: viewModel, catalog: catalog, accounts: accounts, showsUsage: false
             )
         } label: {
-            HStack(spacing: 3) {
-                Text(modelPillLabel)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+            // Never a clipped name: the effort drops before the model does.
+            ViewThatFits(in: .horizontal) {
+                modelPillFace(modelPillLabel)
+                modelPillFace(shortModelName)
             }
             .font(.footnote.weight(.medium))
             .foregroundStyle(OS1VisualStyle.textDim)
@@ -4640,6 +4639,16 @@ private struct SessionInputBar: View {
         .opacity(noteMode ? 0.4 : 1)
         .accessibilityLabel("Model and reasoning effort")
         .accessibilityValue(modelPillLabel)
+    }
+
+    private func modelPillFace(_ label: String) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .lineLimit(1)
+                .fixedSize()
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+        }
     }
 
     private var shortModelName: String {
