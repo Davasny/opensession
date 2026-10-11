@@ -1100,18 +1100,21 @@ export function SessionViewerChrome({
 					    panel carries it in its PR row, the summary card as a row of its
 					    own, so it is never in two places at once. */}
                   {/* Play starts the repository's declared Portal and opens it
-					    in the Portal pane, on both widths. */}
-                  {!session.archived && openPortal && !infoPageOpen && (
-                    <PortalLaunchButton
-                      sessionId={session.id}
-                      status={previewStatus}
-                      launching={portalLaunch.launching}
-                      onLaunchingChange={portalLaunch.setLaunching}
-                      onStart={portalLaunch.start}
-                      onOpen={openPortal}
-                      isPhone={isPhone}
-                    />
-                  )}
+					    in the Portal pane. Phones skip it to keep the header to the
+					    title; Portals stays in the ⋯ menu there. */}
+                  {!isPhone &&
+                    !session.archived &&
+                    openPortal &&
+                    !infoPageOpen && (
+                      <PortalLaunchButton
+                        sessionId={session.id}
+                        status={previewStatus}
+                        launching={portalLaunch.launching}
+                        onLaunchingChange={portalLaunch.setLaunching}
+                        onStart={portalLaunch.start}
+                        onOpen={openPortal}
+                      />
+                    )}
                   {!isPhone && !showReview && !panelOpen && !summaryVisible && (
                     <StagingLink
                       session={session}
