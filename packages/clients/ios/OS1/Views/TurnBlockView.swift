@@ -753,64 +753,90 @@ struct TurnFooterView: View {
         footer.files.count - shownFiles.count
     }
 
+    @State private var copied = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            if hasMeta {
-                HStack(spacing: 8) {
-                    if let duration = footer.duration,
-                       let label = TranscriptFormat.duration(duration) {
-                        Text(label)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(OS1VisualStyle.textFaint)
-                            .fixedSize()
-                    }
-
-                    if let model = footer.model, !model.isEmpty {
-                        Text(TranscriptFormat.modelLabel(model))
-                            .font(.caption2)
-                            .foregroundStyle(OS1VisualStyle.textFaint)
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
-
-                    Spacer(minLength: 0)
-                }
+        // One wrapped row, as the web's TurnFooter: how long the turn took,
+        // copy and ⋯ (when, which model, every changed file), then the
+        // assets and touched files. The model name lives in the menu, so
+        // the row under every answer stays short.
+        FlowLayout(spacing: 6, alignment: .center) {
+            if let duration = footer.duration,
+               let label = TranscriptFormat.duration(duration) {
+                Text(label)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(OS1VisualStyle.textFaint)
+                    .fixedSize()
+                    .frame(height: 28)
+                    .padding(.leading, 2)
             }
-
-            if !footer.files.isEmpty || !footer.assets.isEmpty {
-                // Wrapped, not scrolled: a strip inside the transcript fights
-                // the vertical drag for the same gesture and hides its
-                // overflow behind an edge with nothing to say it's there, so
-                // the third chip onward simply wasn't reachable. Assets stay
-                // individually named because the transcript has no other way
-                // into them. A phone names the first file and counts the rest,
-                // which opens the complete Changes panel.
-                FlowLayout(spacing: 6) {
-                    ForEach(footer.assets, id: \.self) { path in
-                        AssetChipView(sessionId: sessionId, path: path)
+            if !footer.text.isEmpty {
+                Button {
+                    copyToPasteboard(footer.text)
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copied = false
                     }
-                    ForEach(shownFiles) { file in
-                        FileChipView(file: file)
-                    }
-                    if hiddenFileCount > 0 {
-                        MoreFilesChipView(
-                            sessionId: sessionId,
-                            count: hiddenFileCount
-                        )
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(copied ? OS1VisualStyle.greenInk : OS1VisualStyle.textFaint)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(copied ? "Copied" : "Copy message")
+            }
+            Menu {
+                if let timestamp = footer.timestamp {
+                    Label(
+                        timestamp.formatted(date: .abbreviated, time: .shortened),
+                        systemImage: "clock"
+                    )
+                }
+                if let model = footer.model, !model.isEmpty {
+                    Label(
+                        "Written by \(TranscriptFormat.modelLabel(model))",
+                        systemImage: "sparkles"
+                    )
+                }
+                if !footer.files.isEmpty {
+                    Section("Changed files") {
+                        ForEach(footer.files.prefix(20)) { file in
+                            Text(verbatim: "\(file.basename)  +\(file.additions) −\(file.deletions)")
+                        }
+                        if footer.files.count > 20 {
+                            Text(verbatim: "+\(footer.files.count - 20) more")
+                        }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(OS1VisualStyle.textFaint)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel("More message actions")
+            ForEach(footer.assets, id: \.self) { path in
+                AssetChipView(sessionId: sessionId, path: path)
+            }
+            ForEach(shownFiles) { file in
+                FileChipView(file: file)
+            }
+            if hiddenFileCount > 0 {
+                MoreFilesChipView(
+                    sessionId: sessionId,
+                    count: hiddenFileCount
+                )
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 1)
         .padding(.bottom, 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var hasMeta: Bool {
-        if footer.duration != nil { return true }
-        if let model = footer.model, !model.isEmpty { return true }
-        return false
     }
 }
 

@@ -2397,6 +2397,32 @@ enum OS1API {
         try await post("/api/desk/voice/secret", body: ["user": ServerConfig.shared.userName])
     }
 
+    struct SessionVoiceSecret: Decodable, Sendable {
+        let clientSecret: String
+        let model: String
+    }
+
+    /// A Realtime client secret for a call about one session's thread. The
+    /// server builds the instructions from the transcript, so the secret can
+    /// only open that call (session-voice.ts, WebSocket transport).
+    static func sessionVoiceSecret(sessionId: String) async throws -> SessionVoiceSecret {
+        try await post(
+            "/api/sessions/\(sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)/voice",
+            body: ["transport": "websocket"]
+        )
+    }
+
+    /// Ask a transcript-only helper (`luna`, `terra`, `conversation`) for the
+    /// voice call. It has no tools and writes nothing to the thread.
+    static func sessionVoiceHelper(sessionId: String, model: String, prompt: String) async throws -> String {
+        struct Answer: Decodable, Sendable { let text: String }
+        let answer: Answer = try await post(
+            "/api/sessions/\(sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)/voice/helper",
+            body: ["model": model, "prompt": String(prompt.prefix(4_000))]
+        )
+        return answer.text
+    }
+
     /// Run one Realtime tool call server-side, as the verified user, and hand
     /// back the JSON string the model gets as its function_call_output. The
     /// result under "result" has no fixed schema, so this path stays on raw

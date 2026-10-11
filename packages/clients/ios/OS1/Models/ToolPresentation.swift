@@ -755,11 +755,18 @@ enum TranscriptFormat {
         for prefix in ["claude-", "gpt-", "openai-", "anthropic-"] where slug.hasPrefix(prefix) {
             slug = String(slug.dropFirst(prefix.count))
         }
-        let words = slug.components(separatedBy: CharacterSet(charactersIn: "-_"))
-            .filter { !$0.isEmpty }
-            .map { word -> String in
-                word.allSatisfy(\.isNumber) ? word : word.prefix(1).uppercased() + word.dropFirst()
+        // Adjacent number parts are one version: "opus-5-5" is "Opus 5.5".
+        var words: [String] = []
+        for word in slug.components(separatedBy: CharacterSet(charactersIn: "-_"))
+            where !word.isEmpty {
+            if word.allSatisfy(\.isNumber), word.count <= 2,
+               let last = words.last, last.first?.isNumber == true,
+               last.allSatisfy({ $0.isNumber || $0 == "." }) {
+                words[words.count - 1] = last + "." + word
+            } else {
+                words.append(word.allSatisfy(\.isNumber) ? word : word.prefix(1).uppercased() + word.dropFirst())
             }
+        }
         let label = words.joined(separator: " ")
         return label.isEmpty ? raw : label
     }

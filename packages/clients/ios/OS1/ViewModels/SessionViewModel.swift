@@ -1464,6 +1464,29 @@ final class SessionViewModel {
         sendSeq += 1
     }
 
+    /// A task a voice call heard the person ask for. It steers a busy run,
+    /// as the web call does, and leaves the draft alone. False when the
+    /// outbox refused it, so the call can say nothing was sent.
+    func sendVoiceTask(_ text: String) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              let item = outbox.enqueue(
+                  sessionId: session.id,
+                  content: text,
+                  effort: effort.isEmpty ? nil : effort,
+                  fastMode: speedSetting.wireFastMode,
+                  speed: speedSetting.wireSpeed,
+                  busyMode: "steer",
+                  user: ServerConfig.shared.userName
+              )
+        else { return false }
+        appendOutboxEcho(item)
+        rebuildDisplayItems()
+        HideStore.shared.unhide(for: session)
+        sendSeq += 1
+        return true
+    }
+
     /// A quick reply into the composer instead of straight to the session,
     /// for the person who wants to edit it first. Appended on its own line
     /// when a draft is already there.

@@ -307,6 +307,15 @@ struct UserBubble: View {
                 if let pastedTexts = entry.pastedTexts, !pastedTexts.isEmpty {
                     PastedTextCards(texts: pastedTexts)
                 }
+                if outboxItem == nil, !entry.text.isEmpty {
+                    // The web's quiet row under your own bubble: copy, and
+                    // edit-and-send-again. A touch screen has no hover to
+                    // reveal them, so they stay on the page.
+                    UserBubbleActions(
+                        text: entry.text,
+                        onEdit: attribution == nil ? onEdit.map { edit in { edit(entry) } } : nil
+                    )
+                }
                 if let item = outboxItem, let outbox {
                     OutboxMessageStatus(
                         item: item,
@@ -628,6 +637,44 @@ struct AssistantMessage: View {
     }
 }
 
+/// Copy and edit under a sent message of yours (MessageBubble.tsx's
+/// BubbleMeta). Faint, small, and fixed in size so rows never jump.
+private struct UserBubbleActions: View {
+    let text: String
+    let onEdit: (() -> Void)?
+    @State private var copied = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button {
+                copyToPasteboard(text)
+                copied = true
+                Task {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    copied = false
+                }
+            } label: {
+                icon(copied ? "checkmark" : "doc.on.doc", tint: copied ? OS1VisualStyle.greenInk : nil)
+            }
+            .accessibilityLabel(copied ? "Copied" : "Copy message")
+            if let onEdit {
+                Button(action: onEdit) { icon("pencil", tint: nil) }
+                    .accessibilityLabel("Edit and send again")
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.top, -2)
+    }
+
+    private func icon(_ name: String, tint: Color?) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(tint ?? OS1VisualStyle.textFaint)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+    }
+}
+
 /// Timestamps have no hover home on a phone, so they live in the menu.
 private struct TimestampLabel: View {
     let date: Date?
@@ -862,9 +909,23 @@ struct RunStatusFooter: View {
             // the sessions list's in-progress lane, the tab strip's running
             // pill — so the transcript says "running" in the same voice.
             PulsingDot(color: OS1VisualStyle.yellowInk, size: 6)
-            RunElapsedLabel(since: since)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(OS1VisualStyle.yellowInk)
+            // The web's BusyWorking copy: "Working", then after ten seconds
+            // "Still working · 24s". It only claims what is known, that the
+            // run is active. Ticks once a second, inside this node only.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let elapsed = since.map { context.date.timeIntervalSince($0) } ?? 0
+                HStack(spacing: 4) {
+                    Text(elapsed < 10 ? "Working" : "Still working")
+                        .foregroundStyle(OS1VisualStyle.textDim)
+                    if elapsed >= 10, let label = TranscriptFormat.duration(elapsed) {
+                        Text(verbatim: "· \(label)")
+                            .monospacedDigit()
+                            .foregroundStyle(OS1VisualStyle.textFaint)
+                            .accessibilityHidden(true)
+                    }
+                }
+            }
+            .font(.footnote.weight(.medium))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

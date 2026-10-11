@@ -1,5 +1,9 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { sessionVoiceConfig, createSessionVoiceAnswer } from "./session-voice";
+import {
+  sessionVoiceConfig,
+  createSessionVoiceAnswer,
+  createSessionVoiceSecret,
+} from "./session-voice";
 import { handleSessionVoiceRoutes } from "./routes/session-voice";
 import * as voice from "./desk-voice";
 import * as sessionCache from "./session-cache";
@@ -251,4 +255,49 @@ test("voice has a narrow call-ending tool that cannot cancel agent work", () => 
   expect(tool.parameters.properties).toEqual({});
   expect(tool.parameters.additionalProperties).toBe(false);
   expect(tool.description).toContain("without cancelling agent work");
+});
+
+test("WebSocket clients get a short-lived secret for the session's own voice config", async () => {
+  const key = spyOn(voice, "requireVoiceApiKey").mockResolvedValue(
+    "private-test-key",
+  );
+  restores.push(() => key.mockRestore());
+  let body: unknown;
+  const fetcher = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        expect(String(url)).toBe(
+          "https://api.openai.com/v1/realtime/client_secrets",
+        );
+        body = JSON.parse(String(init?.body));
+        return Response.json({ value: "ek_test", expires_at: 42 });
+      },
+      { preconnect() {} },
+    ),
+  );
+  restores.push(() => fetcher.mockRestore());
+  expect(
+    await createSessionVoiceSecret(
+      new AbortController().signal,
+      "Thread context",
+    ),
+  ).toEqual({ clientSecret: "ek_test", expiresAt: 42, model: "gpt-realtime" });
+  expect(body).toEqual({
+    expires_after: { anchor: "created_at", seconds: 600 },
+    session: sessionVoiceConfig("Thread context"),
+  });
+});
+
+test("the WebSocket transport keeps the route's identity check", async () => {
+  const req = new Request("http://localhost/api/sessions/test/voice", {
+    method: "POST",
+    body: JSON.stringify({ transport: "websocket" }),
+  });
+  const response = await handleSessionVoiceRoutes({
+    req,
+    url: new URL(req.url),
+    path: new URL(req.url).pathname,
+    publicPrefix: "",
+  });
+  expect(response?.status).toBe(401);
 });

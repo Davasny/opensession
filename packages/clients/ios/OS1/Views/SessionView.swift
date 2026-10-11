@@ -1159,6 +1159,8 @@ struct SessionView: View {
                 onNextChat: onNextChat,
                 actionsMenu: actionsMenu,
                 onArchive: onArchiveWorkspace,
+                catalog: catalog,
+                accounts: accounts,
                 forkState: $forkState,
                 onForkCreated: onForkCreated
             )
@@ -1460,10 +1462,12 @@ struct SessionView: View {
         Button {
             showWorktreeInfo = true
         } label: {
+            HStack(spacing: 8) {
+            // The repo leads the pill, as on the web phone, so the line under
+            // the title can be what this conversation runs on and costs.
+            RepoTile(name: viewModel.session.effectiveRepo, size: 24)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
-                // No run dot up here: the bar is identity and navigation,
-                // and the running state now reads where the work is, in the
-                // clock at the end of the transcript.
                 HStack(spacing: 4) {
                     // A machine owns this conversation. Same glyph and same
                     // slot as the web header's automation link. Origin reads
@@ -1475,18 +1479,30 @@ struct SessionView: View {
                     SingleLineFadeText(
                         text: identityTitle,
                         font: .callout.weight(.semibold),
-                        width: sessionIdentityWidth - 22
+                        width: sessionIdentityWidth - 54
                     )
                         .foregroundStyle(OS1VisualStyle.text)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if !dynamicTypeSize.isAccessibilitySize {
-                    headerSubtitleText
-                        .font(.footnote)
-                        .foregroundStyle(OS1VisualStyle.textDim)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // The web phone's metadata line: a running dot, the
+                    // model, then cost and how full the context window is.
+                    HStack(spacing: 5) {
+                        if viewModel.isRunning {
+                            PulsingDot(color: OS1VisualStyle.yellow, size: 7)
+                                .accessibilityLabel("Running")
+                        }
+                        headerSubtitleText
+                            .lineLimit(1)
+                        if let usage = viewModel.usage, usage.turns > 0 {
+                            ContextFillRing(usage: usage)
+                        }
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(OS1VisualStyle.textDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
             }
             // Keep the glass visually tighter than its toolbar-owned 44pt tap
             // target while leaving enough height for both identity lines.
@@ -1539,19 +1555,24 @@ struct SessionView: View {
         )
     }
 
+    /// `#5755 · Opus 5.5 · $6.12`: the web phone's model · cost line, with
+    /// the PR number in front where the session has one (native has no
+    /// Review tab in the strip to carry it). The repo moved to the tile.
     private var headerSubtitle: String {
-        let repo = RepoTile.label(for: viewModel.session.effectiveRepo)
-        let model = catalog?.label(for: currentModel) ?? currentModel
+        let model = (catalog?.label(for: currentModel) ?? currentModel)
+            .replacingOccurrences(of: #"^Claude[\s-]+"#, with: "", options: [.regularExpression, .caseInsensitive])
         let prNumber = viewModel.prDetails?.number ?? viewModel.session.prNumber
         var parts: [String] = []
         if let prNumber {
             parts.append("#\(prNumber)")
         }
-        parts.append(repo)
         parts.append(model)
+        if let usage = viewModel.usage, usage.turns > 0 {
+            parts.append(usage.costLabel())
+        }
         return parts
             .filter { !$0.isEmpty }
-            .joined(separator: " • ")
+            .joined(separator: " · ")
     }
 
     private var headerSubtitleText: Text {
@@ -3415,6 +3436,15 @@ private struct SessionInputBar: View {
     #if os(iOS)
     @Environment(\.phoneSessionNavigation) private var navigation
     #endif
+    /// For the composer's model + effort pill.
+    var catalog: ModelCatalog? = nil
+    var accounts: [PooledAccount] = []
+    /// The composer's voice call about this thread, made on first use.
+    @State private var call: DeskVoiceEngine?
+    /// Tasks the call sent the agent and the run they started, so the call
+    /// can explain the reply once that run ends (as the web call does).
+    @State private var callTasks: [String] = []
+    @State private var callRunSeen = false
     @Binding var forkState: SessionForkState
     var onForkCreated: ((String) async -> Void)?
     @FocusState private var inputFocused: Bool
@@ -3742,6 +3772,25 @@ private struct SessionInputBar: View {
         .onDisappear {
             dictation.stop()
             viewModel.userIsTyping(false)
+            // A minimized call has no screen to come back from here.
+            if call?.callPresented != true { call?.stop() }
+        }
+        .task {
+            for await _ in NotificationCenter.default.notifications(
+                named: AppLifecycle.didEnterBackgroundNotification
+            ) {
+                // A backgrounded app must never hold the mic open.
+                call?.stop()
+            }
+        }
+        .onChange(of: viewModel.isRunning) { _, running in
+            narrateCallReplyIfDone(running: running)
+        }
+        .fullScreenCoverCompat(isPresented: Binding(
+            get: { call?.callPresented ?? false },
+            set: { call?.callPresented = $0 }
+        )) {
+            if let call { DeskVoiceCallView(engine: call) }
         }
         // Presented from the bar, not from the "+" itself: the button moves
         // between the collapsed pill and the expanded toolbar, and a sheet
@@ -4213,7 +4262,10 @@ private struct SessionInputBar: View {
     /// into the narrow middle column. Mac always uses the multi-line form.
     private var isSingleRow: Bool {
         #if os(iOS)
-        !draftWrapped && (noteMode || viewModel.attachedImages.isEmpty)
+        // The web phone's rule: the resting pill only while nothing is being
+        // written. Focus or a draft opens the toolbar with the model pill.
+        !draftWrapped && !inputFocused && viewModel.draft.isEmpty
+            && (noteMode || viewModel.attachedImages.isEmpty)
         #else
         false
         #endif
@@ -4343,6 +4395,7 @@ private struct SessionInputBar: View {
                     // same seat whether or not a turn is in flight — stop
                     // appears between it and send instead of displacing it.
                     ComposerDictationButton(dictation: dictation, draft: $viewModel.draft)
+                    if voiceAvailable { callButton }
                     // Stop is the only meaningful action while a turn runs
                     // with nothing typed; once there IS a draft, send joins
                     // it rather than replacing it — queueing the next message
@@ -4363,9 +4416,13 @@ private struct SessionInputBar: View {
             if !isSingleRow {
                 HStack(spacing: 6) {
                     addMenu
+                    #if os(iOS)
+                    modelPill
+                    #endif
                     Spacer(minLength: 8)
 
                     ComposerDictationButton(dictation: dictation, draft: $viewModel.draft)
+                    if voiceAvailable { callButton }
 
                     if viewModel.isRunning {
                         stopButton
@@ -4503,6 +4560,13 @@ private struct SessionInputBar: View {
     }
 
     private var composerPlaceholder: String {
+        #if os(iOS)
+        // The resting pill is too narrow for the full prompt: the web phone
+        // says "Ask <model>" there, and the full one once it opens.
+        if isSingleRow, viewModel.safety == nil, !viewModel.workspacePreparing {
+            return noteMode ? "Team note" : "Ask \(shortModelName)"
+        }
+        #endif
         if noteMode { return "Only your team will see this" }
         if viewModel.safety != nil { return "Paused for safety" }
         if viewModel.quoteSelection.text != nil { return "Chat with selected text" }
@@ -4536,6 +4600,118 @@ private struct SessionInputBar: View {
     /// A tap sends with the person's busy-send preference. During a run, a
     /// long press exposes Steer and Queue without shrinking the familiar send
     /// arrow or spending the common tap on a menu.
+    // MARK: - Voice call and model pill
+
+    /// The web's `voiceAvailable`: Open Session and Slack threads that are
+    /// still open, and never while writing a team note.
+    private var voiceAvailable: Bool {
+        !noteMode && viewModel.session.archived != true
+            && ["opensession", "slack"].contains(viewModel.session.source ?? "opensession")
+    }
+
+    private var callButton: some View {
+        let active = call?.active == true
+        return Button {
+            if active, let call {
+                call.callPresented = true
+                return
+            }
+            Haptics.play(.armed)
+            startCall()
+        } label: {
+            Image(systemName: active ? "phone.fill" : "phone")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(active ? OS1VisualStyle.red : OS1VisualStyle.textDim)
+                #if os(iOS)
+                .frame(width: 44, height: 44)
+                #else
+                .frame(width: 27, height: 27)
+                #endif
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(dictation.active)
+        .accessibilityLabel(active ? "Return to the voice call" : "Start a voice call")
+    }
+
+    private func startCall() {
+        let engine = call ?? DeskVoiceEngine(session: SessionVoiceLink(
+            sessionId: viewModel.session.id,
+            title: viewModel.session.displayTitle,
+            sendTask: { [weak viewModel] prompt in
+                guard let viewModel, viewModel.sendVoiceTask(prompt) else { return false }
+                callTasks.append(prompt)
+                callRunSeen = viewModel.isRunning
+                return true
+            }
+        ))
+        call = engine
+        callTasks = []
+        engine.open()
+    }
+
+    /// Once the run a call task started ends, hand its last answer back to
+    /// the call so the voice can explain it.
+    private func narrateCallReplyIfDone(running: Bool) {
+        guard let call, call.active, !callTasks.isEmpty else { return }
+        if running {
+            callRunSeen = true
+            return
+        }
+        guard callRunSeen else { return }
+        let reply = viewModel.entries.last {
+            $0.type == "assistant" && $0.isReasoning != true
+                && !($0.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.content
+        let request = callTasks.joined(separator: "\n\n")
+        callTasks = []
+        callRunSeen = false
+        if let reply { call.agentReplied(request: request, reply: reply) }
+    }
+
+    #if os(iOS)
+    /// Model and effort in one pill beside the "+", as on the web phone's
+    /// open composer: `Opus 5.5 · High`.
+    private var modelPill: some View {
+        Menu {
+            ModelSettingsMenu(
+                viewModel: viewModel, catalog: catalog, accounts: accounts, showsUsage: false
+            )
+        } label: {
+            HStack(spacing: 3) {
+                Text(modelPillLabel)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(OS1VisualStyle.textDim)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(OS1VisualStyle.border.opacity(0.5), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(noteMode || viewModel.safety != nil)
+        .opacity(noteMode ? 0.4 : 1)
+        .accessibilityLabel("Model and reasoning effort")
+        .accessibilityValue(modelPillLabel)
+    }
+
+    private var shortModelName: String {
+        let id = viewModel.model.isEmpty ? (catalog?.defaultModel ?? "") : viewModel.model
+        let model = (catalog?.label(for: id) ?? id)
+            .replacingOccurrences(of: #"^Claude[\s-]+"#, with: "", options: [.regularExpression, .caseInsensitive])
+        return model.isEmpty ? "Model" : model
+    }
+
+    private var modelPillLabel: String {
+        let parts = [shortModelName]
+            + (viewModel.effort.isEmpty ? [] : [EffortLevel.label(viewModel.effort)])
+        return parts.joined(separator: " · ")
+    }
+    #endif
+
     @ViewBuilder
     private var sendButton: some View {
         if noteMode {
@@ -5127,6 +5303,31 @@ private struct SessionInputBar: View {
                     Label("Discard", systemImage: "trash")
                 }
             }
+        }
+    }
+}
+
+/// How full the model's context window is, as the web's `ContextRing`
+/// (UsageMeter.tsx): accent until 85%, red past it. Nothing without a window.
+struct ContextFillRing: View {
+    let usage: SessionUsage
+    var size: CGFloat = 12
+
+    var body: some View {
+        if usage.contextWindow > 0 {
+            let fraction = min(max(Double(usage.contextTokens) / Double(usage.contextWindow), 0), 1)
+            ZStack {
+                Circle().stroke(OS1VisualStyle.border, lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: fraction)
+                    .stroke(
+                        fraction >= 0.85 ? OS1VisualStyle.red : OS1VisualStyle.accent,
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: size, height: size)
+            .accessibilityLabel("Context \(Int((fraction * 100).rounded())) percent full")
         }
     }
 }

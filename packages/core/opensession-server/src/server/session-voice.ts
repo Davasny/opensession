@@ -77,6 +77,50 @@ export function sessionVoiceConfig(context: string) {
   };
 }
 
+/**
+ * The same call for clients without WebRTC (the native app), which speak the
+ * Realtime WebSocket protocol directly: a short-lived client secret minted
+ * with this session's voice config. The API key never leaves the server, and
+ * the secret can open only a call with these instructions and tools.
+ */
+export async function createSessionVoiceSecret(
+  signal: AbortSignal,
+  context: string,
+): Promise<{ clientSecret: string; expiresAt: number; model: string }> {
+  const key = await requireVoiceApiKey();
+  const session = sessionVoiceConfig(context);
+  const response = await fetch(
+    "https://api.openai.com/v1/realtime/client_secrets",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        expires_after: { anchor: "created_at", seconds: 600 },
+        session,
+      }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+    },
+  );
+  if (!response.ok)
+    // Never echo the provider's body: it may carry request data.
+    throw new Error(
+      `OpenAI could not start the voice call (HTTP ${response.status}).`,
+    );
+  const data = z
+    .object({ value: z.string().min(1), expires_at: z.number().optional() })
+    .safeParse(await response.json().catch(() => null));
+  if (!data.success)
+    throw new Error("OpenAI could not start the voice call (no secret).");
+  return {
+    clientSecret: data.data.value,
+    expiresAt: data.data.expires_at ?? 0,
+    model: session.model,
+  };
+}
+
 export async function createSessionVoiceAnswer(
   sdp: string,
   signal: AbortSignal,

@@ -548,9 +548,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   Minimizing (the chevron) leaves the call running and returns you to the Desk
   transcript, which fills in as turns finalize; either lit mic — composer or
   header — comes back to the call, and hanging up is the only thing that ends
-  it. A call is always the DESK's — `desk-voice.ts` resolves one with
-  `ensureDeskSession(user)` whichever session is on screen — so it is offered
-  only there, and never from a composer.
+  it. The Desk sheet's call is always the Desk's (`ensureDeskSession`).
+- **Session call** — the composer's phone button is the web's session call:
+  the same engine with a `SessionVoiceLink`, whose secret comes from
+  `POST /api/sessions/:id/voice {transport: "websocket"}` (the server builds
+  the instructions from the thread). `request_voice_help` asks a
+  transcript-only helper (`/voice/helper`) or, for `session_agent`, sends the
+  task through the outbox as a steer; when that run ends its last answer goes
+  back to the call to explain. Offered on open Open Session and Slack threads,
+  never in note mode.
   Mute is local — capture and metering continue, frames stop leaving the
   device. The orb's level is sampled off the realtime audio threads at ~15Hz
   rather than pushed per buffer, and honors Reduce Motion.

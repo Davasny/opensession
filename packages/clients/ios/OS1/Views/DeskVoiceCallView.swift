@@ -76,8 +76,9 @@ struct DeskVoiceCallView: View {
             Spacer()
 
             HStack(spacing: 6) {
-                Image(systemName: "lamp.desk")
-                Text("Desk")
+                Image(systemName: engine.session == nil ? "lamp.desk" : "bubble.left.and.text.bubble.right")
+                Text(engine.callTitle)
+                    .lineLimit(1)
             }
             .font(.footnote.weight(.semibold))
             .foregroundStyle(OS1VisualStyle.textDim)
@@ -204,7 +205,7 @@ struct DeskVoiceCallView: View {
             .defaultScrollAnchor(.bottom)
             .frame(maxHeight: 150)
             .accessibilityLabel(
-                "\(caption.role == .user ? "You said" : "Desk said"): \(caption.text)"
+                "\(caption.role == .user ? "You said" : "\(engine.counterpartName) said"): \(caption.text)"
             )
         } else {
             // Holds the orb still while captions come and go.

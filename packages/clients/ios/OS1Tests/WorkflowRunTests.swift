@@ -53,7 +53,7 @@ final class WorkflowRunTests: XCTestCase {
         XCTAssertEqual(first.label, "classify 1/5")
         XCTAssertTrue(first.hasConversation)
         XCTAssertEqual(first.elapsed, 45)
-        XCTAssertEqual(first.detail, "Haiku 4 5 · 45s")
+        XCTAssertEqual(first.detail, "Haiku 4.5 · 45s")
     }
 
     /// A status the server grows after this build ships must decode to

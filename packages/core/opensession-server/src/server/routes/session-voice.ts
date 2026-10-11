@@ -5,7 +5,10 @@ import {
   SESSION_VOICE_HELPER_TARGETS,
   sessionVoiceContext,
 } from "../../shared/session-voice";
-import { createSessionVoiceAnswer } from "../session-voice";
+import {
+  createSessionVoiceAnswer,
+  createSessionVoiceSecret,
+} from "../session-voice";
 import { askSessionVoiceTarget } from "../session-voice-helper";
 import type { RouteContext } from "./context";
 
@@ -17,6 +20,9 @@ const offerSchema = z.object({
     // SDP is a wire format: trimming removes its required final CRLF.
     .refine((sdp) => sdp.trim().length > 0),
 });
+// Clients without WebRTC ask for a Realtime WebSocket secret instead of
+// trading SDP. Same checks, same session config.
+const socketSchema = z.object({ transport: z.literal("websocket") });
 // Exactly the tool-less reasoning tiers. `session_agent` is not a helper:
 // user-requested agent work only travels the durable outbox path.
 const helperSchema = z.object({
@@ -47,8 +53,9 @@ export async function handleSessionVoiceRoutes(
   const helper = !!match[2];
   const body = await ctx.req.json().catch(() => null);
   const offer = offerSchema.safeParse(body);
+  const socket = socketSchema.safeParse(body);
   const question = helperSchema.safeParse(body);
-  if (helper ? !question.success : !offer.success)
+  if (helper ? !question.success : !offer.success && !socket.success)
     return Response.json(
       {
         error: helper
@@ -103,6 +110,11 @@ export async function handleSessionVoiceRoutes(
         { headers: { "Cache-Control": "no-store" } },
       );
     }
+    if (socket.success && !offer.success)
+      return Response.json(
+        await createSessionVoiceSecret(ctx.req.signal, context),
+        { headers: { "Cache-Control": "no-store" } },
+      );
     if (!offer.success)
       return Response.json({ error: "Invalid voice offer." }, { status: 400 });
     const sdp = await createSessionVoiceAnswer(
