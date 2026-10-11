@@ -247,7 +247,9 @@ Two optional facilities are separate from inbound Slack-agent setup:
   only posts after the signed-in person presses Send. Every post, reply,
   upload and reaction uses the bot token, joining a public channel the bot
   isn't in yet. When a run acts for a person, it sets `SLACK_POST_VIA` to their
-  Slack id and each post ends with a "via @person" line. A personal grant
+  Slack id, and every run sets `OPENSESSION_SESSION_URL` to its session's
+  link, so each post ends with a "via @person in session" line linking back
+  to the session. Reviewed posts end with the same line. A personal grant
   arrives as `SLACK_USER_TOKEN` and is used only for reads.
 - Personal Slack grants widen what agents and channel pickers can read for
   signed-in people; agent and reviewed posts still go out as the bot. Set

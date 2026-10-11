@@ -56,6 +56,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { readFileSync } from "fs";
 import { filterMcpServers, STRIPE_CONFIRM_TOOLS } from "./runner-shared";
+import { sessionLink } from "./run-instructions";
 import { WORKFLOW_LIMITS } from "./workflow-types";
 import { workloadCommand } from "./workload-scope";
 
@@ -217,6 +218,9 @@ export interface WorkflowMcpHostOpts {
   allowlist?: string[];
   /** The run's user — drives the per-server `allowedUsers` gate. */
   user?: string;
+  /** The session running the workflow. Stdio servers get its web link as
+   *  OPENSESSION_SESSION_URL, so Slack's "via" line can link it. */
+  sessionId?: string;
   /** Per-call denials (automation runs). Keys are `mcp__<server>__<tool>`. */
   deniedTools?: Record<string, string>;
   /**
@@ -432,7 +436,13 @@ export function createWorkflowMcpHost(
         // The SDK's default environment is already a minimal safe set
         // (PATH/HOME/…); the server's own credentials come from its config
         // entry — never the server process's full secret-bearing env.
-        env: { ...getDefaultEnvironment(), ...(cfg.env || {}) },
+        env: {
+          ...getDefaultEnvironment(),
+          ...(cfg.env || {}),
+          ...(opts.sessionId
+            ? { OPENSESSION_SESSION_URL: sessionLink(opts.sessionId) }
+            : {}),
+        },
         stderr: "ignore",
       }),
     );

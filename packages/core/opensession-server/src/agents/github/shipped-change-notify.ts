@@ -21,6 +21,7 @@ import { UPLOADS_DIR } from "../../server/uploads";
 import { homeDir } from "../../server/paths";
 import type { UnifiedSession } from "../../server/types";
 import { postAsSlackBot } from "../slack/bot-post";
+import { sessionLink } from "../../server/run-instructions";
 import { resolveSlackChannel } from "../slack/channel-directory";
 import { shippedChangesChannel } from "./constants";
 import { slackMessageLength } from "../../shared/slack-mentions";
@@ -315,6 +316,7 @@ export async function shareShippedVisualChange(opts: {
         title: `${title} · shipped`,
         altText: `Screenshot of the shipped visual change: ${title}`,
         sender: opts.caller || opts.requestedBy,
+        sessionUrl: sessionLink(opts.session.id),
       },
     ));
     settleShippedChangeAnnouncement(

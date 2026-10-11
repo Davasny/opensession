@@ -295,6 +295,10 @@ export async function createMcpRuntime(opts: {
   mcpServers: McpScope;
   user?: string;
   mcpGrantUser?: string;
+  /** This session's web link, handed to stdio servers as
+   *  OPENSESSION_SESSION_URL so what they post can link back (Slack's "via"
+   *  line). */
+  sessionUrl?: string;
   deniedToolIds: ReadonlySet<string>;
   inProcessMcp?: Readonly<Record<string, InProcessMcpServer>>;
   legacyProxyMcp?: LegacyProxyMcpBoundary;
@@ -356,6 +360,9 @@ export async function createMcpRuntime(opts: {
         env: {
           ...getDefaultEnvironment(),
           ...((cfg.env as Record<string, string>) || {}),
+          ...(opts.sessionUrl
+            ? { OPENSESSION_SESSION_URL: opts.sessionUrl }
+            : {}),
         },
       });
     } else throw new Error(`MCP server "${name}" has neither url nor command`);

@@ -326,20 +326,35 @@ function slackError(step: string, result: any): Error {
 }
 
 /**
- * The line that credits the person behind a bot post: a real mention for a
- * Slack user id, otherwise their escaped name.
+ * The line that credits a bot post: the person behind it (a real mention for
+ * a Slack user id, otherwise their escaped name) and the session it came
+ * from, as "via @person in session".
  */
-export function viaLine(sender: string | undefined): string | undefined {
+export function viaLine(
+  sender: string | undefined,
+  sessionUrl?: string,
+): string | undefined {
   const ref = sender?.trim();
-  if (!ref) return undefined;
-  const tag = /^[UW][A-Z0-9]{2,}$/.test(ref)
-    ? `<@${ref}>`
-    : ref.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `_via ${tag}_`;
+  const tag = !ref
+    ? undefined
+    : /^[UW][A-Z0-9]{2,}$/.test(ref)
+      ? `<@${ref}>`
+      : ref.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const url = sessionUrl?.trim();
+  const where =
+    url && /^https?:\/\/[^\s<>|]+$/.test(url) ? `<${url}|session>` : undefined;
+  if (tag && where) return `_via ${tag} in ${where}_`;
+  if (tag) return `_via ${tag}_`;
+  if (where) return `_via ${where}_`;
+  return undefined;
 }
 
-export function withVia(text: string, sender: string | undefined): string {
-  const line = viaLine(sender);
+export function withVia(
+  text: string,
+  sender: string | undefined,
+  sessionUrl?: string,
+): string {
+  const line = viaLine(sender, sessionUrl);
   if (!line) return text;
   return text ? `${text}\n${line}` : line;
 }
@@ -352,12 +367,15 @@ export type SlackClientOptions = {
   readToken?: string;
   /** Who the posts are for: a Slack user id or a name, tagged "via". */
   sender?: string;
+  /** The session the posts come from, linked in the "via" line. */
+  sessionUrl?: string;
 };
 
 export class SlackClient {
   private readonly headers: Record<string, string>;
   private readonly readHeaders: Record<string, string>;
   private readonly sender: string | undefined;
+  private readonly sessionUrl: string | undefined;
 
   constructor(
     private readonly botToken: string,
@@ -372,6 +390,7 @@ export class SlackClient {
       ? { ...this.headers, Authorization: `Bearer ${options.readToken}` }
       : this.headers;
     this.sender = options.sender;
+    this.sessionUrl = options.sessionUrl;
   }
 
   /** A bot read: what the bot itself posted, or setup for a post. */
@@ -454,7 +473,7 @@ export class SlackClient {
   ): Promise<unknown> {
     const body = buildSlackMessageBody(
       channel,
-      withVia(text, this.sender),
+      withVia(text, this.sender, this.sessionUrl),
       options,
     );
     return this.inChannel(channel, () => this.post("chat.postMessage", body));
@@ -468,7 +487,7 @@ export class SlackClient {
   ): Promise<unknown> {
     const body = buildSlackMessageBody(
       channel,
-      withVia(text, this.sender),
+      withVia(text, this.sender, this.sessionUrl),
       options,
       threadTs,
     );
@@ -528,7 +547,11 @@ export class SlackClient {
         title: (paths.length === 1 && options.title) || basename(path),
       });
     }
-    const comment = withVia(options.initialComment || "", this.sender);
+    const comment = withVia(
+      options.initialComment || "",
+      this.sender,
+      this.sessionUrl,
+    );
     const completed = await this.inChannel(channel, () =>
       this.postForm("files.completeUploadExternal", {
         files: JSON.stringify(files),
@@ -696,6 +719,7 @@ async function main(): Promise<void> {
   const client = new SlackClient(botToken, UPLOAD_ROOT, {
     readToken: process.env.SLACK_USER_TOKEN || undefined,
     sender: process.env.SLACK_POST_VIA || undefined,
+    sessionUrl: process.env.OPENSESSION_SESSION_URL || undefined,
   });
   const server = new Server(
     { name: "opensession-slack", version: "1.0.0" },

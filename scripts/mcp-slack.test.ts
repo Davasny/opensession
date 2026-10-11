@@ -455,6 +455,7 @@ describe("posting as the bot", () => {
     new SlackClient("xoxb-bot", "/tmp/slack-uploads", {
       readToken: "xoxp-person",
       sender: "U0ALICE01",
+      sessionUrl: "https://os.example.test/session/os-1",
     });
 
   test("posts with the bot token and credits the person", async () => {
@@ -465,8 +466,10 @@ describe("posting as the bot", () => {
       "Bearer xoxb-bot",
       "Bearer xoxb-bot",
     ]);
-    expect(calls[0]!.body.text).toBe("Shipped\n_via <@U0ALICE01>_");
-    expect(calls[1]!.body.text).toBe("Details\n_via <@U0ALICE01>_");
+    const via =
+      "_via <@U0ALICE01> in <https://os.example.test/session/os-1|session>_";
+    expect(calls[0]!.body.text).toBe(`Shipped\n${via}`);
+    expect(calls[1]!.body.text).toBe(`Details\n${via}`);
   });
 
   test("reads through the person's grant", async () => {
@@ -514,5 +517,21 @@ describe("withVia", () => {
   test("stands alone without text and is skipped without a sender", () => {
     expect(withVia("", "mallory")).toBe("_via mallory_");
     expect(withVia("Shipped", undefined)).toBe("Shipped");
+  });
+
+  test("links the session, with or without a sender", () => {
+    const url = "https://os.example.test/session/os-1";
+    expect(withVia("Shipped", "U0ALICE01", url)).toBe(
+      `Shipped\n_via <@U0ALICE01> in <${url}|session>_`,
+    );
+    expect(withVia("Shipped", undefined, url)).toBe(
+      `Shipped\n_via <${url}|session>_`,
+    );
+  });
+
+  test("ignores a session URL that would break Slack link markup", () => {
+    expect(withVia("Shipped", "mallory", "https://x.test/a|<!here>")).toBe(
+      "Shipped\n_via mallory_",
+    );
   });
 });

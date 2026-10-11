@@ -47,6 +47,7 @@ describe("postAsSlackBot", () => {
     );
     const posted = await postAsSlackBot(channel, "Shipped", [], {
       sender: undefined,
+      sessionUrl: undefined,
     });
     expect(posted).toEqual({
       ts: "1.2",
@@ -70,6 +71,7 @@ describe("postAsSlackBot", () => {
     });
     const posted = await postAsSlackBot(channel, "Shipped", [], {
       sender: undefined,
+      sessionUrl: undefined,
     });
     expect(posted.ts).toBe("1.3");
     expect(calls.map((call) => call.method)).toEqual([
@@ -87,7 +89,10 @@ describe("postAsSlackBot", () => {
         : { ok: false, error: "not_in_channel" },
     );
     await expect(
-      postAsSlackBot(channel, "Shipped", [], { sender: undefined }),
+      postAsSlackBot(channel, "Shipped", [], {
+        sender: undefined,
+        sessionUrl: undefined,
+      }),
     ).rejects.toThrow(
       "Invite the bot to #engineering in Slack, then send again",
     );
@@ -97,7 +102,10 @@ describe("postAsSlackBot", () => {
     delete process.env.SLACK_BOT_TOKEN;
     const calls = mockSlack(() => ({ ok: true }));
     await expect(
-      postAsSlackBot(channel, "Shipped", [], { sender: undefined }),
+      postAsSlackBot(channel, "Shipped", [], {
+        sender: undefined,
+        sessionUrl: undefined,
+      }),
     ).rejects.toThrow("Slack isn't set up on this server yet");
     expect(calls).toEqual([]);
   });
@@ -113,8 +121,13 @@ describe("postAsSlackBot", () => {
     ]);
     try {
       const calls = mockSlack(() => ({ ok: true, ts: "1.4" }));
-      await postAsSlackBot(channel, "Shipped", [], { sender: "alice" });
-      expect(calls[0]?.body?.text).toBe("Shipped\n_via <@U0ALICE01>_");
+      await postAsSlackBot(channel, "Shipped", [], {
+        sender: "alice",
+        sessionUrl: "https://os.example.test/session/os-1",
+      });
+      expect(calls[0]?.body?.text).toBe(
+        "Shipped\n_via <@U0ALICE01> in <https://os.example.test/session/os-1|session>_",
+      );
     } finally {
       restore();
     }
@@ -132,7 +145,19 @@ describe("withSenderTag", () => {
     expect(withSenderTag("", "mallory")).toBe("_via mallory_");
   });
 
-  test("leaves the message alone without a sender", () => {
+  test("leaves the message alone without a sender or session", () => {
     expect(withSenderTag("Shipped", undefined)).toBe("Shipped");
+  });
+
+  test("links the session even without a sender", () => {
+    expect(
+      withSenderTag("Shipped", undefined, "https://os.example.test/session/a"),
+    ).toBe("Shipped\n_via <https://os.example.test/session/a|session>_");
+  });
+
+  test("drops a session URL that would break Slack link markup", () => {
+    expect(
+      withSenderTag("Shipped", "mallory", "https://x.test/a|<!channel>"),
+    ).toBe("Shipped\n_via mallory_");
   });
 });

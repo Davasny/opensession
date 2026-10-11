@@ -1,5 +1,6 @@
 import { deleteSlackMessage } from "../../agents/slack/slack-api";
 import { postAsSlackBot } from "../../agents/slack/bot-post";
+import { sessionLink } from "../run-instructions";
 import { validFeaturedScreenshot } from "../../agents/github/shipped-change-notify";
 import {
   cancelPendingSlackComposer,
@@ -229,6 +230,7 @@ export async function handleSlackComposeRoutes(
         title: "Open Session update",
         altText: "Image attached to an Open Session update",
         sender: caller,
+        sessionUrl: sessionLink(sessionId),
       },
     );
     if (ts)

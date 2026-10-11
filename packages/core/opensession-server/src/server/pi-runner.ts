@@ -2725,6 +2725,9 @@ async function* runPiAttempt(
       mcpServers,
       user,
       mcpGrantUser: opts.mcpGrantUser,
+      sessionUrl: journal?.osSessionId
+        ? sessionLink(journal.osSessionId)
+        : undefined,
       deniedToolIds: new Set(Object.keys(policy.disables)),
       inProcessMcp: mcpMounts.sdk,
       legacyProxyMcp: mcpMounts.legacyProxy,

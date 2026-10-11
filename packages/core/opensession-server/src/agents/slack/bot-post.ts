@@ -50,27 +50,60 @@ export function slackSenderTag(sender: string | undefined): string | undefined {
   return ref.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Append the "via @person" line that credits the sender of a bot post. */
-export function withSenderTag(message: string, sender: string | undefined) {
-  const tag = slackSenderTag(sender);
-  if (!tag) return message;
-  return message ? `${message}\n_via ${tag}_` : `_via ${tag}_`;
+/** A Slack link to the session a post came from, when the URL is safe to
+ *  embed in Slack's `<url|label>` markup. */
+export function slackSessionLink(url: string | undefined): string | undefined {
+  const ref = url?.trim();
+  if (!ref || !/^https?:\/\/[^\s<>|]+$/.test(ref)) return undefined;
+  return `<${ref}|session>`;
+}
+
+/** The "via @person in session" line that credits a bot post. */
+export function slackViaLine(
+  tag: string | undefined,
+  sessionUrl: string | undefined,
+): string | undefined {
+  const where = slackSessionLink(sessionUrl);
+  if (tag && where) return `_via ${tag} in ${where}_`;
+  if (tag) return `_via ${tag}_`;
+  if (where) return `_via ${where}_`;
+  return undefined;
+}
+
+/** Append the "via @person in session" line that credits a bot post. */
+export function withSenderTag(
+  message: string,
+  sender: string | undefined,
+  sessionUrl?: string,
+) {
+  const line = slackViaLine(slackSenderTag(sender), sessionUrl);
+  if (!line) return message;
+  return message ? `${message}\n${line}` : line;
 }
 
 /**
  * Post a reviewed draft as the Slack bot, never as the person who pressed
- * Send, crediting that person with a "via @person" line. The bot joins a
+ * Send, crediting that person and the session with a "via @person in
+ * session" line. The bot joins a
  * public channel it isn't in yet; a private channel needs it invited first.
  */
 export async function postAsSlackBot(
   channel: SlackChannelOption,
   draft: string,
   images: string[],
-  { sender, ...upload }: SlackUploadOptions & { sender: string | undefined },
+  {
+    sender,
+    sessionUrl,
+    ...upload
+  }: SlackUploadOptions & {
+    sender: string | undefined;
+    /** The session the post came from, linked in the "via" line. */
+    sessionUrl: string | undefined;
+  },
 ): Promise<{ ts?: string; permalink?: string }> {
   if (!process.env.SLACK_BOT_TOKEN)
     throw new Error("Slack isn't set up on this server yet");
-  const message = withSenderTag(draft, sender);
+  const message = withSenderTag(draft, sender, sessionUrl);
   let ts: string | undefined;
   try {
     ts = await post(channel, message, images, upload);

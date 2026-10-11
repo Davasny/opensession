@@ -752,6 +752,7 @@ function runWorkflow(
             m.createWorkflowMcpHost({
               allowlist: opts.mcpAllowlist,
               user: opts.user,
+              sessionId: opts.sessionId,
               deniedTools: opts.deniedTools,
               inProcessMcp: opts.inProcessMcp,
             }),
