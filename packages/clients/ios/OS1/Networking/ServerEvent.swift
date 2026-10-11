@@ -76,6 +76,14 @@ enum ServerEvent: Sendable {
     /// or another device. Sent only to that person's sockets and carries no
     /// entries: the receiver re-reads the named map (see `UserMapSync`).
     case userMapChanged(map: UserMapName, user: String)
+    /// One sidebar row changed, already scoped by the server to the lens this
+    /// socket subscribed with (`sessions_subscribe`).
+    case sessionRow(Session)
+    /// A row this socket's lens no longer shows.
+    case sessionRowRemoved(id: String)
+    /// The list's shape moved in a way rows don't carry (pins, workspace
+    /// metadata, a broad invalidation): re-read the list.
+    case sessionListChanged
     case replySuggestions(sessionId: String, suggestions: [ReplySuggestion])
     case slackComposer(sessionId: String, request: SlackComposeRequest?)
     case slackComposerResolved(sessionId: String, receipt: SlackComposeReceipt)
@@ -245,6 +253,14 @@ enum ServerEvent: Sendable {
         case "notifications_changed":
             guard let user = frame.user else { return .ignored }
             return .notificationsChanged(user: user)
+        case "session_row":
+            guard let row = frame.row?.session else { return .ignored }
+            return .sessionRow(row)
+        case "session_row_removed":
+            guard let id = frame.id?.value else { return .ignored }
+            return .sessionRowRemoved(id: id)
+        case "sessions_invalidated", "pins_changed", "workspaces_changed":
+            return .sessionListChanged
         case "user_map_changed":
             // A map this build does not keep is not an error, it is a newer
             // server: ignore the frame like any other unknown one.
@@ -574,7 +590,24 @@ private struct RawFrame: Decodable {
         let name: String?
     }
 
+    /// A row this build cannot read drops the row, not the frame.
+    struct LossySession: Decodable {
+        let session: Session?
+        init(from decoder: Decoder) throws { session = try? Session(from: decoder) }
+    }
+
+    /// `id` is a string on the frames that use it; anything else is ignored
+    /// rather than failing every frame that happens to carry one.
+    struct LossyString: Decodable {
+        let value: String?
+        init(from decoder: Decoder) throws {
+            value = try? decoder.singleValueContainer().decode(String.self)
+        }
+    }
+
     let type: String
+    let id: LossyString?
+    let row: LossySession?
     let sessionId: String?
     let bootId: String?
     let entries: [TranscriptEntry]?

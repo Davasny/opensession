@@ -72,4 +72,44 @@ final class SidebarScopeTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Row frames
+
+    private func event(_ json: String) -> ServerEvent {
+        ServerEvent.parse(Data(json.utf8))
+    }
+
+    func testSessionRowFrameCarriesTheRow() {
+        guard case .sessionRow(let row) = event(
+            #"{"type":"session_row","row":{"id":"os-1","title":"Fix it","isRunning":true}}"#
+        ) else { return XCTFail("expected a row") }
+        XCTAssertEqual(row.id, "os-1")
+        XCTAssertEqual(row.isRunning, true)
+    }
+
+    func testRemovedFrameNamesTheRow() {
+        guard case .sessionRowRemoved(let id) = event(
+            #"{"type":"session_row_removed","id":"os-2"}"#
+        ) else { return XCTFail("expected a removal") }
+        XCTAssertEqual(id, "os-2")
+    }
+
+    /// An unreadable row drops the frame, never the socket's other frames.
+    func testUnreadableRowIsIgnored() {
+        guard case .ignored = event(#"{"type":"session_row","row":{"title":"no id"}}"#)
+        else { return XCTFail("expected ignored") }
+    }
+
+    /// A non-string `id` on some other frame must not break that frame.
+    func testForeignIdShapeDoesNotBreakOtherFrames() {
+        guard case .hello = event(#"{"type":"hello","bootId":"b","id":42}"#)
+        else { return XCTFail("expected hello") }
+    }
+
+    func testShapeChangesAskForAReread() {
+        for type in ["sessions_invalidated", "pins_changed", "workspaces_changed"] {
+            guard case .sessionListChanged = event("{\"type\":\"\(type)\"}")
+            else { return XCTFail(type) }
+        }
+    }
 }

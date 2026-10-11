@@ -72,6 +72,16 @@ final class PresenceStore {
         for (account, connection) in connections where sockets[account.id] == nil {
             connect(account: account, connection: connection)
         }
+        // The sidebar's row feed follows the account on screen. Switching to
+        // an account whose socket is already up sends no new hello.
+        let feed = SessionRowFeed.shared
+        let active = sockets[config.activeId]
+        if !feed.isAttached(to: active) {
+            feed.detach()
+            if let active, connectedAccountIDs.contains(config.activeId) {
+                feed.attach(active)
+            }
+        }
     }
 
     /// iOS cannot retain network execution indefinitely in the background.
@@ -80,6 +90,7 @@ final class PresenceStore {
         for task in reconnectTasks.values { task.cancel() }
         reconnectTasks.removeAll()
         let connected = sockets.values
+        SessionRowFeed.shared.detach()
         sockets.removeAll()
         connectedAccounts.removeAll()
         connectedAccountIDs.removeAll()
@@ -126,6 +137,9 @@ final class PresenceStore {
             // never a banner.
             if account.id == config.activeId {
                 NotificationInboxStore.shared.refresh()
+                if let socket = sockets[account.id] {
+                    SessionRowFeed.shared.attach(socket)
+                }
             }
         case .globalPresence(let viewing):
             let mapped = mappedPresence(viewing, me: account.userName)
@@ -156,6 +170,12 @@ final class PresenceStore {
             if account.id == config.activeId {
                 NotificationInboxStore.shared.receiveChanged(user: user)
             }
+        case .sessionRow(let row):
+            if account.id == config.activeId { SessionRowFeed.shared.receive(row) }
+        case .sessionRowRemoved(let id):
+            if account.id == config.activeId { SessionRowFeed.shared.receiveRemoved(id) }
+        case .sessionListChanged:
+            if account.id == config.activeId { SessionRowFeed.shared.resync() }
         case .userMapChanged(let map, let user):
             // A passive account's maps are re-read when it becomes active;
             // only the account on screen has stores to refresh.
@@ -187,6 +207,9 @@ final class PresenceStore {
     }
 
     private func socketClosed(accountID: String) {
+        if SessionRowFeed.shared.isAttached(to: sockets[accountID]) {
+            SessionRowFeed.shared.detach()
+        }
         sockets[accountID] = nil
         connectedAccounts[accountID] = nil
         connectedAccountIDs.remove(accountID)

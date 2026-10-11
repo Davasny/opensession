@@ -11,7 +11,13 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
 
 ## Features (v0.1)
 
-- **Sessions list:** polls `GET /api/sessions` every 5s (matching the web UI);
+- **Sessions list:** reads the web sidebar's own server-scoped projection
+  (`GET /api/sessions?view=sidebar&…&prsFrom=1`, `OS1API.sessions(scope:)`)
+  and keeps it current the way the web does: the app socket subscribes with
+  that query (`sessions_subscribe`) and applies pushed `session_row` /
+  `session_row_removed` frames in place (`SessionRowFeed`), re-reading on
+  reconnect, on pins/workspace changes and on a 60s fallback clock (5s while
+  no socket is live);
   flat single-line workspace rows with live/PR status marks and a running-time
   ticker, larger mobile type, and the web client's warm dark palette. Inbox
   keeps Active work in stable creation order with a nearby Snoozed shelf,

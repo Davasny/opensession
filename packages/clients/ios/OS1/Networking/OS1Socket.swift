@@ -154,6 +154,12 @@ final class OS1Socket: SessionSocket {
         send(["type": "away", "away": away])
     }
 
+    /// Ask for `session_row` frames scoped to the sidebar query this client
+    /// renders, the subscription the web sidebar makes on its main socket.
+    func subscribeSessions(query: String) {
+        send(["type": "sessions_subscribe", "query": query])
+    }
+
     /// Short-lived composer activity. The server expires it unless refreshed.
     func setTyping(sessionId: String, typing: Bool) {
         send(["type": "typing", "sessionId": sessionId, "typing": typing])
