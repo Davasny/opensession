@@ -1,41 +1,112 @@
 #if os(iOS)
 import SwiftUI
 
-/// The composer's neighbour, as one floating glass capsule directly above
-/// it: the next chat. It is about where you go next, so it sits under the
-/// thumb that is already on the composer. The session's own actions, archive
-/// and the ⋯ menu (which carries New session in workspace), live in the
-/// navigation bar beside the title instead (see `SessionView`'s toolbar).
+/// One unread session Next can open: the web's `UnreadChat`
+/// (lib/unread-chats.ts), built from the sidebar's own rows.
+struct UnreadChat: Equatable, Identifiable {
+    let id: String
+    let title: String
+    /// The workspace row it sits under, shown when it differs from `title`.
+    let workspace: String
+    let repo: String?
+}
+
+/// Where a conversation pushed from the sidebar can go next, installed by the
+/// sidebar on the pushed session (`SessionsListView`).
 ///
-/// It stays directly above the composer when the keyboard opens, keeping the
-/// buttons visible and reachable in the keyboard-adjusted safe area.
+/// Equatable on what it shows, not on its closures: the handlers are fresh on
+/// every sidebar update, and an environment value that never compares equal
+/// would re-evaluate the session view, transcript and all, on every poll.
+/// The same reasoning as `OpenPanelAction`.
+struct PhoneSessionNavigation: Equatable {
+    /// Your unread sessions, in sidebar order starting after the open one.
+    var chats: [UnreadChat] = []
+    /// The last unread session was just opened: the tab says so briefly.
+    var allRead = false
+    fileprivate var openChat: ((String) -> Void)?
+    fileprivate var archiveAndNext: (() -> Void)?
+    fileprivate var newWorkspace: (() -> Void)?
+
+    init() {}
+
+    init(
+        chats: [UnreadChat],
+        allRead: Bool,
+        openChat: @escaping (String) -> Void,
+        archiveAndNext: (() -> Void)?,
+        newWorkspace: (() -> Void)?
+    ) {
+        self.chats = chats
+        self.allRead = allRead
+        self.openChat = openChat
+        self.archiveAndNext = archiveAndNext
+        self.newWorkspace = newWorkspace
+    }
+
+    var canArchive: Bool { archiveAndNext != nil }
+    var canOpenNewWorkspace: Bool { newWorkspace != nil }
+
+    func open(_ id: String) { openChat?(id) }
+    func archive() { archiveAndNext?() }
+    func openNewWorkspace() { newWorkspace?() }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.chats == rhs.chats
+            && lhs.allRead == rhs.allRead
+            && (lhs.openChat == nil) == (rhs.openChat == nil)
+            && (lhs.archiveAndNext == nil) == (rhs.archiveAndNext == nil)
+            && (lhs.newWorkspace == nil) == (rhs.newWorkspace == nil)
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var phoneSessionNavigation = PhoneSessionNavigation()
+}
+
+/// The session's own actions as one floating glass capsule above the
+/// composer, the web phone's action pill: Archive (and open the next unread
+/// chat), the ⋯ menu, and New workspace. The navigation bar keeps only the
+/// title, as on the web. It steps aside while the keyboard is up.
 ///
 /// The glass is a background SIBLING of the row, not an ancestor of it. A
 /// `Menu` whose label sits INSIDE a glass subtree makes the system treat that
 /// glass as the menu's morph source, which takes the whole bar off screen for
-/// as long as the menu is open. The composer learned this the hard way. See
-/// `SessionInputBar.composer`.
+/// as long as the menu is open. See `SessionInputBar.composer`.
 struct SessionActionBar: View {
-    var onNextChat: (() -> Void)?
+    var onArchive: (() -> Void)?
+    /// The ⋯ menu (`SessionActionsMenu`), sized to `control` by its label.
+    var menu: AnyView?
+    var onNewWorkspace: (() -> Void)?
 
     /// Matches the composer's round controls, so the two read as one system.
-    private static let control: CGFloat = 44
+    static let control: CGFloat = 44
 
     var body: some View {
-        HStack(spacing: 2) {
-            if let onNextChat {
-                iconButton("arrow.right", label: "Next chat", action: onNextChat)
+        HStack(spacing: 0) {
+            if let onArchive {
+                iconButton("archivebox", label: "Archive and open next chat", action: onArchive)
+            }
+            if let menu {
+                menu
+            }
+            if let onNewWorkspace {
+                if onArchive != nil || menu != nil {
+                    Rectangle()
+                        .fill(OS1VisualStyle.border)
+                        .frame(width: 1, height: 20)
+                        .padding(.horizontal, 2)
+                        .accessibilityHidden(true)
+                }
+                iconButton("plus", label: "New workspace", action: onNewWorkspace)
             }
         }
         .padding(.horizontal, 2)
+        .padding(.vertical, 2)
         .fixedSize()
         .clipShape(Capsule())
-        // Regular Liquid Glass keeps these secondary actions floating above
-        // the solid writing surface without flattening either. It stays a
-        // sibling so nothing inside can become the glass's morph source.
         .background { Color.clear.glassSurface(in: Capsule()) }
         .frame(maxWidth: .infinity)
-        .padding(.bottom, 6)
+        .padding(.bottom, 8)
     }
 
     private func iconButton(
@@ -54,6 +125,94 @@ struct SessionActionBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+    }
+}
+
+/// The web phone's Next tab (`NextUnreadButton`): a compact tab tucked behind
+/// the composer's top edge, naming where it goes. Tap opens your next unread
+/// session; a long press lists every unread one. When the last one has just
+/// been opened it reads "All read" for a moment, then goes.
+struct NextUnreadTab: View {
+    let navigation: PhoneSessionNavigation
+    var cornerRadius: CGFloat = 22
+
+    /// How far the tab tucks under the composer, as the queue flap does.
+    static let tuck: CGFloat = 14
+
+    var body: some View {
+        if let next = navigation.chats.first {
+            Menu {
+                Section("Unread sessions · \(navigation.chats.count)") {
+                    ForEach(navigation.chats) { chat in
+                        Button {
+                            Haptics.play(.selection)
+                            navigation.open(chat.id)
+                        } label: {
+                            Text(chat.title)
+                            if !chat.workspace.isEmpty, chat.workspace != chat.title {
+                                Text(chat.workspace)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                tab {
+                    if let repo = next.repo, !repo.isEmpty {
+                        RepoTile(name: repo, size: 18)
+                            .accessibilityHidden(true)
+                    }
+                    Text(next.title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 15, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+                .foregroundStyle(OS1VisualStyle.text)
+            } primaryAction: {
+                Haptics.play(.selection)
+                navigation.open(next.id)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Next unread: \(next.title)")
+            .accessibilityHint("Hold to choose another unread session.")
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if navigation.allRead {
+            tab {
+                Text("All read")
+            }
+            .foregroundStyle(OS1VisualStyle.textDim)
+            .accessibilityAddTraits(.updatesFrequently)
+            .transition(.opacity)
+        }
+    }
+
+    private func tab(@ViewBuilder _ content: () -> some View) -> some View {
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: cornerRadius,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: cornerRadius,
+            style: .continuous
+        )
+        return HStack(spacing: 8) { content() }
+            .font(.subheadline.weight(.medium))
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            // Part of this sits under the composer (`tuck`).
+            .padding(.bottom, 10 + Self.tuck)
+            .frame(minHeight: 58, alignment: .top)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(OS1VisualStyle.flapSurface, in: shape)
+            .overlay { shape.stroke(OS1VisualStyle.border, lineWidth: 0.5) }
+            .contentShape(shape)
+            // At most most of the bar's width, right-aligned 12pt in from the
+            // composer's edge, as on the web.
+            .frame(maxWidth: 320, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 12)
+            .padding(.bottom, -Self.tuck)
     }
 }
 #endif

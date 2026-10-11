@@ -90,6 +90,9 @@ struct SessionsListView: View {
     /// list, finding your place again is a scroll and a squint. Mac needs no
     /// equivalent: the open session stays selected in the sidebar.
     @State private var lastOpenedSessionID: String?
+    /// The web's brief "All read" after the last unread session opens.
+    @State private var allChatsRead = false
+    @State private var allChatsReadSeq = 0
     @State private var searchText = ""
     /// Full-text hits from the same transcript search the PWA uses. Kept by
     /// session id so workspace rows can match any conversation behind them.
@@ -2429,32 +2432,117 @@ struct SessionsListView: View {
 
     /// Nil removes the button when this is the only visible chat.
     private func nextChatAction(after session: Session) -> (() -> Void)? {
-        guard nextWorkspace(after: session) != nil else { return nil }
-        return { openNextChat(after: session) }
+        guard let next = unreadChats(after: session).first else { return nil }
+        return { openUnreadChat(next.id, remaining: 1) }
     }
 
-    private func nextWorkspace(after session: Session) -> SidebarWorkspace? {
-        guard let current = workspace(containing: session), !current.isDraftWorkspace
-        else { return nil }
+    /// Your unread sessions, the web's `unreadChatsInOrder`
+    /// (lib/unread-chats.ts): the sidebar's rendered rows starting at the
+    /// open one, collapsed sections included, snoozed rows skipped, and only
+    /// sessions that are yours, unread, and not archived, Desk or spawned
+    /// workers. Newest first within a row. Next stops when these run out,
+    /// rather than walking on into rows you have read.
+    private func unreadChats(after session: Session) -> [UnreadChat] {
+        var seenRows = Set<String>()
+        let rows = renderedChatWorkspaces.filter {
+            !$0.isDraftWorkspace && seenRows.insert($0.id).inserted
+        }
+        let selected = rows.firstIndex { row in
+            row.sessions.contains { $0.id == session.id }
+        }
+        let ordered = selected.map { Array(rows[$0...]) + Array(rows[..<$0]) } ?? rows
         let lens = peopleLens
-        return SidebarNext.workspace(
-            after: current.id,
-            in: renderedChatWorkspaces,
-            isMine: { lens.isMine($0) },
-            isUnread: { ReadsStore.shared.isUnread($0) }
-        )
+        let snoozes = WorkspaceSnoozeStore.shared
+        let reads = ReadsStore.shared
+        var seen = Set<String>()
+        return ordered.flatMap { row -> [UnreadChat] in
+            if snoozes.isSnoozed(row) { return [] }
+            return row.sessions
+                .filter { candidate in
+                    candidate.id != session.id
+                        && SidebarNext.qualifiesAsUnread(
+                            candidate,
+                            isMine: { lens.isMine($0) },
+                            isUnread: { reads.isUnread($0) }
+                        )
+                }
+                .sorted { left, right in
+                    let l = left.lastActivity ?? "", r = right.lastActivity ?? ""
+                    return l != r ? l > r : left.id < right.id
+                }
+                .compactMap { candidate in
+                    guard seen.insert(candidate.id).inserted else { return nil }
+                    return UnreadChat(
+                        id: candidate.id,
+                        title: candidate.title?.isEmpty == false
+                            ? candidate.title!
+                            : "Untitled session",
+                        workspace: row.title,
+                        repo: candidate.effectiveRepo
+                    )
+                }
+        }
     }
 
     /// Replace the current push rather than stacking chats. Back still returns
     /// to the sidebar in one gesture, however many times Next was used.
-    private func openNextChat(after session: Session) {
-        guard let current = workspace(containing: session),
-              let open = path.last,
-              workspace(containing: open)?.id == current.id,
-              let next = nextWorkspace(after: open)
-        else { return }
+    private func openUnreadChat(_ id: String, remaining: Int) {
+        guard let next = viewModel.sessions.first(where: { $0.id == id }) else { return }
+        if remaining <= 1 { flashAllRead() }
+        if path.isEmpty {
+            path.append(next)
+        } else {
+            path[path.count - 1] = next
+        }
+    }
+
+    /// "All read" for a moment on the tab once the last unread session opens,
+    /// as the web does after the last one.
+    private func flashAllRead() {
+        allChatsReadSeq += 1
+        let seq = allChatsReadSeq
+        allChatsRead = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.6))
+            if allChatsReadSeq == seq { allChatsRead = false }
+        }
+    }
+
+    /// What the pushed session's action pill and Next tab act on.
+    private func phoneNavigation(for session: Session) -> PhoneSessionNavigation {
+        let chats = unreadChats(after: session)
+        let current = workspace(containing: session)
+        return PhoneSessionNavigation(
+            chats: chats,
+            allRead: allChatsRead && chats.isEmpty,
+            openChat: { id in
+                let open = path.last.map(unreadChats(after:)) ?? chats
+                openUnreadChat(id, remaining: open.count)
+            },
+            archiveAndNext: current.flatMap { workspace in
+                workspace.isDraftWorkspace || workspace.isOptimistic ? nil : {
+                    archiveAndOpenNext(workspace, from: session)
+                }
+            },
+            newWorkspace: {
+                newSessionRequest = NewSessionRequest(repo: session.effectiveRepo)
+            }
+        )
+    }
+
+    /// The pill's Archive: archive the open workspace and go to the next
+    /// unread session, or back to the list when there is none.
+    private func archiveAndOpenNext(_ workspace: SidebarWorkspace, from session: Session) {
+        let archivedIds = Set(workspace.sessions.map(\.id))
+        let next = unreadChats(after: session).first { !archivedIds.contains($0.id) }
+            .flatMap { chat in viewModel.sessions.first { $0.id == chat.id } }
         Haptics.play(.selection)
-        path[path.count - 1] = next.mainSession
+        archive(workspace)
+        if let next, !path.isEmpty {
+            path[path.count - 1] = next
+        } else if !path.isEmpty {
+            path.removeLast()
+        }
     }
     #endif
 
@@ -2683,6 +2771,7 @@ struct SessionsListView: View {
                     await restoreArchived(archived)
                 }
             )
+            .environment(\.phoneSessionNavigation, phoneNavigation(for: session))
             .id(session.id)
         }
     }

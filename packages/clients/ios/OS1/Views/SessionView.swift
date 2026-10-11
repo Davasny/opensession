@@ -855,25 +855,9 @@ struct SessionView: View {
                     PresenceFacepile(viewers: viewModel.otherViewers, size: 24)
                 }
             }
-            #if os(iOS)
-            // The session's two actions, beside the title: archive and the ⋯
-            // menu. One group, so the system draws them in a single glass
-            // capsule like the Back button's. No glass of our own here: a
-            // toolbar item already sits in the bar's glass grouping, and
-            // nesting more joins its morph animations.
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if let onArchiveWorkspace {
-                    Button(action: onArchiveWorkspace) {
-                        Image(systemName: "archivebox")
-                            .foregroundStyle(OS1VisualStyle.text)
-                    }
-                    .accessibilityLabel("Archive")
-                }
-                if let actionsMenu {
-                    actionsMenu
-                }
-            }
-            #endif
+            // iOS: archive and the ⋯ menu ride the action pill above the
+            // composer (`SessionActionBar`), as on the web phone, so the bar
+            // carries only the title.
             #if os(macOS)
             // macOS retains the PR chip in its roomier toolbar; on iOS the
             // same series lives in the title-opened workspace sheet.
@@ -1173,6 +1157,8 @@ struct SessionView: View {
                 horizontalInset: contentInset,
                 autoFocusWhenNeverRan: emptyContent == nil,
                 onNextChat: onNextChat,
+                actionsMenu: actionsMenu,
+                onArchive: onArchiveWorkspace,
                 forkState: $forkState,
                 onForkCreated: onForkCreated
             )
@@ -1454,9 +1440,9 @@ struct SessionView: View {
     }
 
     private var sessionHeaderTrailingInset: CGFloat {
-        // Bar margin, the menu, optional archive, and the glass overhang.
-        let archive: CGFloat = if onArchiveWorkspace == nil { 0 } else { 44 + 8 }
-        let actions: CGFloat = 16 + 44 + archive + 13
+        // Bar margin. The session's actions moved to the pill above the
+        // composer, so only teammates' faces share the bar with the title.
+        let actions: CGFloat = 16
         let viewerCount = viewModel.otherViewers.count
         let shownViewerCount = min(viewerCount, 3) + (viewerCount > 3 ? 1 : 0)
         let facepile: CGFloat = if shownViewerCount > 0 {
@@ -2438,8 +2424,12 @@ private struct SessionActionsMenu: View {
                 }
             }
         } label: {
+            // Sized as one of the action pill's round controls.
             Image(systemName: "ellipsis")
-                .foregroundStyle(OS1VisualStyle.text)
+                .font(.system(size: 19))
+                .foregroundStyle(OS1VisualStyle.textDim)
+                .frame(width: SessionActionBar.control, height: SessionActionBar.control)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("Session actions")
         .sandboxMovePrompts(sandboxMove, onMoved: adoptSandboxMove)
@@ -3406,7 +3396,8 @@ private struct SessionInputBar: View {
     /// Read for the Mac send menu's key hints only. See `BusySendHints`.
     @AppStorage("os1.composer.busySendMod") private var busySendMod = "steer"
     @AppStorage("os1.composer.replySuggestions") private var showReplySuggestions = true
-    @AppStorage("os1.composer.nextChatButton") private var showNextChatButton = false
+    /// On by default, like the account's `next-chat-button` preference.
+    @AppStorage("os1.composer.nextChatButton") private var showNextChatButton = true
     /// Matches the transcript column cap so the bar centers with it.
     let contentMaxWidth: CGFloat
     let horizontalInset: CGFloat
@@ -3416,6 +3407,14 @@ private struct SessionInputBar: View {
     var autoFocusWhenNeverRan = true
     /// Kept optional so non-sidebar conversations, such as the Desk, draw no row.
     var onNextChat: (() -> Void)?
+    /// The ⋯ menu, for the action pill (iOS).
+    var actionsMenu: AnyView? = nil
+    /// Archive without opening anything next (a session not pushed from the
+    /// sidebar, such as the Desk). The sidebar's own archive-and-next wins.
+    var onArchive: (() -> Void)? = nil
+    #if os(iOS)
+    @Environment(\.phoneSessionNavigation) private var navigation
+    #endif
     @Binding var forkState: SessionForkState
     var onForkCreated: ((String) async -> Void)?
     @FocusState private var inputFocused: Bool
@@ -3577,8 +3576,21 @@ private struct SessionInputBar: View {
             #if os(iOS)
             // Keep the actions with the composer inside the keyboard-adjusted
             // safe-area bar, so they remain directly above an open keyboard.
+            // The web phone's action pill. It steps aside while typing.
             if hasActionBar {
-                SessionActionBar(onNextChat: onNextChat)
+                SessionActionBar(
+                    onArchive: navigation.canArchive ? { navigation.archive() } : onArchive,
+                    menu: actionsMenu,
+                    onNewWorkspace: navigation.canOpenNewWorkspace
+                        ? { navigation.openNewWorkspace() }
+                        : nil
+                )
+                .transition(.opacity)
+            }
+            // Attached to the composer's top edge, above any queue flap.
+            if showNextChatButton {
+                NextUnreadTab(navigation: navigation, cornerRadius: 22)
+                    .zIndex(0)
             }
             #endif
 
@@ -3635,6 +3647,10 @@ private struct SessionInputBar: View {
         .padding(.top, Self.barTopPadding)
         .padding(.bottom, 8)
         .animation(.smooth(duration: 0.22), value: composerNotice)
+        #if os(iOS)
+        .animation(.smooth(duration: 0.2), value: hasActionBar)
+        .animation(.smooth(duration: 0.24), value: navigation)
+        #endif
         .animation(.smooth(duration: 0.18), value: noteMode)
         .animation(.smooth(duration: 0.2), value: viewModel.replySuggestions)
         .animation(.smooth(duration: 0.18), value: viewModel.quoteSelection.text)
@@ -3775,7 +3791,9 @@ private struct SessionInputBar: View {
     /// Whether the action bar has anything to hold. Without the Next chat
     /// preference there is no bar at all rather than an empty capsule.
     private var hasActionBar: Bool {
-        showNextChatButton && onNextChat != nil
+        !inputFocused
+            && (actionsMenu != nil || onArchive != nil || navigation.canArchive
+                || navigation.canOpenNewWorkspace)
     }
     #endif
 
