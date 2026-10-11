@@ -1814,6 +1814,12 @@ export class SessionKernelStore {
     // as already acknowledged. It never makes run/command/outbox state
     // ambiguous, so unrelated live state must not strand the whole session.
     if (commandKind === "transcript:ack_wake") return true;
+    // A plain transcript append runs in one immediate transaction keyed by its
+    // request id, and its rows are upserts by entry id. A failed append, such
+    // as one that hit a full disk, rolled back completely and replays
+    // idempotently. Run state cannot settle while the session is fenced, so
+    // requiring an idle run here would strand the session permanently.
+    if (commandKind === "transcript:append") return true;
     // These operations only read quarantine, timer, or outbox rows. A failed
     // read cannot leave an operation half-applied, so existing work must not
     // prevent the session from being read again.
