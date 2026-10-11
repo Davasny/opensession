@@ -60,6 +60,67 @@ enum OS1API {
         try await get("/api/sessions?archived=exclude", revalidating: true)
     }
 
+    /// The lens the sidebar renders, which the server applies before it
+    /// answers (`view=sidebar`, the web sidebar's own request).
+    struct SidebarScope: Equatable, Sendable {
+        var user: String
+        /// `me`, `everyone`, `unassigned`, or a person key.
+        var person: String
+        /// A repository id, or `all`.
+        var repo: String
+        var showAutoCreated: Bool
+        /// A session open on screen that the lens would otherwise leave out.
+        var selectedSessionId: String?
+    }
+
+    /// The live sidebar list, scoped on the server the way the web sidebar
+    /// asks for it (`sidebarSessionsQuery` in the web client). The unscoped
+    /// list is every live session on the instance, megabytes and thousands of
+    /// rows on a busy one, re-downloaded whenever any of them changes; the
+    /// scoped one is the rows this sidebar can show, plus the teammates'
+    /// sessions active in the last fifteen minutes that feed the team section.
+    static func sessions(scope: SidebarScope) async throws -> [Session] {
+        let rows: [Session] = try await get(sidebarPath(scope), revalidating: true)
+        return restoringSharedPrs(rows)
+    }
+
+    static func sidebarPath(_ scope: SidebarScope) -> String {
+        var components = URLComponents()
+        components.path = "/api/sessions"
+        var items = [
+            URLQueryItem(name: "archived", value: "exclude"),
+            URLQueryItem(name: "view", value: "sidebar"),
+            URLQueryItem(name: "user", value: scope.user),
+            URLQueryItem(name: "person", value: scope.person),
+            URLQueryItem(name: "repo", value: scope.repo),
+            URLQueryItem(name: "autoCreated", value: scope.showAutoCreated ? "show" : "hide"),
+            // Rows repeating a sibling's PR list name it instead.
+            URLQueryItem(name: "prsFrom", value: "1"),
+        ]
+        if let selected = scope.selectedSessionId, !selected.isEmpty {
+            items.append(URLQueryItem(name: "session", value: selected))
+        }
+        components.queryItems = items
+        return components.percentEncodedPath + "?" + (components.percentEncodedQuery ?? "")
+    }
+
+    /// Undo the server's PR-list sharing: a row naming a sibling in
+    /// `prsFrom` takes that sibling's list.
+    nonisolated static func restoringSharedPrs(_ rows: [Session]) -> [Session] {
+        guard rows.contains(where: { $0.prsFrom != nil }) else { return rows }
+        var byId: [String: [SessionPrRef]] = [:]
+        for row in rows where row.prsFrom == nil {
+            if let prs = row.prs { byId[row.id] = prs }
+        }
+        return rows.map { row in
+            guard let source = row.prsFrom else { return row }
+            var restored = row
+            restored.prs = byId[source] ?? row.prs
+            restored.prsFrom = nil
+            return restored
+        }
+    }
+
     /// Archived sessions, as summaries.
     ///
     /// Each row carries what the Archived screen renders — title, repo,
@@ -423,11 +484,23 @@ enum OS1API {
 
     /// Canonical workspace names for collapsing sibling sessions into one row.
     static func workspaces() async throws -> [WorkspaceSummary] {
-        struct WorkspacesResponse: Decodable, Sendable {
-            let workspaces: [WorkspaceSummary]
-        }
         let response: WorkspacesResponse = try await get("/api/workspaces")
         return response.workspaces
+    }
+
+    /// The workspaces the sidebar can draw: those with live sessions, parked
+    /// drafts, and ones backing an open PR, the slice the web sidebar reads.
+    /// The full list is every workspace ever made (megabytes on a busy
+    /// instance); this one is ETagged, so a poll that changed nothing is a 304.
+    static func sidebarWorkspaces() async throws -> [WorkspaceSummary] {
+        let response: WorkspacesResponse = try await get(
+            "/api/workspaces?active=1", revalidating: true
+        )
+        return response.workspaces
+    }
+
+    private struct WorkspacesResponse: Decodable, Sendable {
+        let workspaces: [WorkspaceSummary]
     }
 
     static func transcript(sessionId: String) async throws -> [TranscriptEntry] {

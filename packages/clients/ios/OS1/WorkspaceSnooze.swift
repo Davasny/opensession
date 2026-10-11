@@ -27,27 +27,35 @@ enum WorkspaceSnooze {
             ?? .distantPast
     }
 
+    /// Newest workspace first. Each row's date is worked out once, before the
+    /// sort: parsed inside the comparator it was re-parsed (for every session
+    /// of the workspace) on each of the n log n comparisons, every redraw.
     static func sortActive(_ workspaces: [SidebarWorkspace]) -> [SidebarWorkspace] {
-        workspaces.sorted { left, right in
-            let leftDate = createdAt(left)
-            let rightDate = createdAt(right)
-            return leftDate == rightDate ? left.id < right.id : leftDate > rightDate
+        let keyed: [(workspace: SidebarWorkspace, date: Date)] = workspaces.map {
+            (workspace: $0, date: createdAt($0))
         }
+        let sorted = keyed.sorted { (left, right) -> Bool in
+            if left.date != right.date { return left.date > right.date }
+            return left.workspace.id < right.workspace.id
+        }
+        return sorted.map { $0.workspace }
     }
 
     static func sortSnoozed(
         _ workspaces: [SidebarWorkspace],
         values: [String: String]
     ) -> [SidebarWorkspace] {
-        workspaces.sorted { left, right in
-            let leftValue = values[SidebarRowKeys.rowKey(for: left)]
-            let rightValue = values[SidebarRowKeys.rowKey(for: right)]
-            if leftValue == someDay, rightValue != someDay { return false }
-            if rightValue == someDay, leftValue != someDay { return true }
-            let leftDate = Session.parseISO(leftValue) ?? .distantFuture
-            let rightDate = Session.parseISO(rightValue) ?? .distantFuture
-            return leftDate == rightDate ? left.id < right.id : leftDate < rightDate
+        let keyed: [(workspace: SidebarWorkspace, someday: Bool, date: Date)] = workspaces.map {
+            let value = values[SidebarRowKeys.rowKey(for: $0)]
+            let date: Date = Session.parseISO(value) ?? .distantFuture
+            return (workspace: $0, someday: value == someDay, date: date)
         }
+        let sorted = keyed.sorted { (left, right) -> Bool in
+            if left.someday != right.someday { return right.someday }
+            if left.date != right.date { return left.date < right.date }
+            return left.workspace.id < right.workspace.id
+        }
+        return sorted.map { $0.workspace }
     }
 }
 
