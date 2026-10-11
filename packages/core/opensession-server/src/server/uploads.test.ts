@@ -26,6 +26,7 @@ const {
   InvalidUploadError,
   readPromptFiles,
   stageInlineImages,
+  stageHttpUpload,
 } = await import("./uploads");
 const { MAX_SHIPPED_ATTACHMENT_BYTES, MAX_UPLOAD_BYTES } =
   await import("./prompt-attachments");
@@ -248,5 +249,28 @@ describe("readPromptFiles", () => {
       ["big.bin", true],
       ["small.txt", false],
     ]);
+  });
+});
+
+describe("HTTP uploads", () => {
+  test("parallel uploads with the same name each keep their own file", async () => {
+    // iOS names every picked photo "image.jpeg" and the composer uploads a
+    // multi-pick in parallel; none of them may overwrite another.
+    const bodies = ["one", "two", "three"];
+    const staged = await Promise.all(
+      bodies.map((body) =>
+        stageHttpUpload(
+          "image.jpeg",
+          new Request("http://example.test/api/upload", {
+            method: "POST",
+            body,
+          }),
+        ),
+      ),
+    );
+    expect(new Set(staged.map((file) => file.path)).size).toBe(3);
+    expect(staged.map((file) => readFileSync(file.path, "utf8"))).toEqual(
+      bodies,
+    );
   });
 });

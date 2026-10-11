@@ -21,7 +21,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
-import { readFile, stat } from "fs/promises";
+import { mkdir, readFile, stat, writeFile } from "fs/promises";
 import { MAX_PROMPT_IMAGES } from "@tellahq/opensession-protocol/session";
 import {
   INLINE_IMAGE_EXTENSIONS,
@@ -320,17 +320,28 @@ export async function stageHttpUpload(
   name: string,
   req: Request,
 ): Promise<{ name: string; path: string }> {
-  mkdirSync(STAGED_UPLOADS_DIR, { recursive: true });
   const wanted = sanitizeFilename(name);
-  const p = uniqueUploadPath(STAGED_UPLOADS_DIR, wanted);
   const buf = Buffer.from(await req.arrayBuffer());
   if (buf.length === 0) throw new Error("empty upload");
   if (buf.length > MAX_UPLOAD_BYTES)
     throw new Error(
       `file too large (${buf.length} bytes, max ${MAX_UPLOAD_BYTES})`,
     );
-  writeFileSync(p, buf);
-  return { name: name || wanted, path: p };
+  await mkdir(STAGED_UPLOADS_DIR, { recursive: true });
+  // Parallel uploads often share a name (iOS calls every picked photo
+  // "image.jpeg"). Choosing a free name and writing later let two of them
+  // pick the same one, so the second overwrote the first. The exclusive
+  // create claims the name and writes it in one step.
+  const used = new Set<string>();
+  for (;;) {
+    const p = uniqueUploadPath(STAGED_UPLOADS_DIR, wanted, used);
+    try {
+      await writeFile(p, buf, { flag: "wx" });
+      return { name: name || wanted, path: p };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
 }
 
 function uploadDigest(bytes: Buffer): string {
