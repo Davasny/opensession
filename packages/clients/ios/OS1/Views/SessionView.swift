@@ -2194,199 +2194,20 @@ private struct SessionActionsMenu: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
+        // The web phone's ⋯ (SessionViewerChrome): name and share, then
+        // start something, then the PR, then archive and delete. Model
+        // settings ride the composer's pill and the worktree sheet opens
+        // from the title, so neither repeats here; the panel tools share
+        // one submenu so the menu fits a phone without scrolling.
         Menu {
-            if addIntent != nil {
-                Button {
-                    SidebarAddition.add(session: viewModel.session, siblings: tabs)
-                } label: {
-                    Label("Add to sidebar", systemImage: "sidebar.left")
-                }
-            }
-            if let onNewSession {
-                Button(action: onNewSession) {
-                    // Names the scope now that this is the only place the
-                    // action lives: with no `+` left on screen, the row has
-                    // to say where the session lands. A workspace-less
-                    // legacy session has nothing to join, so the plain
-                    // wording stays honest there.
-                    Label(
-                        viewModel.session.workspaceId == nil
-                            ? "New session"
-                            : "New session in workspace",
-                        systemImage: "plus"
-                    )
-                }
-            }
-            if let onFork {
-                Button(action: onFork) {
-                    Label("Fork", systemImage: "arrow.triangle.branch")
-                }
-                .accessibilityHint("Starts a new session from the current history")
-            }
-            Button {
-                viewModel.comments.showingList = true
-            } label: {
-                let open = viewModel.comments.openCount
-                Label(open > 0 ? "Comments (\(open))" : "Comments", systemImage: "text.bubble")
-            }
-            if !workerSessions.isEmpty {
-                Menu {
-                    ForEach(workerSessions) { worker in
-                        Button {
-                            openWorker(worker)
-                        } label: {
-                            Label(
-                                worker.displayTitle,
-                                systemImage: worker.isRunning == true ? "circle.fill" : "circle"
-                            )
-                        }
-                        .accessibilityLabel(
-                            "\(worker.displayTitle), \(worker.isRunning == true ? "running" : "finished")"
-                        )
-                    }
-                } label: {
-                    Label(
-                        "Delegated workers (\(workerSessions.count))",
-                        systemImage: "arrow.down.right"
-                    )
-                }
-            }
-            // What was closed here, next to the way to open a new one: the
-            // two are the same errand, another conversation in this
-            // workspace. These rows normally hang off the tab strip's history
-            // button, so they appear exactly when there is no strip to hold
-            // them, which is also when someone is most likely to go looking
-            // for what was closed. High in the menu rather than beside the
-            // destructive rows where the web keeps it, because this menu is
-            // long enough to scroll on a phone and the entry that has no
-            // other home must not be the one below the fold. A submenu, since
-            // the list is usually one or two entries but can run to twenty.
-            if let workspaceHistory, !workspaceHistory.sessions.isEmpty {
-                Menu {
-                    SessionHistoryItems(
-                        sessions: workspaceHistory.sessions,
-                        restoringIds: workspaceHistory.restoringIds,
-                        onRestore: workspaceHistory.restore
-                    )
-                } label: {
-                    Label(
-                        "Closed sessions",
-                        systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90"
-                    )
-                }
-            }
-            Button {
-                showWorktreeInfo = true
-            } label: {
-                Label("Worktree details", systemImage: "info.circle")
-            }
-            // Where the next turn runs. Offered only when the server would
-            // accept the move (a code session with a repository, on this
-            // machine, not an automation's and not on a Runner); a 428 from
-            // the server becomes the confirmation below.
-            if canMoveToSandbox {
-                Menu {
-                    SandboxMoveMenuItems(
-                        model: sandboxMove,
-                        session: viewModel.session,
-                        isRunning: viewModel.isRunning,
-                        onMoved: adoptSandboxMove
-                    )
-                } label: {
-                    Label("Move to Sandbox", systemImage: "cube")
-                }
-            }
-            // What the next turn runs on. It was only reachable through the
-            // worktree details sheet, which is a long way to go for a setting
-            // the web changes from the composer.
-            Menu {
-                ModelSettingsMenu(
-                    viewModel: viewModel, catalog: catalog, accounts: accounts, showsUsage: false
-                )
-            } label: {
-                Label("Model settings", systemImage: "slider.horizontal.3")
-            }
-            // Everything the worktree has changed, for the edits no visible
-            // tool row names — the ones made before the transcript you're
-            // reading, and the ones the agent made without saying so.
-            if openPanel.isAvailable {
-                Button {
-                    openPanel(.changes(sessionId: viewModel.session.id))
-                } label: {
-                    Label("Changes", systemImage: "plusminus")
-                }
-            }
-            // The whole scratch folder, for the files no visible tool row
-            // names — the ones written before the transcript you're reading.
-            if openPanel.isAvailable {
-                Button {
-                    openPanel(.assets(sessionId: viewModel.session.id))
-                } label: {
-                    Label("Assets", systemImage: "folder")
-                }
-            }
-            // What this session put on a port: its dev server, a docs site,
-            // whatever it brought up. Opening the list never wakes a sleeping
-            // sandbox; only a restart someone asked for does.
-            if openPanel.isAvailable {
-                Button {
-                    openPanel(.portals(sessionId: viewModel.session.id))
-                } label: {
-                    Label("Portals", systemImage: "globe")
-                }
-            }
-            // A shell in the worktree, for the one short command that is
-            // quicker to run than to ask for, and for following a log the
-            // session is already writing.
-            if openPanel.isAvailable {
-                Button {
-                    openPanel(.terminal(sessionId: viewModel.session.id))
-                } label: {
-                    Label("Terminal", systemImage: "apple.terminal")
-                }
-            }
-            // The batches of agents this session fanned work out to. The
-            // conversation shows that a run happened; what each agent came
-            // back with is only here.
-            if openPanel.isAvailable {
-                Button {
-                    openPanel(.agents(sessionId: viewModel.session.id))
-                } label: {
-                    Label("Agents", systemImage: "square.stack.3d.up")
-                }
-            }
-            if let number = viewModel.prDetails?.number ?? viewModel.session.prNumber {
-                Button {
-                    // A tab where there's a strip to open one in; the sheet
-                    // stays the fallback for the surfaces without one.
-                    if openPanel.isAvailable {
-                        openPanel(.review(sessionId: viewModel.session.id))
-                    } else {
-                        showPrPanel = true
-                    }
-                } label: {
-                    Label {
-                        Text(verbatim: "Pull request #\(number)")
-                    } icon: {
-                        Image(systemName: "arrow.triangle.pull")
-                    }
-                }
-                if viewModel.prDetails?.isOpen == true {
-                    Menu {
-                        Button("Squash and merge") { pendingMerge = "squash" }
-                        Button("Create a merge commit") { pendingMerge = "merge" }
-                        Button("Rebase and merge") { pendingMerge = "rebase" }
-                    } label: {
-                        Label(
-                            merging ? "Merging pull request…" : "Merge pull request",
-                            systemImage: "arrow.triangle.merge"
-                        )
-                    }
-                    .disabled(merging)
-                }
-            }
-
             Section {
+                if addIntent != nil {
+                    Button {
+                        SidebarAddition.add(session: viewModel.session, siblings: tabs)
+                    } label: {
+                        Label("Add to sidebar", systemImage: "sidebar.left")
+                    }
+                }
                 // The rename itself runs from SessionView's alert; the menu
                 // only raises it, so the callback's presence is the gate.
                 if onRenameWorkspace != nil {
@@ -2394,47 +2215,170 @@ private struct SessionActionsMenu: View {
                         renameText = workspace?.title ?? viewModel.session.displayTitle
                         renaming = true
                     } label: {
-                        Label("Rename", systemImage: "pencil")
+                        Label("Rename workspace", systemImage: "pencil")
                     }
                 }
-                // The share sheet names the link after the workspace, the same
-                // name the header shows and the Slack unfurl leads with. A
-                // session is a tab inside it, so its own title isn't the page.
                 if let workspace, let link = workspace.shareURL {
                     ShareLink(item: link, preview: SharePreview(workspace.title)) {
-                        Label("Share link", systemImage: "square.and.arrow.up")
+                        Label("Share workspace", systemImage: "link")
+                    }
+                }
+                if let workspace, !workspace.isOptimistic,
+                   HideStore.shared.isHidden(workspace), addIntent == nil {
+                    Button {
+                        HideStore.shared.unhide(for: viewModel.session)
+                    } label: {
+                        Label("Restore to sidebar", systemImage: "eye")
+                    }
+                }
+            }
+
+            Section {
+                if let onNewSession {
+                    Button(action: onNewSession) {
+                        Label(
+                            viewModel.session.workspaceId == nil
+                                ? "New session"
+                                : "New session in workspace",
+                            systemImage: "plus"
+                        )
+                    }
+                }
+                if let onFork {
+                    Button(action: onFork) {
+                        Label("Duplicate session", systemImage: "doc.on.doc")
+                    }
+                    .accessibilityHint("Starts a new session from the current history")
+                }
+                if openPanel.isAvailable {
+                    Button {
+                        openPanel(.portals(sessionId: viewModel.session.id))
+                    } label: {
+                        Label("Portals", systemImage: "globe")
+                    }
+                }
+                if canMoveToSandbox {
+                    Menu {
+                        SandboxMoveMenuItems(
+                            model: sandboxMove,
+                            session: viewModel.session,
+                            isRunning: viewModel.isRunning,
+                            onMoved: adoptSandboxMove
+                        )
+                    } label: {
+                        Label("Move to Sandbox", systemImage: "cube")
+                    }
+                }
+                // Panels the web keeps in its side panel. One row here, so
+                // they stay reachable without lengthening the menu.
+                Menu {
+                    let open = viewModel.comments.openCount
+                    Button {
+                        viewModel.comments.showingList = true
+                    } label: {
+                        Label(open > 0 ? "Comments (\(open))" : "Comments", systemImage: "text.bubble")
+                    }
+                    if openPanel.isAvailable {
+                        Button {
+                            openPanel(.changes(sessionId: viewModel.session.id))
+                        } label: {
+                            Label("Changes", systemImage: "plusminus")
+                        }
+                        Button {
+                            openPanel(.assets(sessionId: viewModel.session.id))
+                        } label: {
+                            Label("Assets", systemImage: "folder")
+                        }
+                        Button {
+                            openPanel(.terminal(sessionId: viewModel.session.id))
+                        } label: {
+                            Label("Terminal", systemImage: "apple.terminal")
+                        }
+                        Button {
+                            openPanel(.agents(sessionId: viewModel.session.id))
+                        } label: {
+                            Label("Agents", systemImage: "square.stack.3d.up")
+                        }
+                    }
+                } label: {
+                    Label("Tools", systemImage: "wrench.and.screwdriver")
+                }
+            }
+
+            Section {
+                if let number = viewModel.prDetails?.number ?? viewModel.session.prNumber {
+                    Button {
+                        if openPanel.isAvailable {
+                            openPanel(.review(sessionId: viewModel.session.id))
+                        } else {
+                            showPrPanel = true
+                        }
+                    } label: {
+                        Label {
+                            Text(verbatim: "Pull request #\(number)")
+                        } icon: {
+                            Image(systemName: "arrow.triangle.pull")
+                        }
+                    }
+                    if viewModel.prDetails?.isOpen == true {
+                        Menu {
+                            Button("Squash and merge") { pendingMerge = "squash" }
+                            Button("Create a merge commit") { pendingMerge = "merge" }
+                            Button("Rebase and merge") { pendingMerge = "rebase" }
+                        } label: {
+                            Label(
+                                merging ? "Merging pull request…" : "Merge pull request",
+                                systemImage: "arrow.triangle.merge"
+                            )
+                        }
+                        .disabled(merging)
+                    }
+                }
+                if !workerSessions.isEmpty {
+                    Menu {
+                        ForEach(workerSessions) { worker in
+                            Button {
+                                openWorker(worker)
+                            } label: {
+                                Label(
+                                    worker.displayTitle,
+                                    systemImage: worker.isRunning == true ? "circle.fill" : "circle"
+                                )
+                            }
+                            .accessibilityLabel(
+                                "\(worker.displayTitle), \(worker.isRunning == true ? "running" : "finished")"
+                            )
+                        }
+                    } label: {
+                        Label(
+                            "Delegated workers (\(workerSessions.count))",
+                            systemImage: "arrow.down.right"
+                        )
+                    }
+                }
+                // Closed sessions hang off the tab strip's history button,
+                // so they appear here exactly when there is no strip.
+                if let workspaceHistory, !workspaceHistory.sessions.isEmpty {
+                    Menu {
+                        SessionHistoryItems(
+                            sessions: workspaceHistory.sessions,
+                            restoringIds: workspaceHistory.restoringIds,
+                            onRestore: workspaceHistory.restore
+                        )
+                    } label: {
+                        Label(
+                            "Archived sessions",
+                            systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90"
+                        )
                     }
                 }
             }
 
             if let workspace, !workspace.isOptimistic {
                 Section {
-                    // Hiding is the personal counterpart to archiving: the row
-                    // leaves YOUR sidebar while the session keeps running for
-                    // everyone else — so it isn't destructive-styled.
-                    if HideStore.shared.isHidden(workspace), addIntent == nil {
-                        Button {
-                            // `unhide` rather than clearing this row's key:
-                            // it drops every key the session could sit under,
-                            // which is deliberately safe (over-clearing only
-                            // ever restores a row) and keeps the menu off the
-                            // row-key helper.
-                            HideStore.shared.unhide(for: viewModel.session)
-                        } label: {
-                            Label("Restore to sidebar", systemImage: "eye")
-                        }
-                    } else if !HideStore.shared.isHidden(workspace) {
-                        Button {
-                            HideStore.shared.hide(workspace)
-                        } label: {
-                            // Shortened for the same reason as the list's copy:
-                            // "…my sidebar" wraps onto a second line here.
-                            Label("Hide from sidebar", systemImage: "eye.slash")
-                        }
-                    }
                     if let onArchiveWorkspace {
-                        Button(role: .destructive, action: onArchiveWorkspace) {
-                            Label("Archive", systemImage: "archivebox")
+                        Button(action: onArchiveWorkspace) {
+                            Label("Archive workspace", systemImage: "archivebox")
                         }
                     }
                     if workspace.workspaceId?.isEmpty == false, let onDeleteWorkspace {
