@@ -644,6 +644,31 @@ describe("per-session session kernel storage", () => {
     host.close();
   });
 
+  test("releases a failed transcript append during a live run", () => {
+    const path = paths();
+    const host = new SessionKernelStoreHost(path.central, path.isolated);
+    const sessionId = "append-repair-session";
+    host.call("setRunState", [
+      { sessionId, state: "running", event: "prompt" },
+    ]);
+    host.quarantineSession(
+      sessionId,
+      "database or disk is full",
+      "transcript:append",
+      host.isIsolated(sessionId),
+    );
+
+    expect(host.quarantinedSession(sessionId)).toMatchObject({
+      repairable: true,
+    });
+    expect(host.call("releaseQuarantine", [sessionId])).toBe(true);
+    expect(host.quarantinedSession(sessionId)).toBeUndefined();
+    expect(host.storeForSession(sessionId).runState(sessionId).state).toBe(
+      "running",
+    );
+    host.close();
+  });
+
   test("releases a failed turn snapshot during a live run", () => {
     const path = paths();
     const host = new SessionKernelStoreHost(path.central, path.isolated);
