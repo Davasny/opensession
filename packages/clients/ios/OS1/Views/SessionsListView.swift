@@ -1881,9 +1881,15 @@ struct SessionsListView: View {
     /// opens one of its comment threads, the way a comment link does.
     private func autoOpenFromEnvironment() {
         let env = ProcessInfo.processInfo.environment
-        guard let id = env["OS1_OPEN_SESSION"],
-              let session = viewModel.sessions.first(where: { $0.id == id })
-        else { return }
+        guard let id = env["OS1_OPEN_SESSION"] else { return }
+        guard let session = viewModel.sessions.first(where: { $0.id == id }) else {
+            // Outside the sidebar's lens: open it the way a link would.
+            if let thread = env["OS1_OPEN_THREAD"] {
+                ThreadFocus.shared.note(link: CommentThreads.link(sessionId: id, threadId: thread), sessionId: id)
+            }
+            _ = openSessionLink(id: id)
+            return
+        }
         let focusThread = {
             if let thread = env["OS1_OPEN_THREAD"] {
                 ThreadFocus.shared.note(link: CommentThreads.link(sessionId: id, threadId: thread), sessionId: id)

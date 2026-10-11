@@ -270,7 +270,9 @@ struct PrPanelView: View {
     /// had before: everything countable about a pull request answers a
     /// question ("is it green?", "what landed?") rather than being a place you
     /// go, so it rolls up on the overview and the code gets a page of its own.
-    @State private var page: Page = .overview
+    /// Files first, as the web review opens: a pull request is opened to
+    /// read the change, and its conversation is one swipe to the left.
+    @State private var page: Page = .files
     /// Owned here because the tab row draws its control, beside the pages.
     @State private var lens: PrReviewCanvas.Lens = .all
     /// The rollups start closed: the overview is meant to be readable in one
@@ -318,6 +320,9 @@ struct PrPanelView: View {
         .task {
             await viewModel.refreshPr()
             #if DEBUG
+            if ProcessInfo.processInfo.environment["OS1_OPEN_PR_OVERVIEW"] == "1" {
+                page = .overview
+            }
             if ProcessInfo.processInfo.environment["OS1_OPEN_PR_INFO"] == "1" {
                 page = .info
             }

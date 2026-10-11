@@ -283,6 +283,13 @@ struct PrReviewCanvas: View {
                 .padding(.horizontal, 4)
         }
 
+        if draftComments.isEmpty {
+            Text("Tap a line number to comment on that line.")
+                .font(.caption)
+                .foregroundStyle(OS1VisualStyle.textFaint)
+                .padding(.horizontal, 4)
+        }
+
         let resolvedCount = resolvedThreads.count
         if !draftComments.isEmpty || resolvedCount > 0 {
             HStack(spacing: 10) {
@@ -1168,36 +1175,57 @@ private struct PrReviewLineView: View {
     var wraps = false
     let comment: (Int) -> Void
 
+    /// Wide enough for four digits at the gutter's size. Two of these and a
+    /// comment button used to take a third of a phone's width from the code.
+    private static let gutterWidth: CGFloat = 32
+
     var body: some View {
-        HStack(spacing: 0) {
-            Text(line.oldLine.map(String.init) ?? "")
-                .frame(width: 44, alignment: .trailing)
-            Text(line.newLine.map(String.init) ?? "")
-                .frame(width: 44, alignment: .trailing)
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            // The gutter is the comment target, the way a tapped line number
+            // starts one on the web: no button column on every line.
+            gutter
             // Wrapped: the line takes the width it is given and grows down.
             // Unwrapped: it takes its own full width and the page scrolls
             // sideways to it, which is what "wrap long lines" turns off.
             Text(line.text.isEmpty ? " " : line.text)
+                .font(.system(.caption, design: .monospaced))
                 .lineLimit(wraps ? nil : 1)
                 .fixedSize(horizontal: !wraps, vertical: true)
                 .frame(maxWidth: wraps ? .infinity : nil, alignment: .leading)
-                .padding(.leading, 10)
+                .padding(.leading, 6)
+                .padding(.trailing, 4)
+                .textSelection(.enabled)
             if !wraps { Spacer(minLength: 0) }
-            if let anchor = line.commentLine {
-                Button { comment(anchor) } label: {
-                    Image(systemName: "plus.bubble")
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 8)
-                .accessibilityLabel("Add inline comment on line \(anchor)")
-            } else {
-                Color.clear.frame(width: 36)
-            }
         }
-        .font(.system(.caption, design: .monospaced))
         .foregroundStyle(PrDiffInk.foreground(line.kind))
         .background(PrDiffInk.background(line.kind))
-        .textSelection(.enabled)
+        .accessibilityElement(children: .combine)
+        .accessibilityActions {
+            if let anchor = line.commentLine {
+                Button("Add inline comment on line \(anchor)") { comment(anchor) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var gutter: some View {
+        let numbers = HStack(spacing: 0) {
+            Text(line.oldLine.map(String.init) ?? "")
+                .frame(width: Self.gutterWidth, alignment: .trailing)
+            Text(line.newLine.map(String.init) ?? "")
+                .frame(width: Self.gutterWidth, alignment: .trailing)
+        }
+        .font(.system(.caption2, design: .monospaced))
+        .foregroundStyle(PrDiffInk.foreground(line.kind).opacity(0.6))
+        if let anchor = line.commentLine {
+            Button { comment(anchor) } label: {
+                numbers.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHidden(true)
+        } else {
+            numbers
+        }
     }
 }
 

@@ -76,7 +76,7 @@ struct MarkdownTableView: View {
                     let config = quoteSelection == nil
                         ? base
                         : base.withTextContextMenu(value: .os1QuoteSelection)
-                    SwiftStreamingMarkdown.MarkdownView(
+                    CachedMarkdownView(
                         text: table.markdownSource(),
                         config: config,
                         listener: quoteSelection?.listener(entryId: anchorEntryId)
