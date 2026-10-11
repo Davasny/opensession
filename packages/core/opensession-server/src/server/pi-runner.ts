@@ -353,21 +353,19 @@ export async function usesHostGithubLogin(input: {
   return !githubAppConfigured();
 }
 
-/** Person-started code turns follow the live checkout's direct-push workflow.
- * Without personal GitHub authority they still cannot merge or approve PRs.
- * Ask, unattended, and machine-authored runs retain the full guard. */
+/** Person-started code turns follow the repository's publication workflow:
+ * they may push the base branch and merge PRs in either checkout mode, and
+ * GitHub rulesets bound what lands. Without personal GitHub authority they
+ * still cannot approve PRs. Ask, unattended, and machine-authored runs retain
+ * the full guard. */
 export function runGithubMergeGuard(input: {
   isCode: boolean;
   ownerTurn: boolean;
   ownerLogin: string | null;
   baseBranch: string;
-  /** The run is in the registered repo's main checkout, not an isolated worktree. */
-  sharedCheckout: boolean;
 }): MergeGuard | undefined {
-  if (input.isCode && input.ownerTurn) {
-    if (input.ownerLogin) return undefined;
-    if (input.sharedCheckout) return {};
-  }
+  if (input.isCode && input.ownerTurn)
+    return input.ownerLogin ? undefined : { allowMerge: true };
   return { baseBranch: input.baseBranch };
 }
 
@@ -2485,29 +2483,18 @@ async function* runPiAttempt(
     // The repo owning this run's cwd, or undefined for a repo-less one (a
     // scratch dir, a repo-less ask session). Dynamic import to avoid a static
     // module-init cycle through "./worktree".
-    const { cwdRepo, sharedCheckout } = await (async () => {
+    const cwdRepo = await (async () => {
       try {
-        const { getRepo, repoForPathOrNull, canonicalPath } =
-          await import("./worktree");
+        const { getRepo, repoForPathOrNull } = await import("./worktree");
         // A Sandbox checkout's path means nothing on this machine: the
         // launcher names its repository instead.
         if (remote)
-          return {
-            cwdRepo: opts.remoteWorkspace?.repo
-              ? getRepo(opts.remoteWorkspace.repo)
-              : undefined,
-            sharedCheckout: false,
-          };
-        const cwdRepo = repoForPathOrNull(cwd);
-        return {
-          cwdRepo,
-          // Use the actual checkout, not the repo's default for NEW sessions:
-          // a shared-checkout repo can also have isolated worktree sessions.
-          sharedCheckout:
-            !!cwdRepo && canonicalPath(cwd) === canonicalPath(cwdRepo.repo),
-        };
+          return opts.remoteWorkspace?.repo
+            ? getRepo(opts.remoteWorkspace.repo)
+            : undefined;
+        return repoForPathOrNull(cwd);
       } catch {
-        return { cwdRepo: undefined, sharedCheckout: false };
+        return undefined;
       }
     })();
     // A run that can publish must know when the whole internet reads what it
@@ -2561,7 +2548,6 @@ async function* runPiAttempt(
       ownerTurn,
       ownerLogin: githubUserLogin,
       baseBranch: cwdRepo?.defaultBranch || "main",
-      sharedCheckout,
     });
     const binding = await createPiRuntimeBinding({
       providerID: parsed.providerID,
