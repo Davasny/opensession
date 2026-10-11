@@ -38,7 +38,6 @@ function render(value: PreviewStatus | null, launching: string | null = null) {
       onLaunchingChange={noop}
       onStart={start}
       onOpen={noop}
-      isPhone={false}
     />,
   );
 }

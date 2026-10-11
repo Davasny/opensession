@@ -40,7 +40,6 @@ export function PortalLaunchButton({
   onLaunchingChange,
   onStart,
   onOpen,
-  isPhone,
 }: {
   sessionId: string;
   status: PreviewStatus | null;
@@ -48,7 +47,6 @@ export function PortalLaunchButton({
   onLaunchingChange: (recipeId: string | null) => void;
   onStart: (recipe: PreviewPortalRecipe) => Promise<void>;
   onOpen: (target: PortalTarget) => void;
-  isPhone: boolean;
 }) {
   const portals = launchablePortals(sessionId, status);
   const pending = portals.find((portal) => portal.recipe.id === launching);
@@ -95,14 +93,9 @@ export function PortalLaunchButton({
   }
 
   const busy = launching != null;
-  const icon = busy ? (
-    <Spinner size="md" />
-  ) : (
-    <IconPlayOutline size={isPhone ? 20 : 18} />
-  );
+  const icon = busy ? <Spinner size="md" /> : <IconPlayOutline size={18} />;
   const className = cn(
     "rounded-control text-dim hover:bg-hover hover:text-fg",
-    isPhone && "size-11 min-h-11",
     portals.some((portal) => portal.target) && "text-green",
   );
   const label = busy
