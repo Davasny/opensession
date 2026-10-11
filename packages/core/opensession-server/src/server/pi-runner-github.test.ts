@@ -39,47 +39,36 @@ describe("GitHub publication authority", () => {
         ownerTurn: true,
         ownerLogin: "alex",
         baseBranch: "main",
-        sharedCheckout: false,
       }),
     ).toBeUndefined();
   });
 
-  test("a person's shared-checkout code turn may push without personal GitHub authority", () => {
+  test("a person's code turn may push the base branch and merge without personal GitHub authority", () => {
     const guard = runGithubMergeGuard({
       isCode: true,
       ownerTurn: true,
       ownerLogin: null,
       baseBranch: "main",
-      sharedCheckout: true,
     });
-    expect(guard).toEqual({});
+    expect(guard).toEqual({ allowMerge: true });
     for (const command of [
       "git push origin main",
       "git push origin HEAD:main",
       "git push origin HEAD:refs/heads/main",
+      "gh pr merge 12 --squash",
+      "gh api -X PUT repos/acme/app/pulls/12/merge",
+      `gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'`,
     ]) {
       expect(mergeGuardDenyReason(command, guard!)).toBeUndefined();
     }
-    expect(mergeGuardDenyReason("gh pr merge 12", guard!)).toContain(
-      "cannot merge",
-    );
-    expect(mergeGuardDenyReason("gh pr review 12 --approve", guard!)).toContain(
-      "approving review",
-    );
-  });
-
-  test("an unconnected person's worktree code turn still protects the base branch", () => {
-    const guard = runGithubMergeGuard({
-      isCode: true,
-      ownerTurn: true,
-      ownerLogin: null,
-      baseBranch: "production",
-      sharedCheckout: false,
-    });
-    expect(guard).toEqual({ baseBranch: "production" });
-    expect(
-      mergeGuardDenyReason("git push origin HEAD:production", guard!),
-    ).toContain("protected base branch");
+    for (const command of [
+      "gh pr review 12 --approve",
+      "gh pr merge 12 && gh pr review 13 --approve",
+    ]) {
+      expect(mergeGuardDenyReason(command, guard!)).toContain(
+        "approving review",
+      );
+    }
   });
 
   test.each([
@@ -101,16 +90,18 @@ describe("GitHub publication authority", () => {
         ownerTurn,
         ownerLogin: null,
         baseBranch: "main",
-        sharedCheckout: true,
       });
       expect(guard).toEqual({ baseBranch: "main" });
       expect(
         mergeGuardDenyReason("git push origin HEAD:main", guard!),
       ).toContain("protected base branch");
+      expect(mergeGuardDenyReason("gh pr merge 12", guard!)).toContain(
+        "cannot merge",
+      );
     },
   );
 
-  test("a named owner's continuation retains the shared-checkout workflow", () => {
+  test("a named owner's continuation keeps the owner's workflow", () => {
     const githubUser = githubCredentialUser(AUTO_CONTINUE_USER, "Alex");
     expect(humanPrompter(githubUser)).toBe("Alex");
     expect(
@@ -119,28 +110,21 @@ describe("GitHub publication authority", () => {
         ownerTurn: humanPrompter(githubUser) !== null,
         ownerLogin: null,
         baseBranch: "main",
-        sharedCheckout: true,
       }),
-    ).toEqual({});
+    ).toEqual({ allowMerge: true });
   });
 
-  test("ask, unattended and machine turns keep protection in either checkout mode", () => {
-    for (const sharedCheckout of [true, false]) {
-      for (const input of [
-        { isCode: false, ownerTurn: true, ownerLogin: "alex" },
-        { isCode: false, ownerTurn: true, ownerLogin: null },
-        { isCode: false, ownerTurn: false, ownerLogin: null },
-        { isCode: true, ownerTurn: false, ownerLogin: null },
-        { isCode: true, ownerTurn: false, ownerLogin: "alex" },
-      ]) {
-        expect(
-          runGithubMergeGuard({
-            ...input,
-            sharedCheckout,
-            baseBranch: "production",
-          }),
-        ).toEqual({ baseBranch: "production" });
-      }
+  test("ask, unattended and machine turns keep protection", () => {
+    for (const input of [
+      { isCode: false, ownerTurn: true, ownerLogin: "alex" },
+      { isCode: false, ownerTurn: true, ownerLogin: null },
+      { isCode: false, ownerTurn: false, ownerLogin: null },
+      { isCode: true, ownerTurn: false, ownerLogin: null },
+      { isCode: true, ownerTurn: false, ownerLogin: "alex" },
+    ]) {
+      expect(
+        runGithubMergeGuard({ ...input, baseBranch: "production" }),
+      ).toEqual({ baseBranch: "production" });
     }
   });
 });
@@ -528,7 +512,7 @@ describe("which credential a run's shell holds", () => {
     }
   });
 
-  test("a sandboxed owner turn drops the merge guard only for a projected person token", async () => {
+  test("a sandboxed owner turn drops the approval guard only for a projected person token", async () => {
     const dir = mkdtempSync(join(tmpdir(), "opensession-run-github-"));
     try {
       await seed(dir);
@@ -538,7 +522,6 @@ describe("which credential a run's shell holds", () => {
           ownerTurn,
           ownerLogin: ownerTurn ? githubRunOwnerLogin("Alice") : null,
           baseBranch: "main",
-          sharedCheckout: false,
         });
       const auth = join(dir, "github-auth.json");
       process.env[GITHUB_RUN_AUTH_FILE_ENV] = auth;
@@ -551,10 +534,10 @@ describe("which credential a run's shell holds", () => {
       expect(guard(true)).toBeUndefined();
       // A machine sender's turn in that sandbox keeps the guard regardless.
       expect(guard(false)).toEqual({ baseBranch: "main" });
-      // An App projection has no login: guarded, even with a readable store
-      // that says Alice is connected.
+      // An App projection has no login: the approval guard stays, even with
+      // a readable store that says Alice is connected.
       writeFileSync(auth, JSON.stringify({ GH_TOKEN: "projected-token" }));
-      expect(guard(true)).toEqual({ baseBranch: "main" });
+      expect(guard(true)).toEqual({ allowMerge: true });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

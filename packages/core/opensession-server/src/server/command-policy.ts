@@ -220,6 +220,8 @@ function escapeRegExp(value: string): string {
 export interface MergeGuard {
   /** The protected base branch for a run without personal code authority. */
   baseBranch?: string;
+  /** A person started the run and may have it merge pull requests. */
+  allowMerge?: boolean;
 }
 
 const MERGE_REFUSAL =
@@ -238,7 +240,7 @@ export function mergeGuardDenyReason(
   command: string,
   guard: MergeGuard,
 ): string | undefined {
-  const mergeRefusal = MERGE_REFUSAL;
+  const mergeRefusal = guard.allowMerge ? undefined : MERGE_REFUSAL;
   const baseRefusal = `agent runs cannot update the protected base branch ${guard.baseBranch}; push a feature branch and open a pull request`;
   const scan = scannableCommand(command);
   for (const words of scanShell(scan).commands) {
@@ -254,13 +256,16 @@ export function mergeGuardDenyReason(
     const rest = words.slice(ghIndex + 1);
     const has = (word: string) => rest.includes(word);
     const some = (re: RegExp) => rest.some((word) => re.test(word));
-    if (has("pr") && has("merge")) return mergeRefusal;
+    if (mergeRefusal && has("pr") && has("merge")) return mergeRefusal;
     if (has("pr") && has("review") && (has("--approve") || has("-a")))
       return APPROVE_REFUSAL;
     if (has("api")) {
       if (
-        some(/\/pulls\/\d+\/merge$/) ||
-        some(/mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest/)
+        mergeRefusal &&
+        (some(/\/pulls\/\d+\/merge$/) ||
+          some(
+            /mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest/,
+          ))
       )
         return mergeRefusal;
       if (
@@ -280,14 +285,15 @@ export function mergeGuardDenyReason(
     ).test(scan)
   )
     return baseRefusal;
-  if (/\bgh\s+pr\s+merge\b/.test(scan)) return mergeRefusal;
+  if (mergeRefusal && /\bgh\s+pr\s+merge\b/.test(scan)) return mergeRefusal;
   if (/\bgh\s+pr\s+review\b[^\n]*\s(?:--approve|-a)(?:\s|$)/.test(scan))
     return APPROVE_REFUSAL;
-  if (/\/pulls\/\d+\/merge\b/.test(scan)) return mergeRefusal;
+  if (mergeRefusal && /\/pulls\/\d+\/merge\b/.test(scan)) return mergeRefusal;
   // A GraphQL mutation travels as a quoted literal, which the scanner treats
   // as inert data; read the raw command for the mutation names.
   if (/\bgh\b[^\n]*\bapi\b/.test(scan)) {
     if (
+      mergeRefusal &&
       /mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest/.test(
         command,
       )
