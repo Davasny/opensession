@@ -291,7 +291,7 @@ extension TextContextMenu {
             items: [
                 TextContextMenuItem(
                     id: "os1-quote-selection",
-                    title: "Chat with selected text"
+                    title: "Add to chat"
                 ),
                 TextContextMenuItem(
                     id: "os1-comment-selection",

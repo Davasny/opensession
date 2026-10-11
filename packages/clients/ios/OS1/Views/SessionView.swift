@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 #else
@@ -3385,6 +3386,7 @@ private struct SessionInputBar: View {
     var accounts: [PooledAccount] = []
     /// The composer's voice call about this thread, made on first use.
     @State private var call: DeskVoiceEngine?
+    @State private var browsingFiles = false
     /// Tasks the call sent the agent and the run they started, so the call
     /// can explain the reply once that run ends (as the web call does).
     @State private var callTasks: [String] = []
@@ -3536,6 +3538,16 @@ private struct SessionInputBar: View {
                             comment: text
                         )
                     }
+                )
+            }
+
+            if !viewModel.attachedFiles.isEmpty {
+                AttachedFilesRow(
+                    files: viewModel.attachedFiles,
+                    staging: viewModel.stagingFileIDs,
+                    failed: viewModel.failedFileIDs,
+                    onRetry: { file in Task { await viewModel.stage(file) } },
+                    onRemove: { viewModel.removeFile($0) }
                 )
             }
 
@@ -3729,6 +3741,25 @@ private struct SessionInputBar: View {
         }
         .onChange(of: viewModel.isRunning) { _, running in
             narrateCallReplyIfDone(running: running)
+        }
+        .fileImporter(
+            isPresented: $browsingFiles,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            guard case .success(let urls) = result else { return }
+            var files: [AttachedFile] = []
+            for url in urls {
+                switch try? ImportedComposerAttachment.load(from: url) {
+                case .image(let image):
+                    if viewModel.attachedImages.count < 6 { viewModel.attachedImages.append(image) }
+                case .file(let file):
+                    files.append(file)
+                case nil:
+                    viewModel.reportAttachmentFailure(url.lastPathComponent)
+                }
+            }
+            if !files.isEmpty { viewModel.attachFiles(files) }
         }
         .fullScreenCoverCompat(isPresented: Binding(
             get: { call?.callPresented ?? false },
@@ -4210,6 +4241,7 @@ private struct SessionInputBar: View {
         // written. Focus or a draft opens the toolbar with the model pill.
         !draftWrapped && !inputFocused && viewModel.draft.isEmpty
             && (noteMode || viewModel.attachedImages.isEmpty)
+            && viewModel.attachedFiles.isEmpty
         #else
         false
         #endif
@@ -4471,6 +4503,8 @@ private struct SessionInputBar: View {
             // pre-rename source value older servers still send.
             onSetGoal: isNativeSession ? { sheet = .goal } : nil,
             onReferenceFile: { sheet = .reference },
+            // Any file, as the web's "+" takes one; notes accept images only.
+            onBrowseFiles: noteMode || forkState.point != nil ? nil : { browsingFiles = true },
             hasDraft: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             // Scheduling is a server-side hold on a native session's own queue;
             // an agent-owned session has no such queue to put it on.

@@ -158,28 +158,6 @@ enum OS1API {
         return try await get("/api/sessions/\(encoded)")
     }
 
-    /// The fully resolved configuration the session's next turn would use.
-    /// This is fetched only when Workspace Info opens: resolving it peeks at
-    /// account availability and applies the live MCP and permission gates.
-    static func effectiveConfig(sessionId: String) async throws -> SessionEffectiveConfig {
-        try await get(effectiveConfigPath(
-            sessionId: sessionId,
-            user: ServerConfig.shared.userName
-        ))
-    }
-
-    nonisolated static func effectiveConfigPath(sessionId: String, user: String) -> String {
-        let session = sessionId.addingPercentEncoding(
-            withAllowedCharacters: .urlPathAllowed
-        ) ?? sessionId
-        guard !user.isEmpty else { return "/api/sessions/\(session)/effective-config" }
-        let allowed = CharacterSet.urlQueryAllowed.subtracting(
-            CharacterSet(charactersIn: "&+")
-        )
-        let encodedUser = user.addingPercentEncoding(withAllowedCharacters: allowed) ?? user
-        return "/api/sessions/\(session)/effective-config?user=\(encodedUser)"
-    }
-
     /// One SHA named in transcript prose. The repo is a hint: the server
     /// searches it first, then returns the repository that actually owns the
     /// commit so cross-repo references still reach the right GitHub page.
@@ -2284,9 +2262,11 @@ enum OS1API {
         effort: String?,
         fastMode: Bool?,
         speed: String?,
+        files: [[String: String]] = [],
         clientId: String
     ) -> [String: Any] {
         var body: [String: Any] = ["content": content, "clientId": clientId]
+        if !files.isEmpty { body["files"] = files }
         if busyMode == "queue" || busyMode == "steer" { body["busy"] = busyMode }
         if !user.isEmpty { body["user"] = user }
         if !images.isEmpty { body["images"] = images }
@@ -2305,6 +2285,7 @@ enum OS1API {
         effort: String? = nil,
         fastMode: Bool? = nil,
         speed: String? = nil,
+        files: [[String: String]] = [],
         clientId: String
     ) async -> PromptDelivery {
         struct DeliverResponse: Decodable, Sendable {
@@ -2331,7 +2312,7 @@ enum OS1API {
         }
         let body = deliverPromptBody(
             content: content, images: normalizedImages, user: user, busyMode: busyMode,
-            effort: effort, fastMode: fastMode, speed: speed, clientId: clientId
+            effort: effort, fastMode: fastMode, speed: speed, files: files, clientId: clientId
         )
 
         var request = config.authorizedRequest(url)
@@ -2421,6 +2402,11 @@ enum OS1API {
             body: ["model": model, "prompt": String(prompt.prefix(4_000))]
         )
         return answer.text
+    }
+
+    /// One MetricKit crash or hang report (see `CrashReporter`).
+    static func sendClientDiagnostic(_ body: [String: Any]) async throws {
+        _ = try await mutateData("/api/client-diagnostics", method: "POST", body: body)
     }
 
     /// Run one Realtime tool call server-side, as the verified user, and hand

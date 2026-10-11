@@ -33,6 +33,7 @@ struct OS1App: App {
         URLCache.shared.diskCapacity = 64 * 1024 * 1024
         NativeNotifications.retireLegacyPreferences()
         NotificationTapRouter.install()
+        CrashReporter.shared.install()
     }
 
     var body: some Scene {
@@ -156,6 +157,8 @@ private struct RootSceneLifecycle: View {
     }
 
     private func hydrate() async {
+        // Reports from a launch that had no server yet go up once there is one.
+        await CrashReporter.shared.flush()
         await NativePreferences.hydrate()
         await HideStore.shared.hydrate()
         await RowColorStore.shared.hydrate()

@@ -151,6 +151,11 @@ final class SessionViewModel {
     let quickReplies = QuickReplyRelay()
     /// Images staged in the composer, sent (as data URLs) with the next prompt.
     var attachedImages: [AttachedImage] = []
+    /// Non-image files for the next message, uploaded as soon as they are
+    /// picked so the send carries only their staged paths.
+    var attachedFiles: [AttachedFile] = []
+    private(set) var stagingFileIDs: Set<String> = []
+    private(set) var failedFileIDs: Set<String> = []
     /// Transcript text attached to the next message. The controller also owns
     /// the retained TextKit highlight after the composer takes focus.
     let quoteSelection = TranscriptQuoteSelection()
@@ -1350,7 +1355,41 @@ final class SessionViewModel {
     var canSend: Bool {
         guard safety == nil else { return false }
         let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return hasText || !attachedImages.isEmpty
+        // Never send ahead of a file still uploading: the bubble would
+        // promise an attachment the agent doesn't get.
+        guard attachedFiles.allSatisfy(\.isStaged) else { return false }
+        return hasText || !attachedImages.isEmpty || !attachedFiles.isEmpty
+    }
+
+    func attachFiles(_ files: [AttachedFile]) {
+        attachedFiles.append(contentsOf: files)
+        for file in files { Task { await stage(file) } }
+    }
+
+    func stage(_ file: AttachedFile) async {
+        guard !file.isStaged, !stagingFileIDs.contains(file.id) else { return }
+        stagingFileIDs.insert(file.id)
+        failedFileIDs.remove(file.id)
+        defer { stagingFileIDs.remove(file.id) }
+        do {
+            let staged = try await OS1API.uploadComposerFile(file)
+            guard let index = attachedFiles.firstIndex(where: { $0.id == file.id }) else { return }
+            attachedFiles[index] = staged
+        } catch {
+            guard attachedFiles.contains(where: { $0.id == file.id }) else { return }
+            failedFileIDs.insert(file.id)
+            notice = "Couldn't attach \(file.name): \(error.localizedDescription)"
+        }
+    }
+
+    func reportAttachmentFailure(_ name: String) {
+        notice = "Couldn't attach \(name)."
+    }
+
+    func removeFile(_ file: AttachedFile) {
+        attachedFiles.removeAll { $0.id == file.id }
+        stagingFileIDs.remove(file.id)
+        failedFileIDs.remove(file.id)
     }
 
     enum FailureContinuationStatus: Equatable {
@@ -1404,7 +1443,9 @@ final class SessionViewModel {
     func sendDraft(busyModeOverride: String? = nil) {
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = attachedImages.map(\.dataURL)
-        guard !typed.isEmpty || !images.isEmpty else { return }
+        let files = attachedFiles.compactMap(\.wireValue)
+        guard attachedFiles.count == files.count else { return }
+        guard !typed.isEmpty || !images.isEmpty || !files.isEmpty else { return }
         let text = quoteSelection.message(with: typed)
         let busyMode = busyModeOverride
             ?? UserDefaults.standard.string(forKey: "os1.composer.busySend")
@@ -1416,6 +1457,7 @@ final class SessionViewModel {
             effort: effort.isEmpty ? nil : effort,
             fastMode: speedSetting.wireFastMode,
             speed: speedSetting.wireSpeed,
+            files: files,
             busyMode: busyMode,
             user: ServerConfig.shared.userName
         ) else {
@@ -1434,6 +1476,7 @@ final class SessionViewModel {
         replySuggestions = []
         draft = ""
         attachedImages = []
+        attachedFiles = []
         quoteSelection.clear()
         sendSeq += 1
     }

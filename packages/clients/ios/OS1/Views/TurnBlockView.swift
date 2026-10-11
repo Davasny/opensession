@@ -724,6 +724,8 @@ struct TurnFooterView: View {
     let footer: TurnFooter
     /// Whose scratch folder the asset chips open into.
     let sessionId: String
+    /// "Duplicate from here", as on the web footer's ⋯.
+    var onFork: (() -> Void)? = nil
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -789,6 +791,12 @@ struct TurnFooterView: View {
                 .accessibilityLabel(copied ? "Copied" : "Copy message")
             }
             Menu {
+                if let onFork {
+                    Button(action: onFork) {
+                        Label("Duplicate from here", systemImage: "doc.on.doc")
+                    }
+                    Divider()
+                }
                 if let timestamp = footer.timestamp {
                     Label(
                         timestamp.formatted(date: .abbreviated, time: .shortened),

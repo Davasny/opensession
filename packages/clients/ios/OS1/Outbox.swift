@@ -47,6 +47,9 @@ final class Outbox {
         /// that predate it; those replay `fastMode` alone, which the server
         /// reads without downgrading a stored Ultrafast.
         var speed: String? = nil
+        /// Staged non-image files (`{name, type, path}` from `/api/upload`).
+        /// Nil on items queued by builds that predate file attachments.
+        var files: [[String: String]]? = nil
         /// "queue" | "steer" — what to do if a run is in flight on arrival.
         let busyMode: String
         /// Optional origin for a non-composer action. Failure continuations
@@ -109,6 +112,7 @@ final class Outbox {
             effort: item.effort,
             fastMode: item.fastMode,
             speed: item.speed,
+            files: item.files ?? [],
             clientId: item.id
         )
     }
@@ -143,6 +147,7 @@ final class Outbox {
         effort: String? = nil,
         fastMode: Bool? = nil,
         speed: String? = nil,
+        files stagedFiles: [[String: String]] = [],
         busyMode: String,
         purpose: String? = nil,
         user: String
@@ -161,6 +166,7 @@ final class Outbox {
             effort: effort,
             fastMode: fastMode,
             speed: speed,
+            files: stagedFiles.isEmpty ? nil : stagedFiles,
             busyMode: busyMode,
             purpose: purpose,
             user: user,

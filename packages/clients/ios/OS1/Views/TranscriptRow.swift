@@ -147,7 +147,14 @@ struct TranscriptRow: View {
                 expansionState: expansionState
             )
         case .footer(let footer):
-            TurnFooterView(footer: footer, sessionId: sessionId)
+            TurnFooterView(
+                footer: footer,
+                sessionId: sessionId,
+                // Forking reads only the message id.
+                onFork: onForkMessage.map { fork in
+                    { fork(TranscriptEntry(id: footer.entryId, type: "assistant", content: footer.text)) }
+                }
+            )
         case .walkthrough(let walkthrough):
             // Folded unless the reader opens it: a walkthrough is a screenful
             // of video and a screenful per before/after pair, and it sits in
@@ -253,9 +260,13 @@ struct UserBubble: View {
                     sessionId: sessionId,
                     alignment: .trailing
                 )
-                if !entry.text.isEmpty {
+                // Trailing blank lines (a send with attachments often ends
+                // in "\n\n") would draw as empty rows inside the bubble; the
+                // web trims them the same way.
+                let bubbleText = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !bubbleText.isEmpty {
                     let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    Text(entry.text)
+                    Text(bubbleText)
                         .font(.body)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
@@ -307,7 +318,7 @@ struct UserBubble: View {
                 if let pastedTexts = entry.pastedTexts, !pastedTexts.isEmpty {
                     PastedTextCards(texts: pastedTexts)
                 }
-                if outboxItem == nil, !entry.text.isEmpty {
+                if outboxItem == nil, !bubbleText.isEmpty {
                     // The web's quiet row under your own bubble: copy, and
                     // edit-and-send-again. A touch screen has no hover to
                     // reveal them, so they stay on the page.
@@ -432,6 +443,8 @@ struct ReasoningSummaryRow: View {
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
+        #if os(macOS)
+        // On iOS the long press selects text instead (see AssistantMessage).
         .contextMenu {
             Button {
                 copyToPasteboard(entry.text)
@@ -440,6 +453,7 @@ struct ReasoningSummaryRow: View {
             }
             TimestampLabel(date: entry.timestampDate)
         }
+        #endif
         .accessibilityLabel(isActive ? "Active reasoning" : "Reasoning summary")
         .accessibilityValue(entry.text)
     }
@@ -548,6 +562,10 @@ struct AssistantMessage: View {
         }
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
+        #if os(macOS)
+        // iOS leaves the long press to the text itself, so a press-and-drag
+        // selects part of the answer (with Add to chat / Comment), as on the
+        // web. The same actions ride the turn footer's copy and ⋯ there.
         .contextMenu {
             Button {
                 copyToPasteboard(fullText ?? entry.text)
@@ -569,6 +587,7 @@ struct AssistantMessage: View {
                 )
             }
         }
+        #endif
     }
 
     @ViewBuilder

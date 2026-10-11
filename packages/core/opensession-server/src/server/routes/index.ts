@@ -24,6 +24,7 @@ import { handleSessionAssetsRoutes } from "./session-assets";
 import { handleCommentThreadRoutes } from "./comment-threads";
 import { handleSessionContextRoutes } from "./session-context";
 import { handleSessionVoiceRoutes } from "./session-voice";
+import { handleClientDiagnosticsRoutes } from "./client-diagnostics";
 import { handleComposerAutocompleteRoutes } from "./composer-autocomplete";
 import { handleEffectiveConfigRoutes } from "./effective-config";
 import { handleMentionsRoutes } from "./mentions";
@@ -135,6 +136,7 @@ export const routeHandlers: RouteHandler[] = [
   handleLibraryRoutes,
   handleTodosRoutes,
   handleDeskVoiceRoutes,
+  handleClientDiagnosticsRoutes,
   handleDeskNavigationRoutes,
   handleWorkflowsRoutes,
   handleReportsRoutes,
