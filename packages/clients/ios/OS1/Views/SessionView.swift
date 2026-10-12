@@ -3448,6 +3448,7 @@ private struct SessionInputBar: View {
     /// Escape dismissed suggestions for this draft; asks again once it changes.
     @State private var completionDismissedFor: String?
     @State private var ghostHeight: CGFloat = 0
+    @State private var predictionHeight: CGFloat = 0
     @State private var fieldHeight: CGFloat = 0
     @State private var ghostRects = ComposerGhostRects()
     /// Matches the transcript column cap so the bar centers with it.
@@ -4430,6 +4431,27 @@ private struct SessionInputBar: View {
                 // Autocomplete: the rest of the message, faint, after the
                 // caret. The draft is drawn clear in the same font so the
                 // suggestion starts exactly where the typed text ends.
+                // The predicted reply, drawn here rather than as the prompt: a
+                // prompt runs to the field's ten-line limit, so a long guess
+                // grew an empty composer to most of the screen. Cut at two
+                // lines on a phone and three on the Mac; taking it types in
+                // the whole message (web: the prediction overlay in Composer).
+                .overlay(alignment: .topLeading) {
+                    if let shownPrediction {
+                        Text(shownPrediction)
+                            .foregroundColor(OS1VisualStyle.textFaint)
+                            .lineLimit(Self.predictionLineLimit)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                predictionHeight = $0
+                            }
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .accessibilityHint(shownPrediction.map { "Suggested reply: \($0)" } ?? "")
                 .overlay(alignment: .topLeading) {
                     if let ghost {
                         (Text(projectedDraft.wrappedValue).foregroundColor(.clear)
@@ -4514,7 +4536,11 @@ private struct SessionInputBar: View {
                 // between them instead of hugging the bottom alignment.
                 .frame(
                     maxWidth: .infinity,
-                    minHeight: isSingleRow ? 44 : (ghost != nil ? ghostHeight : nil),
+                    minHeight: isSingleRow
+                        ? 44
+                        : (ghost != nil
+                            ? ghostHeight
+                            : (shownPrediction != nil ? predictionHeight : nil)),
                     alignment: isSingleRow ? .center : .topLeading
                 )
                 // The field's text view ends at its own last line; this gives
@@ -4753,7 +4779,8 @@ private struct SessionInputBar: View {
             return noteMode ? "Team note" : "Ask \(shortModelName)"
         }
         #endif
-        if let shownPrediction { return shownPrediction }
+        // The prediction paints in its own overlay, cut to a few lines.
+        if shownPrediction != nil { return "" }
         if noteMode { return "Only your team will see this" }
         if viewModel.safety != nil { return "Paused for safety" }
         if viewModel.quoteSelection.text != nil { return "Chat with selected text" }
@@ -4801,6 +4828,12 @@ private struct SessionInputBar: View {
         else { return nil }
         return prediction
     }
+
+    #if os(iOS)
+    private static let predictionLineLimit = 2
+    #else
+    private static let predictionLineLimit = 3
+    #endif
 
     private var autocompleteLive: Bool {
         autocompleteOn && autocompleteAvailable && inputFocused && !noteMode

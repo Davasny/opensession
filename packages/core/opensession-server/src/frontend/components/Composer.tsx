@@ -545,6 +545,7 @@ export function Composer({
   });
   const ghost = autocomplete.ghost;
   const ghostRef = useRef<HTMLDivElement>(null);
+  const predictionRef = useRef<HTMLDivElement>(null);
   const ghostTextRef = useRef<HTMLSpanElement>(null);
   const lastTap = useRef<TapPoint | null>(null);
   // Types a prediction or a completion in at the end of the draft. It never
@@ -1040,12 +1041,14 @@ export function Composer({
     const release = appliedHeight.current ? holdParentHeight(el) : null;
     if (appliedHeight.current) el.style.height = "";
     // min-/max-height clamp this, so tall drafts scroll internally at the cap.
-    // A predicted message is measured too: it is the placeholder, and a long
-    // one would otherwise clip behind a scrollbar in a one-row field.
-    // So is a completion: the field grows to show it rather than clip it.
+    // A predicted message is measured from its own overlay, which stops at
+    // a few lines: a guess is a glance, not a paragraph, and the full text
+    // arrives when it is taken. A completion is measured too: the field grows
+    // to show it rather than clip it.
     const measured = Math.max(
       el.scrollHeight,
       ghost ? (ghostRef.current?.scrollHeight ?? 0) : 0,
+      shownPrediction ? (predictionRef.current?.offsetHeight ?? 0) : 0,
     );
     const height = displayText || shownPrediction ? `${measured}px` : "";
     if (height) el.style.height = height;
@@ -1714,6 +1717,25 @@ export function Composer({
               </span>
             </div>
           )}
+          {shownPrediction && (
+            // The predicted message, drawn here rather than as the field's
+            // placeholder: a placeholder cannot be cut short, so a long guess
+            // grew the field to its full height (up to nine rows on a phone)
+            // before you had typed anything. Two lines on a phone and three
+            // on desktop say what the guess is; taking it types it all in.
+            <div
+              ref={predictionRef}
+              className={cn(
+                composerTextarea,
+                composerTextareaPadding,
+                "pointer-events-none absolute inset-x-0 top-0 z-0 break-words text-faint select-none",
+                "line-clamp-3 phone:line-clamp-2",
+              )}
+              aria-hidden="true"
+            >
+              {shownPrediction}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             {...mentionInputProps}
@@ -1735,8 +1757,6 @@ export function Composer({
               noteMode
                 ? "placeholder:text-[color-mix(in_srgb,var(--text-faint)_84%,var(--yellow))]"
                 : "placeholder:text-faint",
-              // Room for the key cap that takes the prediction.
-              shownPrediction && (isPhone ? "pr-24" : "pr-14"),
               // With the mirror painting the styled draft, the field's own
               // glyphs go transparent and only the caret stays visible.
               hlActive
@@ -1755,8 +1775,13 @@ export function Composer({
                   ? `Ask ${shortModelLabel(effectiveModel, models)}`
                   : quote
                     ? "Chat with selected text"
-                    : (shownPrediction ?? placeholder)
+                    : shownPrediction
+                      ? ""
+                      : placeholder
             }
+            // The prediction paints in its own overlay, so name it here for
+            // a screen reader, which would otherwise hear an empty field.
+            aria-placeholder={shownPrediction ?? undefined}
             value={fieldText}
             onBeforeInput={sessionNames.handleBeforeInput}
             onChange={(e) => {
@@ -1812,14 +1837,6 @@ export function Composer({
             {...noAutofill}
             autoFocus={autoFocus}
           />
-          {shownPrediction && (
-            <kbd
-              className="pointer-events-none absolute top-1/2 right-3 z-[2] inline-flex h-5 -translate-y-1/2 items-center rounded-sm border border-line px-1.5 text-meta font-medium text-faint [font-family:inherit]"
-              aria-hidden="true"
-            >
-              {isPhone ? "Double tap" : "Tab"}
-            </kbd>
-          )}
           {/* What a press on a pill gets instead of the reference vanishing.
               Two rows, because removing it is only one of the two things a
               press can reasonably mean and it was the only one on offer.
@@ -1919,7 +1936,33 @@ export function Composer({
           {/* `grow basis-0 shrink-0` rather than `flex-1`: every direct child of
               the toolbar is pinned at flex-shrink 0 so the model pill is the
               only thing that gives way, and a shorthand would take that back. */}
-          {!minimized && <div className="shrink-0 grow basis-0" />}
+          {/* The key that takes the prediction waits in the spare width
+              here rather than at the field's right edge, where the room it
+              kept clear wrapped the guess onto extra lines. It takes only
+              width nobody else wants: where the row has too little left, it
+              hides rather than squeezing the model pill or clipping a word.
+              On a phone it is a gesture, not a key, so it drops the key cap
+              and with it the width a crowded phone row cannot spare. */}
+          {!minimized && (
+            <div className="@container flex min-w-0 shrink-0 grow basis-0 items-center justify-end">
+              {shownPrediction &&
+                (isPhone ? (
+                  <span
+                    className="pointer-events-none text-meta font-medium whitespace-nowrap text-faint @max-[68px]:hidden"
+                    aria-hidden="true"
+                  >
+                    Double tap
+                  </span>
+                ) : (
+                  <kbd
+                    className="pointer-events-none mr-1 inline-flex h-5 items-center rounded-sm border border-line px-1.5 text-meta font-medium text-faint [font-family:inherit] @max-[40px]:hidden"
+                    aria-hidden="true"
+                  >
+                    Tab
+                  </kbd>
+                ))}
+            </div>
+          )}
 
           {/* Model + effort live together on the right edge (ChatGPT-style):
               one pill, effort levels up top, the model behind a submenu.
