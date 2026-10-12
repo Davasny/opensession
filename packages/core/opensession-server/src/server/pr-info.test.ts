@@ -6,6 +6,7 @@ import {
   knownPrNumberForBranch,
   latestWorkflowChecks,
   notePrNumberForBranch,
+  parsePrFileLines,
   prApiErrorMessage,
   reconcilePrDetails,
   type PrDetails,
@@ -238,5 +239,18 @@ describe("durable PR detail restart grace", () => {
     const { shouldRefreshPrDetails } = await import("./pr-info");
     const now = 1_000_000;
     expect(shouldRefreshPrDetails(now - 60_000, now, 0)).toBe(false);
+  });
+});
+
+describe("parsePrFileLines", () => {
+  test("reads one file per line from paginated REST output", () => {
+    expect(
+      parsePrFileLines(
+        '{"path":"a.rs","additions":3,"deletions":1}\n\n{"path":"b/c.rs","additions":0,"deletions":9}\n',
+      ),
+    ).toEqual([
+      { path: "a.rs", additions: 3, deletions: 1 },
+      { path: "b/c.rs", additions: 0, deletions: 9 },
+    ]);
   });
 });

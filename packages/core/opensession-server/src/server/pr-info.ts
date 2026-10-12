@@ -380,6 +380,47 @@ function previewDefaultPath(): string | undefined {
   return path === "/" ? undefined : path;
 }
 
+/** `gh pr view --json files` reads GraphQL's first page only: 100 files. */
+const GRAPHQL_PR_FILES_PAGE = 100;
+
+/** Parses `gh api --paginate .../files --jq '.[] | {...}'` output: one JSON
+ *  object per line, REST's `filename` already renamed to `path`. */
+export function parsePrFileLines(
+  text: string,
+): Array<{ path?: string; additions?: number; deletions?: number }> {
+  return text
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+}
+
+/** The full changed-file list when GraphQL truncated it. The paginated REST
+ *  endpoint lists up to 3000 files; any failure keeps the partial list. */
+async function completePrFiles(
+  repo: string,
+  number: number,
+  changedFiles: number,
+  files: Array<{ path?: string; additions?: number; deletions?: number }>,
+  env: Record<string, string | undefined>,
+): Promise<Array<{ path?: string; additions?: number; deletions?: number }>> {
+  if (files.length < GRAPHQL_PR_FILES_PAGE || files.length >= changedFiles)
+    return files;
+  try {
+    const out =
+      await $`gh api --paginate ${`repos/${repo}/pulls/${number}/files?per_page=100`} --jq ${".[] | {path: .filename, additions, deletions}"}`
+        .env(env)
+        .quiet()
+        .text();
+    const all = parsePrFileLines(out);
+    return all.length > files.length ? all : files;
+  } catch (e: any) {
+    console.warn(
+      `[pr-info] full file list for PR #${number} (${repo}) failed: ${String(e?.stderr || e?.message || e).slice(0, 300)}`,
+    );
+    return files;
+  }
+}
+
 /** Changed files, biggest churn first, so the panel leads with the meat. */
 function buildFiles(
   files:
@@ -1685,7 +1726,15 @@ async function fetchPrDetails(
           commit.author?.name ||
           "Unknown",
       })),
-      files: buildFiles(pr.files),
+      files: buildFiles(
+        await completePrFiles(
+          repo,
+          pr.number,
+          Number(pr.changedFiles) || 0,
+          pr.files || [],
+          env,
+        ),
+      ),
       reviewers: buildReviewers(pr.latestReviews, pr.reviewRequests),
       mergeable: pr.mergeable || "UNKNOWN",
       mergeStateStatus: pr.mergeStateStatus || "",
