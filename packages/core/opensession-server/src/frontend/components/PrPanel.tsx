@@ -1973,7 +1973,7 @@ export function PrPanel({
           aria-label="Review actions"
           className="flex shrink-0 items-center gap-2 bg-surface px-3 pt-2 pb-[max(8px,env(safe-area-inset-bottom))]"
         >
-          {phoneMergeAction}
+          {/* Merge and Ready for review live in the overview's status card. */}
           <Button
             variant="soft"
             className="min-h-11 flex-1"

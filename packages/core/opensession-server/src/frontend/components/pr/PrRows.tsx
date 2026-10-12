@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { avatarUrl, type Provider } from "../../lib/provider";
 import { reviewerVerdict } from "../../lib/review-lines";
 import type { PrFile, PrReviewer } from "../../lib/types";
@@ -11,6 +12,8 @@ export function ReviewerRow({
   provider: Provider;
 }) {
   const src = reviewer.isTeam ? null : avatarUrl(reviewer.login, provider, 40);
+  // Offline or rate-limited avatars fall back to the initial, not a broken image.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const meta = reviewerStateMeta(reviewer.state);
   const toneClass =
     meta.tone === "green"
@@ -22,12 +25,13 @@ export function ReviewerRow({
           : "text-faint";
   return (
     <div className="flex items-center gap-3 rounded-row border border-transparent px-1.5 py-1.5 hover:border-line hover:bg-hover/50">
-      {src ? (
+      {src && failedSrc !== src ? (
         <img
           className="size-7 rounded-full object-cover"
           src={src}
           alt=""
           loading="lazy"
+          onError={() => setFailedSrc(src)}
         />
       ) : (
         <span

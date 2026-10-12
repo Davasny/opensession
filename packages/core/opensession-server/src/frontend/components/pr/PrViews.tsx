@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/cn";
+import { relativeTime } from "../../lib/api/request";
 import { renderPrCommentMarkdown } from "../../lib/markdown";
 import { formatPrCommentPrompt, stripHtmlComments } from "../../lib/pr-prompts";
 import { avatarUrl, type Provider } from "../../lib/provider";
@@ -69,8 +70,13 @@ function PrDescriptionCard({
       </div>
     );
   return (
-    <article className="min-w-0 rounded-xl border border-line/60 bg-surface smooth-shadow-sm phone:border-0 phone:bg-panel phone:shadow-none">
-      <div className="flex items-center gap-2 border-b border-divider px-4 py-3">
+    <article className="min-w-0 rounded-xl border border-line/60 bg-surface smooth-shadow-sm phone:rounded-none phone:border-0 phone:bg-transparent phone:shadow-none">
+      {/* Phone: the identity block above already names the author, so the
+          description reads as a section of the page, not a comment card. */}
+      <h2 className="m-0 hidden px-1 text-body font-semibold text-fg phone:block">
+        Description
+      </h2>
+      <div className="flex items-center gap-2 border-b border-divider px-4 py-3 phone:hidden">
         <PrAvatar login={author} provider={provider} />
         <div>
           <div className="text-xs font-semibold text-fg">{author}</div>
@@ -86,12 +92,12 @@ function PrDescriptionCard({
       >
         <div
           ref={bodyRef}
-          className="markdown px-4 py-4 text-body leading-relaxed text-dim"
+          className="markdown px-4 py-4 text-body leading-relaxed text-dim phone:px-1 phone:pb-2 phone:pt-2 phone:text-fg"
           dangerouslySetInnerHTML={{ __html: descriptionHtml }}
         />
       </div>
       {isPhone && overflows && (
-        <div className="px-4 pb-3">
+        <div className="px-4 pb-3 phone:px-0">
           <Button
             variant="ghost"
             className="min-h-11"
@@ -99,7 +105,7 @@ function PrDescriptionCard({
             aria-expanded={expanded}
             onClick={() => setExpanded(!expanded)}
           >
-            {expanded ? "Show less" : "Read more"}
+            {expanded ? "Show less" : "Show more"}
           </Button>
         </div>
       )}
@@ -145,6 +151,14 @@ export function ConversationView({
         provider={provider}
       />
 
+      {comments.length > 0 && (
+        <h2 className="m-0 hidden px-1 pt-2 text-body font-semibold text-fg phone:block">
+          Comments{" "}
+          <span className="font-normal text-faint tabular-nums">
+            {comments.length}
+          </span>
+        </h2>
+      )}
       {comments.length === 0 ? (
         <div className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-xs text-faint">
           No comments yet.
@@ -154,6 +168,9 @@ export function ConversationView({
           const body = stripHtmlComments(comment.body);
           const timestamp = comment.createdAt
             ? new Date(comment.createdAt).toLocaleString()
+            : null;
+          const age = comment.createdAt
+            ? relativeTime(comment.createdAt)
             : null;
           return (
             <article
@@ -172,8 +189,14 @@ export function ConversationView({
                   <div className="text-xs font-semibold text-fg">
                     {comment.author || "Unknown"}
                   </div>
-                  {timestamp && (
-                    <div className="text-meta text-faint">{timestamp}</div>
+                  {age && (
+                    <time
+                      className="block text-meta text-faint"
+                      dateTime={comment.createdAt}
+                      title={timestamp ?? undefined}
+                    >
+                      {age}
+                    </time>
                   )}
                 </div>
                 {onAddToInput && pr && (
