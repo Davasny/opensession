@@ -114,7 +114,12 @@ export function ReviewRail({
   const shownFiles = allFiles ? files : files.slice(0, 8);
 
   return (
-    <aside className={className}>
+    // Phone: one inset card of one-line answers, as the grouped rows of a
+    // native settings list. Each row names its own subject, so the section
+    // titles stay for screen readers only.
+    <aside
+      className={`${className ?? ""} phone:rounded-xl phone:bg-panel phone:px-2 phone:py-1`}
+    >
       <RailSection title="Status">
         <GitStatusRows
           git={git}
@@ -169,7 +174,7 @@ export function ReviewRail({
                 ? "Some checks failed"
                 : checkSummary.pending > 0
                   ? "Checks running"
-                  : "All passed"
+                  : "All checks passed"
             }
             trailing={
               <span className="inline-flex gap-1.5 text-meta tabular-nums">
@@ -338,10 +343,10 @@ function RailSection({
 }) {
   return (
     <section
-      className="scroll-mt-[72px] border-b border-line py-4 first:pt-0 last:border-b-0"
+      className="scroll-mt-[72px] border-b border-line py-4 first:pt-0 last:border-b-0 phone:border-divider phone:py-1 phone:first:pt-1"
       ref={ref}
     >
-      <div className="mb-1.5 flex items-center gap-2 px-1">
+      <div className="mb-1.5 flex items-center gap-2 px-1 phone:sr-only">
         <h3 className="m-0 text-meta font-semibold text-faint">{title}</h3>
         {action}
       </div>
@@ -361,7 +366,7 @@ function RailGroupLabel({ children }: { children: React.ReactNode }) {
 /** Shared shape for the rail's one-line summaries, whether they expand in
  *  place or lead somewhere. */
 const RAIL_ROW =
-  "flex w-full items-center gap-2 rounded-row border-0 bg-transparent px-1.5 py-1.5 text-left text-label text-fg hover:bg-hover";
+  "flex w-full items-center gap-2 rounded-row border-0 bg-transparent px-1.5 py-1.5 text-left text-label text-fg hover:bg-hover phone:min-h-11";
 
 /** A one-line summary that opens its own detail in place. */
 function RollupRow({
