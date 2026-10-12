@@ -10,6 +10,7 @@ import {
   useComputerChord,
   useComputerDriver,
   useComputerSandboxId,
+  reservationAmbiguous,
   useComputerSettings,
   useComputerTerminalArgv,
   websocketUrl,
@@ -220,4 +221,10 @@ describe("use.computer transports", () => {
     expect(argv.at(-1)).toBe("cd '/Users/lume/worktrees/repo x'; exec zsh -il");
     expect(argv.join(" ")).not.toContain("uc_live");
   });
+});
+
+test("overlapping reservations are recognised, not misread as other conflicts", () => {
+  expect(reservationAmbiguous(409, "reservation_id required")).toBe(true);
+  expect(reservationAmbiguous(409, "snapshot_base_unavailable")).toBe(false);
+  expect(reservationAmbiguous(400, "reservation_id required")).toBe(false);
 });

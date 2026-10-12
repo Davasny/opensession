@@ -199,12 +199,26 @@ async function apiError(
     const parsed = JSON.parse(text) as { error?: string };
     if (parsed.error) detail = parsed.error;
   } catch {}
+  const ambiguous = reservationAmbiguous(res.status, detail);
   const error = new Error(
-    `use.computer API ${method} ${path} failed: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`,
+    ambiguous
+      ? AMBIGUOUS_RESERVATION_MESSAGE
+      : `use.computer API ${method} ${path} failed: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`,
   ) as UseComputerApiError;
   error.status = res.status;
   if (res.status === 401) error.code = "CREDENTIAL_REJECTED";
+  if (ambiguous) error.code = "RESERVATION_AMBIGUOUS";
   return error;
+}
+
+/** The service cannot list an account's reservations, so when two overlap
+ *  (a new Mac booked before the old one ends) it refuses to guess and only
+ *  the configured reservation id can pick one. */
+export const AMBIGUOUS_RESERVATION_MESSAGE =
+  "This use.computer account has more than one active Mac reservation, so Open Session must be told which one to use: enter its id under Provider settings on the use.computer sandbox connection.";
+
+export function reservationAmbiguous(status: number, detail: string): boolean {
+  return status === 409 && /reservation_id required/i.test(detail);
 }
 
 function isNotFound(error: unknown): boolean {
