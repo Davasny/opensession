@@ -1517,11 +1517,12 @@ export function SessionViewer({
           panelOpen,
           activePanelOpen,
           summaryVisible,
-          // A full-width browser (staging, Portal, Desktop) leaves no reading
-          // column for the card to stand beside, so it opens only on request
-          // instead of covering the page.
+          // A full-width browser (staging, Portal, Desktop) or an open asset
+          // leaves no reading column for the card to stand beside, so it
+          // opens only on request instead of covering the page.
           summaryHasRoom:
-            summaryHasRoom && !(showStaging || showPortal || showDesktop),
+            summaryHasRoom &&
+            !(showStaging || showPortal || showDesktop || showAssets),
         }}
         menuState={{
           overflowOpen,

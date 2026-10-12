@@ -39,9 +39,13 @@ export function AssetsTree({
       if (p && paths.includes(p)) onSelectRef.current(p);
     },
   });
-  // Same forced dark color-scheme as the docs tree (Notes.tsx) — the tree's
-  // own shadow styles use light-dark() and would otherwise follow the OS.
+  // The tree's shadow styles use light-dark(), so the overrides map it onto
+  // the app's own tokens, the same set Review's file tree wears. Without
+  // them the forced dark scheme painted a black column in the light theme.
   return (
-    <FileTree model={model} className="block h-full [color-scheme:dark]" />
+    <FileTree
+      model={model}
+      className="block h-full [color-scheme:dark] [--trees-accent-override:var(--accent)] [--trees-bg-override:transparent] [--trees-border-color-override:var(--divider)] [--trees-fg-muted-override:var(--text-faint)] [--trees-fg-override:var(--text-dim)] [--trees-focus-ring-color-override:var(--accent)] [--trees-selected-bg-override:var(--selected)] [--trees-selected-fg-override:var(--text)]"
+    />
   );
 }
