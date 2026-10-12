@@ -39,6 +39,15 @@ export function ghostSuffix(
   return full.slice(draft.length);
 }
 
+/**
+ * Worth asking for a completion: the draft has something to finish. A draft
+ * that already ends a sentence gets nothing, since the model can only add a
+ * sentence of its own (server/composer-autocomplete.ts checks this too).
+ */
+export function wantsCompletion(draft: string): boolean {
+  return draft.trim().length >= 2 && !/[.?!\u2026]["')\]]*\s*$/.test(draft);
+}
+
 /** A bare Tab: Shift+Tab and modified Tabs keep their own meaning. */
 export function isBareTab(
   e: Pick<KeyboardEvent, "key" | "shiftKey" | "metaKey" | "ctrlKey" | "altKey">,

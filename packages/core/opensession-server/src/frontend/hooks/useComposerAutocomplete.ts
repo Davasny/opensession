@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   ghostSuffix,
+  wantsCompletion,
   type ComposerSuggestion,
 } from "../lib/composer-prediction";
 import {
@@ -73,7 +74,7 @@ export function useComposerAutocomplete({
 
   useEffect(() => {
     if (!live) return;
-    if (text.trim().length < 2 || dismissedFor.current === text) return;
+    if (!wantsCompletion(text) || dismissedFor.current === text) return;
     // Still typing through the last suggestion: nothing new to ask.
     if (ghostSuffix(text, suggestionRef.current)) return;
     const controller = new AbortController();

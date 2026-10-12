@@ -4,6 +4,7 @@ import {
   ghostSuffix,
   isDoubleTap,
   takesPrediction,
+  wantsCompletion,
 } from "./composer-prediction";
 
 const tab = {
@@ -58,5 +59,14 @@ describe("isDoubleTap", () => {
     expect(isDoubleTap(a, { t: 200, x: 14, y: 12 })).toBe(true);
     expect(isDoubleTap(a, { t: DOUBLE_TAP_MS + 1, x: 10, y: 10 })).toBe(false);
     expect(isDoubleTap(a, { t: 100, x: 200, y: 10 })).toBe(false);
+  });
+});
+
+describe("wantsCompletion", () => {
+  it("skips short drafts and finished sentences", () => {
+    expect(wantsCompletion("a")).toBe(false);
+    expect(wantsCompletion("is it final?")).toBe(false);
+    expect(wantsCompletion("ok. ")).toBe(false);
+    expect(wantsCompletion("fix the bu")).toBe(true);
   });
 });
