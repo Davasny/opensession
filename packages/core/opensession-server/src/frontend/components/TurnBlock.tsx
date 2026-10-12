@@ -18,6 +18,12 @@ import {
   EntryVideos,
 } from "./MessageBubble";
 import { SuggestedTaskCard } from "./SuggestedTaskCard";
+import { HtmlRenderFrame } from "./HtmlRenderFrame";
+import {
+  htmlRenderFromResult,
+  mayBeHtmlRenderTool,
+  type HtmlRenderReference,
+} from "@tellahq/opensession-protocol/html-render";
 import {
   markSuggestedTaskStarted,
   suggestedTaskKey,
@@ -253,6 +259,9 @@ export const TurnBlock = function TurnBlock({
   // the row inside only names the suggestion, the card is the only place to
   // read it and start it, so it never shows twice.
   const suggested = suggestedTurnTasks(items);
+  // Pages the turn rendered with html_render: the answer itself, so like a
+  // suggestion they stay put whether the fold is open or closed.
+  const renders = turnHtmlRenders(items, toolResults);
 
   return (
     <div
@@ -393,6 +402,15 @@ export const TurnBlock = function TurnBlock({
           )}
         </div>
       </Fold>
+
+      {/* Flush with the reply column: a page lines up with the reply text. */}
+      {renders.length > 0 && (
+        <div>
+          {renders.map(({ id, render }) => (
+            <HtmlRenderFrame key={id} render={render} />
+          ))}
+        </div>
+      )}
 
       {/* Explicitly surfaced media survives the work fold. */}
       {(featured.images.length > 0 || featured.videos.length > 0) && (
@@ -880,6 +898,27 @@ function featuredTurnMedia(
     }
   }
   return { images, videos };
+}
+
+/**
+ * The pages a turn showed with `html_render`, in call order. The reference
+ * is in the result, so a call still running shows nothing yet, and a failed
+ * one never does.
+ */
+function turnHtmlRenders(
+  items: TranscriptEntry[],
+  toolResults: Map<string, TranscriptEntry>,
+): Array<{ id: string; render: HtmlRenderReference }> {
+  const out: Array<{ id: string; render: HtmlRenderReference }> = [];
+  for (const entry of items) {
+    if (entry.type !== "tool_use" || !entry.toolUseId) continue;
+    if (!mayBeHtmlRenderTool(entry.toolName || "", entry.toolInput)) continue;
+    const result = toolResults.get(entry.toolUseId);
+    if (!result || result.isError) continue;
+    const render = htmlRenderFromResult(result.content);
+    if (render) out.push({ id: entry.id, render });
+  }
+  return out;
 }
 
 /**

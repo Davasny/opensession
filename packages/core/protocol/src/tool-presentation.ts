@@ -635,6 +635,25 @@ export function toolDetail(toolName: string, input: unknown): ToolDetail {
       // path is the part worth reading, and the part a client can open.
       const asset = assetToolPath(toolName, inp);
       if (asset) return { kind: "text", text: asset };
+      // An HTML page carries its whole document in `html`; the row names the
+      // page (a render) or the check (a preview) instead.
+      const html = parseMcpTool(toolName);
+      if (html?.server === "opensession-html") {
+        if (html.tool === "html_render") {
+          const title = toolInputString(inp, "title");
+          if (title) return { kind: "text", text: title };
+        } else if (html.tool === "html_preview") {
+          const width = typeof inp.width === "number" ? inp.width : 744;
+          const text = [
+            inp.mode === "artifact" ? "artifact" : "page",
+            `${width}px`,
+            typeof inp.appearance === "string" ? inp.appearance : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return { kind: "text", text };
+        }
+      }
       // MCP and other tools: a compact "key: value" render of the input reads
       // better than the generic "Using <tool>" content fallback.
       const text = compactInput(inp);

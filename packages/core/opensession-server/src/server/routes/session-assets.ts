@@ -19,6 +19,16 @@ import {
   openAssetAcross,
 } from "../session-assets";
 import { sessionIdsForAsync } from "../session-cache";
+import { HTML_RENDER_ASSET_DIR } from "@tellahq/opensession-protocol/html-render";
+
+/** Scripts and forms run; same-origin, popups, modals and top navigation
+ *  do not. Downloads stay so a page's export button works. */
+export const HTML_RENDER_CSP =
+  "sandbox allow-scripts allow-forms allow-downloads";
+
+export function isHtmlRenderAsset(path: string): boolean {
+  return path.startsWith(`${HTML_RENDER_ASSET_DIR}/`) && /\.html?$/i.test(path);
+}
 
 export async function handleSessionAssetsRoutes(
   ctx: RouteContext,
@@ -61,6 +71,11 @@ export async function handleSessionAssetsRoutes(
       "Content-Length": String(found.size),
       "Cache-Control": "no-store",
     };
+    // An HTML render is agent script. However it is opened (its inline
+    // frame, the Assets tab, a tab of its own), it runs with an opaque
+    // origin: no cookies, storage or API of this app.
+    if (isHtmlRenderAsset(found.path))
+      headers["Content-Security-Policy"] = HTML_RENDER_CSP;
     if (url.searchParams.get("download")) {
       const name =
         found.path

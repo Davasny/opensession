@@ -850,6 +850,16 @@ enum OS1API {
         return try await responseData(for: ServerConfig.shared.authorizedRequest(url))
     }
 
+    /// A stored HTML render's page (`HtmlRenderReference.url`, already
+    /// checked to be one), for the view that shows it.
+    static func htmlRenderData(url: String) async throws -> Data {
+        guard let base = ServerConfig.shared.baseURL else { throw APIError.badURL }
+        var root = base.absoluteString
+        while root.hasSuffix("/") { root.removeLast() }
+        guard let target = URL(string: root + url) else { throw APIError.badURL }
+        return try await responseData(for: ServerConfig.shared.authorizedRequest(target))
+    }
+
     static func deleteAsset(sessionId: String, path: String) async throws {
         struct DeleteResponse: Decodable, Sendable { let ok: Bool }
         let _: DeleteResponse = try await post(

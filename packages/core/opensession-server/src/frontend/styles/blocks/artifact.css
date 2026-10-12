@@ -1,68 +1,72 @@
 /* ── ```artifact / ```svg block (lib/artifact-frame.ts) ─────────────
-   A sandboxed frame in the same well a diagram takes, with a header row
-   above it: the label, a Source toggle and expand. The fence's own <pre>
-   stays inside the block, hidden, for the Source view and the copy
-   control. That control (lib/code-copy.ts) sits in the wrapper AROUND this
-   block, top right, so the header keeps its right end clear for it.
+   A sandboxed frame that reads as part of the reply: no border or header,
+   the page on the transcript's background, sized to its document. The
+   controls sit in a quiet row under it, never over the page: a document
+   in a frame takes the pointer, so the page around it never sees a hover
+   there and cannot reveal anything on one. Source and expand sit at the
+   row's right, beside the fence's copy controls (lib/code-copy.ts), which
+   move down into the same row. The fence's own <pre> stays inside the
+   block, hidden, for the Source view and the copy control.
    Renderer-emitted markup, hence a stylesheet rather than utilities. */
 .md-artifact-wrap {
   position: relative;
   margin: 2px 0 8px;
-  overflow: hidden;
-  background: var(--diagram-canvas);
-  border: 1px solid var(--border);
-  border-radius: calc(8px * var(--rf));
-  corner-shape: var(--cs);
+  padding-bottom: 32px;
 }
 .md-artifact-head {
+  position: absolute;
+  bottom: 0;
+  right: 64px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 4px 80px 4px 12px;
-  border-bottom: 1px solid var(--border);
+  gap: 4px;
+  height: 32px;
   font-size: 12px;
   line-height: 1.2;
-  color: var(--text-dim);
-}
-.md-artifact-label {
-  font-weight: 600;
-  color: var(--text);
-}
-.md-artifact-spacer {
-  flex: 1;
 }
 .md-artifact-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: 28px;
   padding: 0 8px;
   border: 0;
-  border-radius: calc(6px * var(--rf));
+  border-radius: calc(10px * var(--rf));
   corner-shape: var(--cs);
   background: transparent;
-  color: var(--text-dim);
+  color: var(--text-faint);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 .md-artifact-expand {
-  width: 26px;
+  width: 28px;
   padding: 0;
   justify-content: center;
 }
-.md-artifact-btn:hover {
-  background: var(--hover);
-  color: var(--text);
-}
+.md-artifact-btn:hover,
 .md-artifact-btn[aria-pressed="true"] {
-  background: var(--hover-strong);
-  color: var(--text);
+  background: var(--hover);
+  color: var(--text-dim);
 }
 .md-artifact-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+/* The fence's copy and settings controls join the row. */
+.md-code-wrap:has(> .md-artifact-wrap) > .md-code-controls {
+  top: auto;
+  bottom: 10px;
+  right: 0;
+}
+.md-code-wrap:has(> .md-artifact-wrap) .md-code-copy,
+.md-code-wrap:has(> .md-artifact-wrap) .md-code-settings-trigger {
+  width: 28px;
+  height: 28px;
+}
+.md-code-wrap:has(> .md-artifact-wrap) .md-code-settings {
+  top: auto;
+  bottom: 36px;
 }
 .md-artifact-body {
   position: relative;
@@ -83,7 +87,7 @@
   display: block;
   position: relative;
   width: 100%;
-  height: 14px;
+  height: 12px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -109,12 +113,11 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-/* The Source view: the fence, with the well's own edge and corner. */
+/* The Source view: the fence in its own well, its first line below the
+   controls. */
 .md-artifact-wrap > pre {
   display: none;
   margin: 0;
-  border: 0;
-  border-radius: 0;
 }
 .md-artifact-wrap[data-view="source"] > pre {
   display: block;
@@ -136,16 +139,24 @@
   border: 1px solid var(--border);
 }
 @media (hover: none) and (pointer: coarse) {
+  .md-artifact-wrap {
+    padding-bottom: 44px;
+  }
   .md-artifact-head {
-    min-height: 48px;
-    padding-right: 104px;
+    height: 44px;
+    right: 96px;
   }
   .md-artifact-btn {
-    height: 36px;
-    padding: 0 10px;
+    height: 44px;
+    padding: 0 12px;
   }
   .md-artifact-expand {
-    width: 36px;
+    width: 44px;
+  }
+  .md-code-wrap:has(> .md-artifact-wrap) .md-code-copy,
+  .md-code-wrap:has(> .md-artifact-wrap) .md-code-settings-trigger {
+    width: 44px;
+    height: 44px;
   }
   .md-artifact-grip {
     height: 24px;

@@ -1,18 +1,21 @@
 /**
- * The DOM half of an artifact block: the sandboxed frame, its header row
- * (label, Source toggle, expand) and the height grip under it. The
- * document inside the frame and the policy on it come from
- * artifact-document.ts, which is where the security lives; this file only
- * puts that document into an <iframe sandbox> and never reads out of it.
+ * The DOM half of an artifact block: the sandboxed frame, its controls
+ * (Source toggle, expand) and the height grip under it. The document inside
+ * the frame and the policy on it come from artifact-document.ts, which is
+ * where the security lives; this file only puts that document into an
+ * <iframe sandbox> and never reads out of it, except for one height read off
+ * the inert probe frame described there.
  *
- * Height: a frame cannot report its content's height (scripts are off), so
- * it starts at the default and has a grip to drag; an SVG is sized to its
- * own aspect ratio up front.
+ * The block reads as part of the reply: no border or header, the page on
+ * the transcript's own background, the controls on hover. It takes the
+ * document's own height, measured at the block's width and again whenever
+ * that width changes, until the reader drags the grip.
  */
 
 import { expandIconMarkup } from "../components/icons";
 import {
   ARTIFACT_DEFAULT_HEIGHT,
+  ARTIFACT_PROBE_SANDBOX,
   ARTIFACT_SANDBOX,
   artifactHtmlDocument,
   artifactSvgDocument,
@@ -21,31 +24,22 @@ import {
   type ArtifactTheme,
 } from "./artifact-document";
 import { openBlockExpand } from "./block-expand";
+import type { UpgradeRoot } from "./fence-upgraders";
+import { readHtmlTheme } from "./html-theme";
 
 const WRAP_CLASS = "md-artifact-wrap";
 const FRAME_CLASS = "md-artifact-frame";
 const FRAME_SELECTOR = `iframe.${FRAME_CLASS}`;
+const PROBE_TIMEOUT_MS = 4000;
 
 interface FrameSpec {
   srcdoc: string;
   label: string;
 }
 
-/** The page's tokens, resolved, for the document's base style. The system
- *  colours are the fallback when a token is missing: they follow the
- *  document's color-scheme rather than pinning a colour here. */
 function readTheme(): ArtifactTheme {
-  const style = getComputedStyle(document.documentElement);
-  const token = (name: string, fallback: string) =>
-    style.getPropertyValue(name).trim() || fallback;
-  return {
-    bg: token("--bg", "Canvas"),
-    text: token("--text", "CanvasText"),
-    link: token("--link", "LinkText"),
-    font: token("--sans", "system-ui, sans-serif"),
-    scheme:
-      document.documentElement.dataset.theme === "light" ? "light" : "dark",
-  };
+  const theme = readHtmlTheme();
+  return { scheme: theme.appearance, variables: theme.variables };
 }
 
 function frameSpec(source: string, lang: string): FrameSpec {
@@ -84,6 +78,48 @@ function createFrame(spec: FrameSpec): HTMLIFrameElement {
     frame.replaceWith(fresh);
   });
   return frame;
+}
+
+/**
+ * The document's laid-out height at `width`, from a hidden probe frame: the
+ * same `srcdoc` under ARTIFACT_PROBE_SANDBOX, off screen, removed once read.
+ * Null when it cannot be read in time.
+ */
+export function measureArtifactHeight(
+  srcdoc: string,
+  width: number,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    const probe = document.createElement("iframe");
+    probe.setAttribute("sandbox", ARTIFACT_PROBE_SANDBOX);
+    probe.setAttribute("aria-hidden", "true");
+    probe.tabIndex = -1;
+    probe.referrerPolicy = "no-referrer";
+    probe.style.cssText = `position:fixed;left:-100000px;top:0;width:${width}px;height:1px;border:0;visibility:hidden;pointer-events:none`;
+    let done = false;
+    const finish = (height: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      probe.remove();
+      resolve(height);
+    };
+    const timer = setTimeout(() => finish(null), PROBE_TIMEOUT_MS);
+    probe.addEventListener(
+      "load",
+      () => {
+        try {
+          const root = probe.contentDocument?.documentElement;
+          finish(root ? Math.ceil(root.scrollHeight) : null);
+        } catch {
+          finish(null);
+        }
+      },
+      { once: true },
+    );
+    probe.srcdoc = srcdoc;
+    document.body.append(probe);
+  });
 }
 
 function button(
@@ -142,6 +178,48 @@ function attachGrip(
   });
 }
 
+/** Each block's width watcher, released by `releaseArtifactBlocks`. Keyed
+ *  by object so the release can take the registry's plain root type. */
+const watchers = new WeakMap<object, ResizeObserver>();
+
+/** Stop watching every block under `root`, before its DOM is discarded. */
+export function releaseArtifactBlocks(root: UpgradeRoot): void {
+  for (const wrap of Array.from(root.querySelectorAll(`.${WRAP_CLASS}`))) {
+    watchers.get(wrap)?.disconnect();
+    watchers.delete(wrap);
+  }
+}
+
+/** Fit the frame to its document at the body's width, and again whenever
+ *  that width changes, until the reader sizes it by hand. */
+function autoSize(
+  wrap: HTMLElement,
+  body: HTMLElement,
+  spec: FrameSpec,
+  initial: number,
+) {
+  let measuredAt = -1;
+  let pending = 0;
+  const fit = async () => {
+    const width = Math.round(body.clientWidth);
+    if (width <= 0 || width === measuredAt) return;
+    if (wrap.dataset.sized === "manual") return;
+    measuredAt = width;
+    const run = ++pending;
+    const height = await measureArtifactHeight(spec.srcdoc, width);
+    if (run !== pending || height === null || !wrap.isConnected) return;
+    if (wrap.dataset.sized === "manual") return;
+    const frame = body.querySelector<HTMLIFrameElement>(FRAME_SELECTOR);
+    if (frame) frame.style.height = `${clampArtifactHeight(height)}px`;
+    wrap.dataset.sized = "auto";
+  };
+  const frame = body.querySelector<HTMLIFrameElement>(FRAME_SELECTOR);
+  if (frame) frame.style.height = `${initial}px`;
+  const observer = new ResizeObserver(() => void fit());
+  observer.observe(body);
+  watchers.set(wrap, observer);
+}
+
 /**
  * Replace `pre` with the block, keeping `pre` inside it (hidden) for the
  * Source view and the copy control.
@@ -155,14 +233,11 @@ export function mountArtifactBlock(
   const wrap = document.createElement("div");
   wrap.className = WRAP_CLASS;
   wrap.dataset.view = "preview";
+  wrap.setAttribute("role", "figure");
+  wrap.setAttribute("aria-label", spec.label);
 
   const head = document.createElement("div");
   head.className = "md-artifact-head";
-  const label = document.createElement("span");
-  label.className = "md-artifact-label";
-  label.textContent = spec.label;
-  const spacer = document.createElement("span");
-  spacer.className = "md-artifact-spacer";
   const sourceToggle = document.createElement("button");
   sourceToggle.type = "button";
   sourceToggle.className = "md-artifact-btn";
@@ -190,12 +265,11 @@ export function mountArtifactBlock(
       },
     });
   });
-  head.append(label, spacer, sourceToggle, expand);
+  head.append(sourceToggle, expand);
 
   const body = document.createElement("div");
   body.className = "md-artifact-body";
   const frame = createFrame(spec);
-  frame.style.height = `${ARTIFACT_DEFAULT_HEIGHT}px`;
   const grip = button("md-artifact-grip", "Resize preview", "");
   body.append(frame, grip);
   attachGrip(grip, body, wrap);
@@ -206,13 +280,14 @@ export function mountArtifactBlock(
   pre.replaceWith(wrap);
   wrap.append(head, body, pre);
 
-  // An SVG declares its size, so the frame can take its aspect ratio at the
-  // width it landed in. Measured after mounting, which is when there is a
-  // width to measure.
+  // Until the probe answers, an SVG takes its declared aspect ratio and
+  // anything else the default, so the first paint is already close.
+  let initial = ARTIFACT_DEFAULT_HEIGHT;
   if (lang === "svg") {
     const size = svgArtifactSize(source);
     const width = body.clientWidth;
     if (size && width > 0)
-      frame.style.height = `${clampArtifactHeight((width * size.h) / size.w)}px`;
+      initial = clampArtifactHeight((width * size.h) / size.w);
   }
+  autoSize(wrap, body, spec, initial);
 }

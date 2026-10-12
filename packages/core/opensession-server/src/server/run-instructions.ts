@@ -303,9 +303,14 @@ export function buildRunInstructions(input: {
       (inproc["opensession-charts"]
         ? " `make_chart` validates one and offloads large data."
         : "") +
+      (inproc["opensession-html"]
+        ? " For an answer better seen or played with than read (a calculator, a fit " +
+          "check, an interactive chart), check a page with `html_preview`, then show " +
+          "it under your turn with `html_render` before your final reply."
+        : "") +
       ' Live fences: mermaid (quote labels with punctuation: `A["v1 (beta)"]`, ' +
       '`-->|"@x"|`), math, csv, json, ansi, palette, metrics (`Label: value ' +
-      "(delta)`), choices (a reply per line, click sends), tree, artifact (sandboxed " +
+      "(delta)`), choices (a reply per line, click sends), tree, artifact (static " +
       "HTML), svg, slides (`---`); `> [!NOTE]` is a callout. Three or more items " +
       "compared on the same fields (PRs, options, results) read best as a Markdown " +
       "table, one row each with short cells; keep prose for fewer, and a chart or " +

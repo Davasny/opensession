@@ -10,8 +10,9 @@ import { noteFenceLoadFailure } from "./fence-load-failure";
 import type { FenceUpgrader } from "./fence-upgraders";
 
 let framePromise: Promise<typeof import("./artifact-frame")> | null = null;
+let frameModule: typeof import("./artifact-frame") | null = null;
 function loadFrame() {
-  framePromise ??= import("./artifact-frame");
+  framePromise ??= import("./artifact-frame").then((m) => (frameModule = m));
   return framePromise;
 }
 
@@ -33,5 +34,10 @@ export const artifactUpgrader: FenceUpgrader = {
     if (!alive() || !root.contains(pre)) return false;
     m.mountArtifactBlock(pre, source, lang);
     return true;
+  },
+  // Each block watches its width to refit its frame; nothing to release
+  // until the frame module has loaded.
+  finalize(root) {
+    frameModule?.releaseArtifactBlocks(root);
   },
 };

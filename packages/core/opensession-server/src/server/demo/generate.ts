@@ -25,6 +25,8 @@ import {
   DEMO_COMMITTED_CHANGE,
   DEMO_GH_REPO,
   DEMO_MARKER_FILE,
+  DEMO_RENDER_ASSET,
+  DEMO_RENDER_SESSION_ID,
   DEMO_REPO_FILES,
   DEMO_REPO_ID,
   DEMO_REPO_WT_PREFIX,
@@ -38,6 +40,8 @@ import {
   demoSessions,
 } from "./fixtures";
 import { encodePng, type PngRect, type Rgb } from "./png";
+import { MONITOR_FIT_PAGE } from "./monitor-fit-page";
+import { injectBootstrap } from "../html-render/document";
 
 export interface DemoGenerateOpts {
   /**
@@ -269,6 +273,16 @@ export function generateDemoData(
       );
     }
   }
+
+  // The page the HTML render session shows, stored where the local asset
+  // store keeps that session's files and as html_render stores one.
+  const renderPath = join(
+    stateDir("assets"),
+    DEMO_RENDER_SESSION_ID,
+    DEMO_RENDER_ASSET,
+  );
+  mkdirSync(dirname(renderPath), { recursive: true });
+  writeFileSync(renderPath, injectBootstrap(MONITOR_FIT_PAGE));
 
   if (homeStores) {
     // Repo registry first: everything below (and every repo-derived UI

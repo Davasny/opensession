@@ -37,6 +37,17 @@ struct ArtifactDocument: Equatable {
         }
     }
 
+    /// The theme variables an author styles against (`--card`, `--border`,
+    /// `--success`, `--chart-1`, …), the same names the web gives a fence.
+    static func themeDeclarations(dark: Bool, textHex: String, linkHex: String, backgroundHex: String) -> String {
+        HtmlTheme.variables(dark: dark, background: backgroundHex, foreground: textHex, link: linkHex)
+            .sorted { $0.key < $1.key }
+            .map { name, value in
+                "\(name):\(value.filter { !"<>{};".contains($0) });"
+            }
+            .joined()
+    }
+
     /// The HTML the web view loads. The hex values are the app's own tokens
     /// resolved for the current appearance, so a fragment reads as native in
     /// both themes.
@@ -47,7 +58,7 @@ struct ArtifactDocument: Equatable {
         <meta name="color-scheme" content="\(dark ? "dark" : "light")">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <base target="_blank">
-        <style>html{background:\(backgroundHex)}body{margin:12px;color:\(textHex);font-family:-apple-system,system-ui,sans-serif;font-size:15px;line-height:1.4;-webkit-text-size-adjust:100%}a{color:\(linkHex)}img,svg,video,canvas{max-width:100%}</style>
+        <style>:root{\(Self.themeDeclarations(dark: dark, textHex: textHex, linkHex: linkHex, backgroundHex: backgroundHex))}html{background:\(backgroundHex)}body{margin:12px;color:\(textHex);font-family:-apple-system,system-ui,sans-serif;font-size:15px;line-height:1.4;-webkit-text-size-adjust:100%}a{color:\(linkHex)}img,svg,video,canvas{max-width:100%}</style>
         """
         switch kind {
         case .svg:

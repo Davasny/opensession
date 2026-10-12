@@ -21,6 +21,7 @@
     "./pasted-text": "./src/pasted-text.ts",
     "./todo-plan": "./src/todo-plan.ts",
     "./tool-presentation": "./src/tool-presentation.ts",
+    "./html-render": "./src/html-render.ts",
     "./identity": "./src/identity.ts",
     "./workspace-group": "./src/workspace-group.ts",
     "./executor": "./src/executor.ts"

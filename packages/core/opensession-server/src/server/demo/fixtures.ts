@@ -26,6 +26,7 @@ import {
   transcriptLineYouShouldKnow,
 } from "../transcript-persistence";
 import type { NativeSessionFile } from "../types";
+import { MONITOR_FIT_PAGE } from "./monitor-fit-page";
 import { youShouldKnowRecordContent } from "@tellahq/opensession-protocol/notices";
 
 type JsonlLine = Record<string, unknown>;
@@ -45,6 +46,10 @@ export const DEMO_LIVE_ENGINE_SESSION_ID = "ses_demolive";
 export const DEMO_ASK_SESSION_ID = "bks-demo-ask";
 export const DEMO_ASK_ENGINE_SESSION_ID = "ses_demoask";
 export const DEMO_PR_NUMBER = 128;
+/** The session that shows an HTML render, and where its page is stored. */
+export const DEMO_RENDER_SESSION_ID = "bks-demo-render";
+export const DEMO_RENDER_ASSET = "html-renders/monitor-arm-clamp-fit-demo.html";
+export const DEMO_RENDER_TITLE = "Monitor arm clamp fit";
 
 const MODEL_FABLE = "pi/anthropic/claude-fable-5-1";
 const MODEL_SONNET = "pi/anthropic/claude-sonnet-5-5";
@@ -1049,6 +1054,105 @@ export function demoSessions(opts: {
           "**CI on PR #133 is green.** Unit tests and the build passed. The only open check is the approval gate, which needs someone to approve the PR; there is nothing left to fix.",
           "demo-ci-a4",
           iso(t0 + 40 * min + 50_000),
+          MODEL_FABLE,
+        ),
+      ],
+    });
+  }
+
+  // An HTML render: the agent checks a page with html_preview, then shows it
+  // under the turn with html_render. The generator stores the page itself as
+  // the session's asset (generate.ts).
+  {
+    const t0 = now - 32 * min;
+    const htmlRender = {
+      url: `/api/sessions/${DEMO_RENDER_SESSION_ID}/assets/raw/${DEMO_RENDER_ASSET}`,
+      path: DEMO_RENDER_ASSET,
+      title: DEMO_RENDER_TITLE,
+      height: 360,
+      heights: [
+        [320, 570],
+        [360, 598],
+        [390, 618],
+        [430, 645],
+        [520, 690],
+        [640, 320],
+        [744, 359],
+        [860, 384],
+        [1000, 437],
+        [1160, 497],
+      ],
+    };
+    sessions.push({
+      id: DEMO_RENDER_SESSION_ID,
+      engineSessionId: "ses_demorender",
+      file: base(DEMO_RENDER_SESSION_ID, "ses_demorender", 32, 29, {
+        title: "Will the monitor arm clamp fit my desk?",
+        mode: "ask",
+        usage: usage(0.21, 9_840, 3_120, 3, iso(now - 29 * min)),
+      }),
+      lines: [
+        transcriptLineUser(
+          "I'm ordering a monitor arm with a C-clamp. Will it fit my desk? The top is 38 mm thick, there's a frame rail about 7 cm in from the back edge, and the monitor weighs 6.5 kg.",
+          "demo-render-u1",
+          iso(t0),
+        ),
+        transcriptLineAssistantText(
+          "I'll check the clamp's specs against your desk and lay it out to scale.",
+          "demo-render-a1",
+          iso(t0 + 15_000),
+          MODEL_FABLE,
+        ),
+        ...tool(
+          "render",
+          1,
+          "mcp__opensession-html__html_preview",
+          { html: MONITOR_FIT_PAGE, width: 744 },
+          '{"width":744,"contentHeight":359,"capturedHeight":359}\nConsole: (empty)',
+          t0 + 60_000,
+        ),
+        ...tool(
+          "render",
+          2,
+          "mcp__opensession-html__html_render",
+          { html: MONITOR_FIT_PAGE, title: DEMO_RENDER_TITLE, height: 360 },
+          JSON.stringify({
+            htmlRender,
+            message:
+              "Shown inline in the session. Do not link to it or describe where it is.",
+          }),
+          t0 + 90_000,
+        ),
+        transcriptLineAssistantText(
+          "Yes, it fits. 38 mm is mid-range for the 10–85 mm clamp, and the 70 mm of flat edge in front of the rail clears the 60 mm lower pad, so the pad sits fully on the desk. 6.5 kg is inside the arm's 2–9 kg spring. If the rail turns out closer than 6 cm, use the reinforcement plate that comes with the arm.",
+          "demo-render-a2",
+          iso(t0 + 120_000),
+          MODEL_FABLE,
+        ),
+        transcriptLineUser(
+          "What do I need to check under the desk before it arrives?",
+          "demo-render-u2",
+          iso(t0 + 150_000),
+        ),
+        // A static ```artifact fence: no script, sized to its document, in
+        // the app's theme variables.
+        transcriptLineAssistantText(
+          [
+            "Three measurements, all from the back edge:",
+            "",
+            "```artifact",
+            '<table style="width:100%;border-collapse:collapse;font-size:14px">',
+            '<tr style="color:var(--muted-foreground);text-align:left"><th style="padding:8px 0">Check</th><th>Need</th><th>Yours</th></tr>',
+            '<tr style="border-top:1px solid var(--border)"><td style="padding:8px 0">Desk thickness</td><td>10–85 mm</td><td style="color:var(--success)">38 mm</td></tr>',
+            '<tr style="border-top:1px solid var(--border)"><td style="padding:8px 0">Flat edge before the rail</td><td>60 mm</td><td style="color:var(--success)">70 mm</td></tr>',
+            '<tr style="border-top:1px solid var(--border)"><td style="padding:8px 0">Gap behind the desk</td><td>25 mm</td><td style="color:var(--warning)">measure</td></tr>',
+            "</table>",
+            "```",
+            "",
+            "The last one is the clamp's spine: the desk needs 25 mm free behind it, so pull it off the wall a little if it sits flush.",
+          ].join("\n"),
+          "demo-render-a3",
+          iso(t0 + 170_000),
           MODEL_FABLE,
         ),
       ],

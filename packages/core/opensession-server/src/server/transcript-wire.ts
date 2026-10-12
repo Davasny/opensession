@@ -1,4 +1,5 @@
 import type { SeqEntry } from "./transcript-store";
+import { isHtmlRenderResultText } from "@tellahq/opensession-protocol/html-render";
 import {
   MESSAGE_COLLAPSE_CHARS,
   MESSAGE_PREVIEW_CHARS,
@@ -62,7 +63,13 @@ export function v2SnapshotEntryWeight(
 }
 
 function initClampBytes(entry: SeqEntry, foldedAssistant: boolean): number {
-  if (entry.type === "tool_result") return INIT_TOOL_RESULT_CLAMP_BYTES;
+  if (entry.type === "tool_result") {
+    // An html_render result is the page's reference, shown under the turn
+    // without expanding anything, so it ships whole (it is a few hundred
+    // bytes, and the check caps it).
+    if (isHtmlRenderResultText(entry.content)) return entry.content.length;
+    return INIT_TOOL_RESULT_CLAMP_BYTES;
+  }
   if (foldedAssistant)
     return nearLimitClamp(
       entry,

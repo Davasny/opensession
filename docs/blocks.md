@@ -34,7 +34,7 @@ the reader needs.
 | ` ```csv ` (`tsv`, `table`)          | Sortable, filterable data grid with copy as CSV        | `lib/table-block.ts`                                              |
 | ` ```choices `                       | Quick-reply chips that send that text as the next turn | `lib/choices-block.ts`                                            |
 | ` ```tree `                          | Collapsible file tree; a row opens the file            | `lib/tree-block.ts`                                               |
-| ` ```artifact ` (`svg`)              | Sandboxed HTML/SVG preview in an iframe, expandable    | `lib/artifact-block.ts`                                           |
+| ` ```artifact ` (`svg`)              | Sandboxed HTML/SVG, sized to fit, expandable           | `lib/artifact-block.ts`                                           |
 | ` ```slides `                        | Swipeable deck of markdown slides split on `---`       | `lib/slides-block.ts`                                             |
 | ` ```metrics `                       | Metric cards: big number, label, delta                 | `lib/metrics-block.ts`                                            |
 
@@ -206,23 +206,52 @@ so any other row is a label.
 ### Artifacts
 
 An ` ```artifact ` fence holds a complete HTML document or a fragment; a
-fragment is wrapped in a document that takes the app's background, text
-colour and font, so it reads as native in both themes. An ` ```svg ` fence
-holds an SVG, shown as an `<img>` inside the same frame. Both render in a
-fully locked `<iframe sandbox>` by `srcdoc`: no scripts, no same-origin
-access, no navigation, no forms, no popups. The block opens the document
-itself, with a `Content-Security-Policy` meta (`default-src 'none'`; inline
-styles and `data:` images allowed) and a `<base target="_blank">` ahead of
-the artifact's first byte, so an artifact cannot phone home and a link
-inside it goes nowhere rather than loading a foreign page into the frame; a
-complete document's own head content follows the block's inside the same
-`<head>`. Scripts are never on: a frame that may run script may also
-navigate itself, and nothing the browser enforces stops that. The frame
-starts at 320px with a drag handle (120 to 900px); an SVG takes its own
-aspect ratio. The header row has a Source toggle (the original fence, whose
-copy control copies the source) and an expand button that opens the same
-sandboxed document in a full-width dialog. A fence still streaming renders
-as it arrives.
+fragment is wrapped in a document that carries the app's theme as CSS custom
+properties (`--background`, `--foreground`, `--card`, `--border`,
+`--success`, `--chart-1` and the rest, the same names an HTML render gets;
+see `HTML_THEME_TOKENS` in `packages/core/protocol/src/html-render.ts`), so
+it reads as native in both themes. An ` ```svg ` fence holds an SVG, shown
+as an `<img>` inside the same frame. Both render in a fully locked
+`<iframe sandbox>` by `srcdoc`: no scripts, no same-origin access, no
+navigation, no forms, no popups. The block opens the document itself, with
+a `Content-Security-Policy` meta (`default-src 'none'`; inline styles and
+`data:` images allowed) and a `<base target="_blank">` ahead of the
+artifact's first byte, so an artifact cannot phone home and a link inside it
+goes nowhere rather than loading a foreign page into the frame; a complete
+document's own head content follows the block's inside the same `<head>`.
+Scripts are never on: a frame that may run script may also navigate itself,
+and nothing the browser enforces stops that. For a page that needs script,
+see HTML renders below.
+
+The block reads as part of the reply: no border or header, the document on
+the transcript's background with no body margin. The frame takes the
+document's own height, laid out once in a hidden probe frame (sandbox
+`allow-same-origin` only, so the block can read the height; no script runs
+in it and nothing loads) and again whenever the width changes; a drag handle
+under it overrides that (48 to 2000px). Source (the original fence, whose
+copy control copies the source) and expand sit in a quiet row under the
+frame, never over it: a frame takes the pointer, so the page around it
+cannot reveal a control on hover there. A fence still streaming renders as
+it arrives. `html_preview` with `mode: "artifact"` shows an agent exactly
+what a fence will look like.
+
+### HTML renders
+
+Not a fence: a page an agent shows with the `opensession-html` server's
+`html_render` tool, under the turn that made it and above the final reply.
+The server stores the page as a session asset (`html-renders/`), with a
+small bootstrap ahead of its first byte that themes it, reports its height,
+and turns outbound links into requests the client opens. The page runs its
+own script with an opaque origin (frame sandbox `allow-scripts allow-forms
+allow-downloads`, and a CSP `sandbox` header on the asset route), so it can
+be a calculator or an interactive chart but never reaches the app's cookies,
+storage or API. The server measures the page at phone-to-desktop widths in a
+headless Chrome, so the frame starts at the right height, and the page's
+own report refines it. Theme changes reach a mounted page as a message, with
+no reload. `html_preview` returns a screenshot, the console and the height
+before an agent publishes. The headless browser reaches only public
+addresses. The iOS and Mac app show the same renders in a credential-free
+web view.
 
 ### Slides
 

@@ -65,6 +65,12 @@ struct TurnBlockView: View {
                 .transition(.opacity)
             }
 
+            // A page the agent showed with html_render is the answer, so
+            // like a suggestion it stays whether the fold is open or shut.
+            if !turn.htmlRenders.isEmpty {
+                HtmlRendersView(renders: turn.htmlRenders)
+            }
+
             // A marked screenshot or recording is the result, not the work.
             // Closing the fold hides the steps and leaves that result visible.
             if !state.expanded, !turn.featuredMedia.isEmpty {

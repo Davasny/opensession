@@ -64,6 +64,7 @@ touches an in-process tool:
 | [`opensession-workflows`](#opensession-workflows) | 8 | interactive, automation | Automation runs get it ONLY with the human-set `workflows` flag. |
 | [`opensession-assets`](#opensession-assets) | 4 | interactive | Needs a session id. Works in read-only Ask mode — assets land outside the checkout. |
 | [`opensession-charts`](#opensession-charts) | 1 | interactive, automation | Needs a session id. Held to the automation bar: its only write is offloaded chart data into the calling session's own assets. |
+| [`opensession-html`](#opensession-html) | 2 | interactive | Needs a session id and Chrome on the host for previews and measuring. Interactive-only: its browser loads remote resources, through a proxy that reaches only public addresses. |
 | [`opensession-comments`](#opensession-comments) | 2 | interactive | Needs a session id. Reads and replies only within the run's own session. |
 | [`opensession-todos`](#opensession-todos) | 5 | interactive | Needs a session id. |
 | [`opensession-schedule`](#opensession-schedule) | 3 | interactive | Needs a session id. |
@@ -77,7 +78,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-36 servers, 176 tools.
+37 servers, 178 tools.
 
 ## opensession-sessions
 
@@ -1134,6 +1135,27 @@ Validate a Vega-Lite spec and get the ```vega-lite fence that renders as an inte
 `mcp__opensession-charts__make_chart` · input: `spec` (object | string, required), `data` (any[]), `title` (string), `name` (string)
 
 Turn a Vega-Lite spec into the ```vega-lite fence that renders as an interactive chart (tooltips, zoom, brushing) in this session. Compiles the spec with the same library the client uses and returns errors with their paths instead of a silent code block; large inline data is moved to a session asset the chart loads from. Paste the returned fence verbatim into your reply, on its own lines. Keep specs small and readable: aggregate first, use `data.values` (or the data argument) rather than external URLs, and omit width so the chart fills the column.
+
+## opensession-html
+
+Preview HTML in a headless browser; show a finished page inline under the turn.
+
+- **Source** `packages/core/opensession-server/src/server/html-mcp.ts`
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
+- **Runs** interactive
+- **Condition** Needs a session id and Chrome on the host for previews and measuring. Interactive-only: its browser loads remote resources, through a proxy that reaches only public addresses.
+
+### `html_preview`
+
+`mcp__opensession-html__html_preview` · input: `html` (string, required), `width` (integer), `appearance` ("dark" | "light"), `mode` ("render" | "artifact")
+
+Load an HTML page in a headless browser and get back a PNG screenshot, contentHeight (the height the page needs at this width), and its console output, with uncaught errors and stack traces pointing into page.html. console.log is a fine way to report your own checks. Use it to check and iterate on a page before html_render, or on an ```artifact fence (mode "artifact": no script runs and nothing loads, exactly as the fence renders). Write one self-contained document with inline <style> and <script>. Local images written as absolute file paths (src="/abs/shot.png", CSS url(/abs/bg.webp), or a JS string) are inlined automatically; remote https URLs, such as a CDN chart library, load as-is. The page runs with an opaque origin: no cookies, localStorage or Open Session API, and only public network addresses.
+
+### `html_render`
+
+`mcp__opensession-html__html_render` · input: `html` (string, required), `title` (string, required), `height` (integer, required)
+
+Show a finished HTML page (an interactive calculator, chart, table, diagram, mockup) inline in this session, under this turn's work and above your final reply; call it before writing that reply. Use it when the answer is better seen or played with than read, and when it needs script; a static picture can stay an ```artifact or ```svg fence. The reader already sees the page, so the reply should not announce it, say where it is, or restate it: add only what the page does not say. Preview with html_preview first. The frame fits the page's height at each reader's width; a height below the page's contentHeight caps the frame and the rest scrolls inside it. Write one self-contained document with inline <style> and <script>. Local images written as absolute file paths (src="/abs/shot.png", CSS url(/abs/bg.webp), or a JS string) are inlined automatically; remote https URLs, such as a CDN chart library, load as-is. The page runs with an opaque origin: no cookies, localStorage or Open Session API, and only public network addresses. The frame is borderless on the transcript's background, as wide as the reply column (744px on desktop, about 360px on phones), and its left edge lines up with your reply text. Leave html, body and the outermost element without a background colour, so the page reads as part of the reply. Use a fluid width with no horizontal padding on the outermost element, and no outer card, border or banner title. A box that needs its own background gets at least 16px of padding on every side and var(--radius) corners. Give charts fixed pixel heights rather than heights that scale with width. Let content set the page's height: avoid 100vh or height:100% on html or body, since the frame grows to fit the page. Open Session injects its active theme as CSS custom properties on :root, and they follow the reader's light/dark mode live: --background (identical to the transcript around the frame), --foreground, --muted, --muted-foreground, --faint-foreground, --card, --card-foreground, --border, --border-strong, --input, --primary, --primary-foreground (solid buttons), --accent, --accent-surface (brand blue and its tint), --link, --destructive, --warning, --success, --info and a -surface tint of each, --code-background, --code-foreground, --chart-1 … --chart-6 (categorical series), --radius, --font-sans, --font-mono. The base stylesheet sets html background, colour and font from these, body margin 0, and hides the page's scrollbar; your own CSS overrides it.
 
 ## opensession-comments
 

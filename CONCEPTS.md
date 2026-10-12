@@ -148,6 +148,12 @@ trees, sandboxed HTML artifacts and slide decks; `docs/blocks.md` is the
 catalog. The `opensession-charts` tool compiles a chart spec for the agent and
 moves large data into the session's assets.
 
+An **HTML render** is a page an agent shows with the `opensession-html`
+server's `html_render` tool: it appears under the turn, above the reply, and
+can run its own script (a calculator, an interactive chart) in a frame that
+cannot reach the app. `html_preview` lets the agent check a page, or an
+artifact fence, in a headless browser before anyone sees it.
+
 ### Modes
 
 A session's mode decides what it can touch:

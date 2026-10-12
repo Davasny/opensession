@@ -359,6 +359,9 @@ struct WorkTurn: Identifiable, Equatable {
     /// featured media they are addressed to the reader rather than steps of
     /// the work, so the card renders outside the fold, open or shut.
     var suggestedTasks: [SuggestedTaskProposal] = []
+    /// Pages the turn showed with `html_render`: the answer itself, so they
+    /// render outside the fold, open or shut.
+    var htmlRenders: [HtmlRenderItem] = []
     /// "Bash: bun test" — what the fold is doing right now, shown while it is
     /// live and collapsed so the work never looks stalled.
     var livePreview: String?
@@ -1043,6 +1046,7 @@ enum TranscriptGrouping {
             hasMedia: tools.contains(where: \.hasMedia),
             featuredMedia: featuredMedia(from: tools),
             suggestedTasks: SuggestedTaskProposal.proposals(in: tools),
+            htmlRenders: HtmlRenderItem.renders(in: tools),
             livePreview: preview,
             hasNarration: items.contains {
                 if case .message = $0 { return true }

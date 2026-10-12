@@ -29,8 +29,20 @@
  *   the sandbox refuses: a click inside the frame goes nowhere, rather than
  *   loading a foreign page into it.
  *
- * A fragment is wrapped in a minimal document that takes the app's own
- * background and text colour, so a snippet reads as native in both themes.
+ * The block sizes its frame to the document by laying the same `srcdoc`
+ * out once in a hidden probe frame (artifact-frame.ts), whose sandbox is
+ * `allow-same-origin` alone (ARTIFACT_PROBE_SANDBOX) so the block can read
+ * its height. That probe is as inert as the visible frame: the same policy
+ * leads its head, no script runs in it (the sandbox has no `allow-scripts`
+ * and the policy has no script source), nothing loads, no form submits, no
+ * automatic feature fires, it sits off screen where nothing can click it,
+ * and it is removed once measured. Same-origin only lets the block read in;
+ * nothing in the probe can act to read out.
+ *
+ * A fragment is wrapped in a minimal document that takes the app's theme as
+ * CSS custom properties (the same names an HTML render gets, see
+ * HTML_THEME_TOKENS), so a snippet reads as native in both themes and an
+ * author can style against --card, --border, --chart-1 and the rest.
  * A complete document simply follows the block's head: the parser folds a
  * second `<html>` into the first (its attributes kept) and drops a second
  * `<head>` open tag, so the author's own head content lands after the base
@@ -42,26 +54,26 @@
 import { readDiagramSvg } from "./diagram-media";
 
 export interface ArtifactTheme {
-  /** The page's --bg, resolved. */
-  bg: string;
-  /** The page's --text, resolved. */
-  text: string;
-  /** The page's --link, resolved. */
-  link: string;
-  /** The page's --sans font stack. */
-  font: string;
   scheme: "light" | "dark";
+  /** Page variables (--background, --foreground, --card, ...), resolved
+   *  from the app's tokens; see HTML_THEME_TOKENS. */
+  variables: Record<string, string>;
 }
 
 /** The frame's default height, and the range a drag is clamped to. In CSS
  *  pixels. */
 export const ARTIFACT_DEFAULT_HEIGHT = 320;
-export const ARTIFACT_MIN_HEIGHT = 120;
-export const ARTIFACT_MAX_HEIGHT = 900;
+export const ARTIFACT_MIN_HEIGHT = 48;
+export const ARTIFACT_MAX_HEIGHT = 2000;
 
 /** The frame's `sandbox` attribute. Empty is the fully locked sandbox: no
  *  token is ever added, see the header. */
 export const ARTIFACT_SANDBOX = "";
+
+/** The hidden probe frame's sandbox: same-origin so the block can read the
+ *  laid-out height, and nothing else. See the header for why that stays
+ *  inert. */
+export const ARTIFACT_PROBE_SANDBOX = "allow-same-origin";
 
 /** The policy written into the document head. `default-src 'none'` is the
  *  whole point; the rest re-opens exactly what an inline document needs. */
@@ -92,24 +104,31 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** A CSS value is written into a style attribute inside the frame; strip
- *  anything that could close the declaration or the tag. */
+/** A CSS value is written into the document's <style>; strip anything that
+ *  could close the declaration, the rule or the element. */
 function cssValue(s: string): string {
-  return s.replace(/[<>"{};]/g, "").trim();
+  return s.replace(/[<>{};]/g, "").trim();
 }
 
 /**
- * The app's own colours as the document's base style. First in the head, so
+ * The app's theme as the document's base style. First in the head, so
  * anything the author wrote after it wins; a document that never mentions
- * its background still reads as part of the page.
+ * its background still reads as part of the reply. No body margin: the
+ * frame is borderless and lines up with the reply text.
  */
 function baseStyle(theme: ArtifactTheme): string {
+  const variables = Object.entries(theme.variables)
+    .filter(([name]) => /^--[a-z0-9-]+$/.test(name))
+    .map(([name, value]) => `${name}:${cssValue(value)};`)
+    .join("");
   return (
     "<style>" +
-    `:root{color-scheme:${theme.scheme};background:${cssValue(theme.bg)};color:${cssValue(theme.text)};` +
-    `font-family:${cssValue(theme.font)};font-size:15px;line-height:1.5}` +
-    "body{margin:16px}" +
-    `a{color:${cssValue(theme.link)}}` +
+    `:root{color-scheme:${theme.scheme === "light" ? "light" : "dark"};${variables}` +
+    "background:var(--background);color:var(--foreground);" +
+    "font-family:var(--font-sans);font-size:15px;line-height:1.5}" +
+    "body{margin:0}" +
+    "a{color:var(--link)}" +
+    "code,kbd,pre,samp{font-family:var(--font-mono)}" +
     "img,svg,video,canvas{max-width:100%}" +
     "</style>"
   );
@@ -178,7 +197,7 @@ export function artifactSvgDocument(
   const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgRoot(source))}`;
   return (
     artifactDocumentHead(theme) +
-    "<style>body{margin:0;display:grid;place-items:center;min-height:100vh}img{display:block;width:100%;height:auto}</style>" +
+    "<style>body{margin:0}img{display:block;width:100%;height:auto}</style>" +
     `</head><body><img src="${escapeHtml(dataUrl)}" alt=""></body></html>`
   );
 }

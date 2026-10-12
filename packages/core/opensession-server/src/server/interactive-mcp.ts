@@ -45,6 +45,7 @@ import { createTodosMcpServer } from "../agents/slack/todos-tools";
 import { createSearchMcpServer } from "../agents/slack/search-tools";
 import { createAssetsMcpServer } from "../agents/slack/assets-tools";
 import { createChartsMcpServer } from "./charts-mcp";
+import { createHtmlMcpServer } from "./html-mcp";
 import { createCommentsMcpServer } from "./comments-mcp";
 import { createDatabasesMcpServer } from "../agents/slack/databases-tools";
 import { createWorkflowsMcpServer } from "../agents/slack/workflow-tools";
@@ -520,6 +521,10 @@ export function interactiveMcpServers(
           // ```vega-lite fences render on their own; this compiles a spec
           // for the agent and offloads big data into the session's assets.
           "opensession-charts": () => createChartsMcpServer({ sessionId }),
+          // Pages shown inline under a turn (html_render) and the headless
+          // preview that checks them. Interactive-only: the browser is
+          // open-world, so automation input does not get to drive it.
+          "opensession-html": () => createHtmlMcpServer({ sessionId }),
           // The comment threads people left on this session's transcript:
           // read them, and reply in the one a person sent to this session.
           "opensession-comments": () => createCommentsMcpServer({ sessionId }),

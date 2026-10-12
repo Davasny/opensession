@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { HTML_THEME_DEFAULTS } from "@tellahq/opensession-protocol/html-render";
 import {
+  ARTIFACT_PROBE_SANDBOX,
   ARTIFACT_DEFAULT_HEIGHT,
   ARTIFACT_MAX_HEIGHT,
   ARTIFACT_MIN_HEIGHT,
@@ -15,11 +17,8 @@ import {
 } from "./artifact-document";
 
 const THEME: ArtifactTheme = {
-  bg: "#1c1c1c",
-  text: "#e9e9e9",
-  link: "#6ea8fe",
-  font: "-apple-system, sans-serif",
   scheme: "dark",
+  variables: HTML_THEME_DEFAULTS.dark.variables,
 };
 
 /** The reviewer's bypass attempt: a comment that looks like a head, ahead of
@@ -30,6 +29,11 @@ const FAKE_HEAD =
 describe("artifact sandbox and policy", () => {
   test("the sandbox is fully locked: no token is ever granted", () => {
     expect(ARTIFACT_SANDBOX).toBe("");
+  });
+
+  test("the measuring probe may be read, but never runs anything", () => {
+    expect(ARTIFACT_PROBE_SANDBOX).toBe("allow-same-origin");
+    expect(ARTIFACT_PROBE_SANDBOX).not.toContain("allow-scripts");
   });
 
   test("the policy blocks the network and never opens scripts", () => {
@@ -59,11 +63,13 @@ describe("artifact sandbox and policy", () => {
 });
 
 describe("artifact html document", () => {
-  test("wraps a fragment in a document carrying the page's colours", () => {
+  test("wraps a fragment in a document carrying the app's theme", () => {
     const doc = artifactHtmlDocument("<h1>Hi</h1>", THEME);
     expect(doc.startsWith(artifactDocumentHead(THEME))).toBe(true);
-    expect(doc).toContain("background:#1c1c1c");
-    expect(doc).toContain("color:#e9e9e9");
+    expect(doc).toContain("--background:#1c1c1c");
+    expect(doc).toContain("--chart-1:#58a6ff");
+    expect(doc).toContain("background:var(--background)");
+    expect(doc).toContain("color:var(--foreground)");
     expect(doc).toContain("color-scheme:dark");
     expect(doc.endsWith("</head><body><h1>Hi</h1></body></html>")).toBe(true);
     expect(doc).not.toContain("<script");
@@ -77,7 +83,7 @@ describe("artifact html document", () => {
     expect(doc).toBe(head + source);
     expect(isCompleteHtmlDocument(doc)).toBe(true);
     // The author's own rules come after the base style, so they win.
-    expect(doc.indexOf("background:#1c1c1c")).toBeLessThan(
+    expect(doc.indexOf("--background:#1c1c1c")).toBeLessThan(
       doc.indexOf("body{color:red}"),
     );
   });
@@ -104,9 +110,13 @@ describe("artifact html document", () => {
   test("a theme value cannot break out of the style block", () => {
     const doc = artifactHtmlDocument("<p>a</p>", {
       ...THEME,
-      bg: "</style><script>1</script>",
+      variables: {
+        "--background": "</style><script>1</script>",
+        "--x;}body{display:none": "red",
+      },
     });
     expect(doc).not.toContain("<script>1</script>");
+    expect(doc).not.toContain("display:none");
   });
 
   test("a streaming fragment still becomes a document", () => {

@@ -1,5 +1,12 @@
 import type React from "react";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { attachCodeCopy, decorateCodeBlocks } from "../lib/code-copy";
 import {
   FENCE_UPGRADERS,
@@ -92,8 +99,10 @@ export function MarkdownBody({
   // identity changes (it no longer compares the __html strings like 18 did),
   // and a rewrite silently destroys the mermaid/shiki upgrades below. A
   // stable object keeps unrelated re-renders (visibility flips, parent
-  // updates) from resetting the DOM back to the plain fences.
-  const innerHtml = { __html: html };
+  // updates) from resetting the DOM back to the plain fences. Memoized by
+  // hand as well as by the compiler, so the unbundled dev server (which
+  // skips the compiler) keeps upgrades too.
+  const innerHtml = useMemo(() => ({ __html: html }), [html]);
   // The (element, html, theme) combination whose upgrade last completed —
   // lets the effect skip redoing (and visibly flashing) work whose output is
   // already in the DOM, e.g. when scrolling a diagram out of and back into

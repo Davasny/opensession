@@ -161,6 +161,12 @@ export const INTERNAL_MCP_CAPABILITIES = {
     guidance:
       "Show quantitative results as an interactive chart: pass a Vega-Lite spec (and optionally the rows) to make_chart, then paste the returned ```vega-lite fence into your reply. Prefer this to a hand-built HTML chart asset or a static image of a chart.",
   },
+  "opensession-html": {
+    summary:
+      "Preview HTML in a headless browser; show a finished page inline under the turn.",
+    guidance:
+      "Show an answer better played with than read (a calculator, a fit check, a live chart) as a page under your turn: html_preview, then html_render.",
+  },
   "opensession-comments": {
     summary: "Comment threads people left on this session's transcript.",
     guidance:

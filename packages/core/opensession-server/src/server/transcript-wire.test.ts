@@ -44,6 +44,21 @@ describe("v2 transcript wire previews", () => {
     expect(clamped[1].content).toHaveLength(INIT_TOOL_RESULT_CLAMP_BYTES);
   });
 
+  test("ships an html_render result whole, and only a small one", () => {
+    const reference = `{"htmlRender":{"url":"/api/sessions/s/assets/raw/html-renders/a.html","heights":[${"[320,570],".repeat(20)}[1160,497]]},"message":"ok"}`;
+    const render = entry("r", "tool_result", reference);
+    const forged = entry(
+      "f",
+      "tool_result",
+      `{"htmlRender":${"x".repeat(5_000)}`,
+    );
+
+    const clamped = clampV2InitEntries([render, forged]);
+
+    expect(clamped[0]).toBe(render);
+    expect(clamped[1].content).toHaveLength(INIT_TOOL_RESULT_CLAMP_BYTES);
+  });
+
   test("loads intermediate assistant notes separately from visible answers", () => {
     const prompt = entry("u", "user", "prompt");
     const note = entry("n", "assistant", "n".repeat(8_000));
