@@ -807,6 +807,54 @@ async function bootstrapDarwinBaseRuntime(
     "bun install",
   );
   await ensureRemoteBunxShim(driver, L, log);
+  // The iOS simulator tools are not part of the base runtime contract (its
+  // signature stays the same), and a cold Homebrew install takes minutes, so
+  // they install in the background; start_simulator_portal reports progress.
+  try {
+    await driver.execBackground(darwinIosToolsInstallScript(L));
+    log("installing iOS simulator tools in the background");
+  } catch (error) {
+    log(
+      `could not start the iOS simulator tools install: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/** Where a macOS guest's iOS tools install logs, and its lock and marker. */
+export function darwinIosToolsPaths(L: RemoteLayout) {
+  const dir = `${L.home}/.opensession/ios-tools`;
+  return { dir, log: `${dir}/install.log`, lock: `${dir}/lock` };
+}
+
+/** Shell that succeeds when the simulator Portal's tools resolve. */
+export function darwinIosToolsCheckScript(L: RemoteLayout): string {
+  return `env PATH=${shellQuoteWord(L.path)} sh -c 'command -v idb >/dev/null && command -v idb_companion >/dev/null && command -v xcodegen >/dev/null'`;
+}
+
+/**
+ * Idempotent install of what an iOS simulator Portal and an XcodeGen project
+ * need in a macOS guest: xcodegen, idb_companion (facebook/fb tap; newer
+ * Homebrew refuses untrusted taps until that one formula is trusted) and the
+ * idb CLI (pip), linked into /usr/local/bin so a login shell finds them. One
+ * run at a time (mkdir lock), logged to darwinIosToolsPaths().log. The iOS
+ * platform itself (several GB) is left to the project.
+ */
+export function darwinIosToolsInstallScript(L: RemoteLayout): string {
+  const p = darwinIosToolsPaths(L);
+  const q = shellQuoteWord;
+  const body = [
+    "set -u",
+    `export PATH=${q(L.path)} HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1`,
+    `mkdir ${q(p.lock)} 2>/dev/null || { echo "another install is running"; exit 0; }`,
+    `trap 'rmdir ${q(p.lock)}' EXIT`,
+    "command -v xcodegen >/dev/null || brew install xcodegen",
+    "command -v idb_companion >/dev/null || { brew tap facebook/fb; brew trust --formula facebook/fb/idb-companion 2>/dev/null; brew install facebook/fb/idb-companion; }",
+    "if ! command -v idb >/dev/null; then python3 -m pip install --user --quiet fb-idb; " +
+      'idb="$(python3 -m site --user-base)/bin/idb"; [ -x "$idb" ] && sudo -n ln -sf "$idb" /usr/local/bin/idb; fi',
+    'c=$(command -v idb_companion) && [ "$c" != /usr/local/bin/idb_companion ] && sudo -n ln -sf "$c" /usr/local/bin/idb_companion',
+    'if command -v idb >/dev/null && command -v idb_companion >/dev/null && command -v xcodegen >/dev/null; then echo "iOS simulator tools ready"; else echo "iOS simulator tools install failed"; exit 1; fi',
+  ].join("\n");
+  return `mkdir -p ${q(p.dir)} && bash -c ${q(body)} >> ${q(p.log)} 2>&1`;
 }
 
 /** Install the portable base tools needed before the full runner payload. */

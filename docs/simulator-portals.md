@@ -57,9 +57,49 @@ bundles the viewer process and its browser assets
 the session's guest scratch directory keyed by content hash, and starts them as
 an ordinary Sandbox Portal, reached through the Sandbox Portal relay. A later
 start with the same bundle reuses the upload. Only a source installation can
-build the bundle. The guest images do not ship idb, and Xcode may lack the iOS
-platform it needs (`xcodebuild -downloadPlatform iOS`); install them in the
-guest or bake them into a project snapshot.
+build the bundle.
+
+macOS guest preparation installs `idb`, `idb_companion` and `xcodegen` in the
+background (log: `~/.opensession/ios-tools/install.log` in the guest). Until
+they resolve, `start_simulator_portal` starts or waits for that install and
+says so instead of booting a viewer that cannot work.
+
+### Building an iOS app in a macOS Sandbox
+
+The loop that works on a fresh use.computer or Mac VM guest:
+
+1. Install the iOS platform if `xcrun simctl list runtimes` lacks the one
+   Xcode targets. Xcode cannot build for iOS without it, and the base images
+   may ship only an older runtime. It is several GB; run it detached and poll,
+   since one Sandbox command is capped at a few minutes:
+
+   ```sh
+   nohup xcodebuild -downloadPlatform iOS > ~/platform.log 2>&1 &
+   ```
+
+2. Generate the project (`xcodegen generate` for a `project.yml`) and build an
+   unsigned simulator app, also detached on a cold machine: the first asset
+   catalog compile can outlast a single command.
+3. Call `start_simulator_portal` with the workspace-relative `.app` path. The
+   Portal opens beside the conversation in the session that owns the Sandbox.
+   After a rebuild, stop and start it again.
+4. For a device build, sign in the guest from a dedicated keychain: a headless
+   guest cannot unlock the login keychain. Create one with
+   `security create-keychain`, import the distribution certificate with
+   `-T /usr/bin/codesign`, run `security set-key-partition-list`, put it first
+   in the user search list for the archive, and pass
+   `OTHER_CODE_SIGN_FLAGS="--keychain <path>"`. Restore the search list
+   afterwards. Copy the provisioning profile into
+   `~/Library/MobileDevice/Provisioning Profiles`.
+5. Archive, export with `method` `app-store-connect`, and upload with
+   `xcrun altool --upload-app` and an App Store Connect API key. Apple's API
+   cannot create the app record itself; create it once in App Store Connect.
+   Uploading builds and managing TestFlight testers and groups work with the
+   API key.
+
+Keep certificates, keys and API keys out of the repository and out of project
+snapshots; deliver them to the guest per session. Install the iOS platform in a
+project snapshot to skip the download on the next machine.
 
 ## Agent workflow
 
