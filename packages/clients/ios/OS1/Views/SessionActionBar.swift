@@ -204,10 +204,10 @@ struct NextUnreadTab: View {
         return HStack(spacing: 8) { content() }
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 14)
-            .padding(.top, 10)
-            // Part of this sits under the composer (`tuck`).
-            .padding(.bottom, 10 + Self.tuck)
-            .frame(minHeight: 58, alignment: .top)
+            // Snug: the same 8pt above and below the label in the part that
+            // shows. The rest sits under the composer (`tuck`).
+            .padding(.top, 8)
+            .padding(.bottom, 8 + Self.tuck)
             .fixedSize(horizontal: false, vertical: true)
             .background(OS1VisualStyle.flapSurface, in: shape)
             .overlay { shape.stroke(OS1VisualStyle.border, lineWidth: 0.5) }
