@@ -490,14 +490,17 @@ struct TurnStepsView: View {
         }
     }
 
+    /// The thinking still under way: the turn's newest message, while it is
+    /// thinking (web: `activeReasoning`). Once narration follows it, that
+    /// thought is over and keeps no live label above the prose after it.
     private var activeReasoningId: String? {
         guard isLive else { return nil }
-        return items.reversed().compactMap { item in
-            guard case .message(let entry) = item, entry.isReasoning == true else {
-                return nil
-            }
-            return entry.id
+        let lastMessage = items.reversed().lazy.compactMap { item -> TranscriptEntry? in
+            guard case .message(let entry) = item else { return nil }
+            return entry
         }.first
+        guard let lastMessage, lastMessage.isReasoning == true else { return nil }
+        return lastMessage.id
     }
 
     private var sections: [TurnSection] {

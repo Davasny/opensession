@@ -457,6 +457,7 @@ private struct AssetPreview: View {
 
     @State private var text: String?
     @State private var textFailed = false
+    @State private var webPhase = AssetWebPhase.loading
 
     /// Enough of a text file to read on a phone; a generated log can be huge
     /// and the point of the preview is to see what the agent produced.
@@ -467,8 +468,30 @@ private struct AssetPreview: View {
             switch AssetKind.of(asset) {
             case .web:
                 if let url = OS1API.assetURL(sessionId: sessionId, path: asset.path) {
-                    AssetWebView(url: url, sessionId: sessionId)
+                    AssetWebView(url: url, sessionId: sessionId, phase: $webPhase)
                         .ignoresSafeArea(.container, edges: .bottom)
+                        // A page takes a few seconds on a phone; blank until
+                        // then read as a file that would not open.
+                        .overlay {
+                            switch webPhase {
+                            case .loading:
+                                ProgressView()
+                                    .controlSize(.large)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .background(OS1VisualStyle.background)
+                            case .failed(let reason):
+                                ListPlaceholder(
+                                    symbol: "exclamationmark.triangle",
+                                    title: "Couldn't open this file",
+                                    message: reason
+                                ) {
+                                    EmptyView()
+                                }
+                                .background(OS1VisualStyle.background)
+                            case .loaded:
+                                EmptyView()
+                            }
+                        }
                 } else {
                     opaquePlaceholder
                 }
@@ -575,9 +598,16 @@ private struct AssetPreview: View {
 /// rides in as the same `opensession_auth` cookie the web client uses —
 /// scoped to THIS session's assets path, so a page an agent wrote can reach
 /// its own siblings and nothing else on the API.
+enum AssetWebPhase: Equatable {
+    case loading
+    case loaded
+    case failed(String)
+}
+
 private struct AssetWebView: UIViewRepresentable {
     let url: URL
     let sessionId: String
+    @Binding var phase: AssetWebPhase
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -589,11 +619,14 @@ private struct AssetWebView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        webView.navigationDelegate = context.coordinator
+        context.coordinator.phase = $phase
         context.coordinator.load(url, in: webView, sessionId: sessionId)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.phase = $phase
         guard context.coordinator.loaded != url else { return }
         context.coordinator.load(url, in: webView, sessionId: sessionId)
     }
@@ -601,13 +634,59 @@ private struct AssetWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         private(set) var loaded: URL?
+        var phase: Binding<AssetWebPhase>?
+
+        private func set(_ next: AssetWebPhase) {
+            if phase?.wrappedValue != next { phase?.wrappedValue = next }
+        }
+
+        /// The raw route answers an error as a page of its own; say so
+        /// instead of showing it as the file.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse
+        ) async -> WKNavigationResponsePolicy {
+            if navigationResponse.isForMainFrame,
+               let http = navigationResponse.response as? HTTPURLResponse,
+               http.statusCode >= 400 {
+                set(.failed(http.statusCode == 404
+                    ? "The file is no longer in this session's assets."
+                    : "The server answered \(http.statusCode)."))
+                return .cancel
+            }
+            return .allow
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            set(.loaded)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            fail(error)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            fail(error)
+        }
+
+        private func fail(_ error: Error) {
+            // A navigation the policy above cancelled has already said why.
+            if case .failed = phase?.wrappedValue { return }
+            if (error as NSError).code == NSURLErrorCancelled { return }
+            set(.failed(error.localizedDescription))
+        }
 
         /// Seeding has to FINISH before the navigation starts: a cookie set
         /// alongside the load loses the race and the asset comes back a 401.
         func load(_ url: URL, in webView: WKWebView, sessionId: String) {
             loaded = url
+            set(.loading)
             let token = ServerConfig.shared.token
             guard !token.isEmpty, let cookie = Self.authCookie(
                 token: token,
