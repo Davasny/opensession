@@ -178,7 +178,17 @@ enum HtmlTheme {
         "--font-sans": "-apple-system, BlinkMacSystemFont, \"Inter\", \"Segoe UI\", sans-serif",
         "--font-mono": "\"SF Mono\", ui-monospace, \"JetBrains Mono\", Menlo, Consolas, monospace",
         "--radius": "8px",
+        // The transcript's own body text: 17pt on iOS, 13pt on the Mac, in
+        // the regular weight the native markdown uses.
+        "--font-weight": "400",
+        "--font-size": bodySize,
     ]
+
+    #if os(iOS)
+    private static let bodySize = "17px"
+    #else
+    private static let bodySize = "13px"
+    #endif
 
     static let darkDefaults: [String: String] = fonts.merging([
         "--background": "#1c1c1c", "--foreground": "#e9e9e9",

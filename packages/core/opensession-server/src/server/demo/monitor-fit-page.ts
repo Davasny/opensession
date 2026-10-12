@@ -20,7 +20,7 @@ export const MONITOR_FIT_PAGE = `<!doctype html>
   .row { display: flex; justify-content: space-between; }
   .row b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
   input[type="range"] { width: 100%; accent-color: var(--accent); }
-  .checks { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+  .checks { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
   .checks li { display: flex; gap: 8px; align-items: baseline; }
   .checks li::before { content: "✓"; color: var(--success); font-weight: 700; width: 12px; }
   .checks li[data-state="warn"]::before { content: "!"; color: var(--warning); }

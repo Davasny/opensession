@@ -125,7 +125,7 @@ function baseStyle(theme: ArtifactTheme): string {
     "<style>" +
     `:root{color-scheme:${theme.scheme === "light" ? "light" : "dark"};${variables}` +
     "background:var(--background);color:var(--foreground);" +
-    "font-family:var(--font-sans);font-size:15px;line-height:1.5}" +
+    "font-family:var(--font-sans);font-size:var(--font-size,15px);font-weight:var(--font-weight,450);line-height:1.6}" +
     "body{margin:0}" +
     "a{color:var(--link)}" +
     "code,kbd,pre,samp{font-family:var(--font-mono)}" +

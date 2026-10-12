@@ -256,6 +256,9 @@ export const HTML_THEME_TOKENS: Record<string, string> = {
   "--chart-6": "--tool-web",
   "--font-sans": "--sans",
   "--font-mono": "--mono",
+  // The reply's own body size (15px, 17px on phones), so page text matches
+  // the prose around the frame.
+  "--font-size": "--type-body",
 };
 
 const FONTS = {
@@ -264,6 +267,10 @@ const FONTS = {
   "--font-mono":
     '"SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace',
   "--radius": "8px",
+  "--font-size": "15px",
+  // Transcript prose weight (.markdown in base-markdown.css), one step
+  // under the app's medium; the browser default 400 reads thinner.
+  "--font-weight": "450",
 };
 
 /** The stock themes' values, keyed by page variable. */
@@ -350,7 +357,7 @@ export const HTML_THEME_GUIDE =
   "--background (identical to the transcript around the frame), --foreground, --muted, --muted-foreground, --faint-foreground, " +
   "--card, --card-foreground, --border, --border-strong, --input, --primary, --primary-foreground (solid buttons), " +
   "--accent, --accent-surface (brand blue and its tint), --link, --destructive, --warning, --success, --info and a -surface tint of each, " +
-  "--code-background, --code-foreground, --chart-1 … --chart-6 (categorical series), --radius, --font-sans, --font-mono. " +
+  "--code-background, --code-foreground, --chart-1 … --chart-6 (categorical series), --radius, --font-sans, --font-mono, --font-size and --font-weight (the reply's body text; size headings relative to it). " +
   "The base stylesheet sets html background, colour and font from these, body margin 0, and hides the page's scrollbar; your own CSS overrides it.";
 
 /** Agent-facing layout rules for a page that sits inside a reply. */

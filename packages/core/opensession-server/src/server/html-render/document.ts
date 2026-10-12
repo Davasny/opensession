@@ -30,10 +30,12 @@ import {
 export const MAX_PAGE_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
+// Text matches the reply around the frame: its size and medium weight, and
+// no font-smoothing override (that thins every stem on macOS).
 // The frame scrolls a page taller than itself, but a scrollbar inside the
 // reply reads as a box within the transcript, so it stays hidden.
 export const BASE_CSS =
-  "html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;scrollbar-width:none}" +
+  "html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:var(--font-size,15px);font-weight:var(--font-weight,450);line-height:1.6;-webkit-text-size-adjust:100%;scrollbar-width:none}" +
   "html::-webkit-scrollbar{display:none}body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}a{color:var(--link)}" +
   // Focus rings paint inside the element, so the frame edge never clips them.
   ":where(:focus-visible){outline:2px solid var(--accent);outline-offset:-2px}";

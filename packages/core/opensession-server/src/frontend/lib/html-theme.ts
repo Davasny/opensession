@@ -20,6 +20,9 @@ export function readHtmlTheme(): HtmlTheme {
   const variables: Record<string, string> = {};
   for (const [name, token] of Object.entries(HTML_THEME_TOKENS))
     variables[name] = style.getPropertyValue(token).trim() || defaults[name]!;
+  // Values with no app token (the regular weight) keep the stock value.
+  for (const [name, value] of Object.entries(defaults))
+    variables[name] ??= value;
   // The app's block corner, at the user's roundness setting.
   const rf = Number.parseFloat(style.getPropertyValue("--rf"));
   variables["--radius"] = Number.isFinite(rf)
