@@ -16,7 +16,7 @@ final class ComposerSessionProjectionTests: XCTestCase {
         let canonical = "Compare @session:\(id) now"
         let projection = ComposerSessionProjection(canonical)
 
-        XCTAssertEqual(projection.displayText, "Compare @session:\(title) now")
+        XCTAssertEqual(projection.displayText, "Compare \(title) now")
         XCTAssertEqual(projection.canonicalText, canonical)
     }
 
@@ -25,7 +25,7 @@ final class ComposerSessionProjectionTests: XCTestCase {
         let canonical = "Use \(url) for context"
         let projection = ComposerSessionProjection(canonical)
 
-        XCTAssertEqual(projection.displayText, "Use @session:\(title) for context")
+        XCTAssertEqual(projection.displayText, "Use \(title) for context")
         XCTAssertEqual(
             projection.canonicalText(afterEditing: projection.displayText + "."),
             canonical + "."
@@ -84,7 +84,7 @@ final class ComposerSessionProjectionTests: XCTestCase {
 
         XCTAssertEqual(
             ComposerSessionProjection(canonical).displayText,
-            "@session:\(title)"
+            title
         )
     }
 
@@ -133,17 +133,17 @@ final class ComposerSessionProjectionTests: XCTestCase {
 
         XCTAssertEqual(
             state.binding(raw, titleGeneration: generation, refreshTitles: false).wrappedValue,
-            "Compare @session:\(title) now"
+            "Compare \(title) now"
         )
         SessionLinks.register(titles: [id: "A much longer renamed session title"])
         generation = TranscriptLinks.shared.generation
         let focused = state.binding(raw, titleGeneration: generation, refreshTitles: false)
-        focused.wrappedValue = "Compare @session:\(title) now!"
-        XCTAssertEqual(focused.wrappedValue, "Compare @session:\(title) now!")
+        focused.wrappedValue = "Compare \(title) now!"
+        XCTAssertEqual(focused.wrappedValue, "Compare \(title) now!")
 
         XCTAssertEqual(
             state.binding(raw, titleGeneration: generation, refreshTitles: true).wrappedValue,
-            "Compare @session:A much longer renamed session title now!"
+            "Compare A much longer renamed session title now!"
         )
     }
 
@@ -167,7 +167,7 @@ final class ComposerSessionProjectionTests: XCTestCase {
 
         XCTAssertEqual(
             state.binding(raw, titleGeneration: generation, refreshTitles: true).wrappedValue,
-            "Compare @session:\(title) now!"
+            "Compare \(title) now!"
         )
     }
 }

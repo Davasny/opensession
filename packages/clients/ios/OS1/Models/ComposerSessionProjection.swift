@@ -165,7 +165,9 @@ struct ComposerSessionProjection {
                 id: id,
                 range: range,
                 name: name,
-                title: "@session:\(name)"
+                // The title alone: the field paints it as a pill, as the
+                // web composer does (ComposerQuoteHighlight).
+                title: name
             ))
         }
 
@@ -187,7 +189,9 @@ struct ComposerSessionProjection {
                 id: id,
                 range: range,
                 name: name,
-                title: "@session:\(name)"
+                // The title alone: the field paints it as a pill, as the
+                // web composer does (ComposerQuoteHighlight).
+                title: name
             ))
         }
 

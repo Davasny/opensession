@@ -21,9 +21,11 @@ import AppKit
 /// platform text view by frame.
 struct ComposerQuoteHighlight: View {
     let text: String
+    /// Session references, painted as accent pills like the web's.
+    var sessionRanges: [NSRange] = []
 
     var body: some View {
-        ComposerQuoteHighlightBridge(text: text)
+        ComposerQuoteHighlightBridge(text: text, sessionRanges: sessionRanges)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -32,6 +34,7 @@ struct ComposerQuoteHighlight: View {
 #if os(iOS)
 private struct ComposerQuoteHighlightBridge: UIViewRepresentable {
     let text: String
+    let sessionRanges: [NSRange]
 
     func makeCoordinator() -> ComposerQuotePainter { ComposerQuotePainter() }
 
@@ -43,7 +46,7 @@ private struct ComposerQuoteHighlightBridge: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UIView, context: Context) {
-        context.coordinator.schedule(text: text, marker: view)
+        context.coordinator.schedule(text: text, sessionRanges: sessionRanges, marker: view)
     }
 }
 
@@ -52,10 +55,13 @@ final class ComposerQuotePainter {
     private weak var textView: UITextView?
     private var text = ""
     private var painted: [ComposerQuoteLines.Line] = []
+    private var sessionRanges: [NSRange] = []
+    private var paintedSessions: [NSRange] = []
     private var scheduled = false
 
-    func schedule(text: String, marker: UIView) {
+    func schedule(text: String, sessionRanges: [NSRange], marker: UIView) {
         self.text = text
+        self.sessionRanges = sessionRanges
         guard !scheduled else { return }
         scheduled = true
         // After SwiftUI has pushed the new string into the field.
@@ -82,11 +88,25 @@ final class ComposerQuotePainter {
             return
         }
         let lines = ComposerQuoteLines.lines(in: text)
-        guard lines != painted || !lines.isEmpty else { return }
+        let length = (text as NSString).length
+        let sessions = sessionRanges.filter { NSMaxRange($0) <= length }
+        guard lines != painted || sessions != paintedSessions || !lines.isEmpty || !sessions.isEmpty
+        else { return }
         painted = lines
+        paintedSessions = sessions
+        let accent = UIColor(OS1VisualStyle.accent)
         if let layout = textView.textLayoutManager,
            let content = layout.textContentManager {
             layout.removeRenderingAttribute(.foregroundColor, for: layout.documentRange)
+            layout.removeRenderingAttribute(.backgroundColor, for: layout.documentRange)
+            for session in sessions {
+                if let range = Self.textRange(session, in: content) {
+                    layout.addRenderingAttribute(.foregroundColor, value: accent, for: range)
+                    layout.addRenderingAttribute(
+                        .backgroundColor, value: accent.withAlphaComponent(0.16), for: range
+                    )
+                }
+            }
             for line in lines {
                 if let range = Self.textRange(line.line, in: content) {
                     layout.addRenderingAttribute(.foregroundColor, value: UIColor.secondaryLabel, for: range)
@@ -103,9 +123,14 @@ final class ComposerQuotePainter {
             let full = NSRange(location: 0, length: storage.length)
             storage.beginEditing()
             storage.addAttribute(.foregroundColor, value: UIColor.label, range: full)
+            storage.removeAttribute(.backgroundColor, range: full)
             for line in lines {
                 storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: line.line)
                 storage.addAttribute(.foregroundColor, value: UIColor.tertiaryLabel, range: line.marker)
+            }
+            for session in sessions {
+                storage.addAttribute(.foregroundColor, value: accent, range: session)
+                storage.addAttribute(.backgroundColor, value: accent.withAlphaComponent(0.16), range: session)
             }
             storage.endEditing()
             textView.typingAttributes[.foregroundColor] = UIColor.label
@@ -138,13 +163,14 @@ final class ComposerQuotePainter {
 #else
 private struct ComposerQuoteHighlightBridge: NSViewRepresentable {
     let text: String
+    let sessionRanges: [NSRange]
 
     func makeCoordinator() -> ComposerQuotePainter { ComposerQuotePainter() }
 
     func makeNSView(context: Context) -> NSView { NSView() }
 
     func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.schedule(text: text, marker: view)
+        context.coordinator.schedule(text: text, sessionRanges: sessionRanges, marker: view)
     }
 }
 
@@ -154,13 +180,15 @@ final class ComposerQuotePainter {
     private var text = ""
     private var scheduled = false
     private var observers: [NSObjectProtocol] = []
+    private var sessionRanges: [NSRange] = []
 
     deinit {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
     }
 
-    func schedule(text: String, marker: NSView) {
+    func schedule(text: String, sessionRanges: [NSRange], marker: NSView) {
         self.text = text
+        self.sessionRanges = sessionRanges
         guard !scheduled else { return }
         scheduled = true
         DispatchQueue.main.async { [weak self, weak marker] in
@@ -214,9 +242,15 @@ final class ComposerQuotePainter {
                 let value = NSMutableAttributedString(attributedString: textField.attributedStringValue)
                 let full = NSRange(location: 0, length: value.length)
                 value.addAttribute(.foregroundColor, value: NSColor.labelColor, range: full)
+                value.removeAttribute(.backgroundColor, range: full)
                 for line in lines where NSMaxRange(line.line) <= value.length {
                     value.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: line.line)
                     value.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: line.marker)
+                }
+                let accent = NSColor(OS1VisualStyle.accent)
+                for session in sessionRanges where NSMaxRange(session) <= value.length {
+                    value.addAttribute(.foregroundColor, value: accent, range: session)
+                    value.addAttribute(.backgroundColor, value: accent.withAlphaComponent(0.16), range: session)
                 }
                 if !value.isEqual(to: textField.attributedStringValue) {
                     textField.attributedStringValue = value
@@ -242,15 +276,26 @@ final class ComposerQuotePainter {
             wanted.append((line.line, .secondaryLabelColor))
             wanted.append((line.marker, .tertiaryLabelColor))
         }
+        let accent = NSColor(OS1VisualStyle.accent)
+        let pills = sessionRanges.filter { NSMaxRange($0) <= storage.length }
+        for session in pills { wanted.append((session, accent)) }
         // Skip the write when every run already has its colour.
         let target = NSMutableAttributedString(attributedString: storage)
+        target.removeAttribute(.backgroundColor, range: full)
         for (range, color) in wanted { target.addAttribute(.foregroundColor, value: color, range: range) }
+        for session in pills {
+            target.addAttribute(.backgroundColor, value: accent.withAlphaComponent(0.16), range: session)
+        }
         guard !target.isEqual(to: storage) else { return }
         // No selection write: an attribute edit leaves it where it was, and
         // setting it would post a selection change for SwiftUI to map
         // against a string it may be mid-way through replacing.
         storage.beginEditing()
+        storage.removeAttribute(.backgroundColor, range: full)
         for (range, color) in wanted { storage.addAttribute(.foregroundColor, value: color, range: range) }
+        for session in pills {
+            storage.addAttribute(.backgroundColor, value: accent.withAlphaComponent(0.16), range: session)
+        }
         storage.endEditing()
         textView.typingAttributes[.foregroundColor] = NSColor.labelColor
     }

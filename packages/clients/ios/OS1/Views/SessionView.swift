@@ -3519,38 +3519,6 @@ private struct SessionInputBar: View {
                     )
             }
 
-            if !viewModel.attachedImages.isEmpty {
-                AttachedImagesRow(
-                    images: viewModel.attachedImages,
-                    onRemove: { image in
-                        guard let index = viewModel.attachedImages.firstIndex(of: image)
-                        else { return }
-                        viewModel.draft = ImageAttachmentComments.rebasing(
-                            viewModel.draft, removingImageAt: index
-                        )
-                        viewModel.attachedImages.remove(at: index)
-                    },
-                    onComment: { index, region, text in
-                        viewModel.draft = ImageAttachmentComments.appending(
-                            to: viewModel.draft,
-                            imageIndex: index,
-                            region: region,
-                            comment: text
-                        )
-                    }
-                )
-            }
-
-            if !viewModel.attachedFiles.isEmpty {
-                AttachedFilesRow(
-                    files: viewModel.attachedFiles,
-                    staging: viewModel.stagingFileIDs,
-                    failed: viewModel.failedFileIDs,
-                    onRetry: { file in Task { await viewModel.stage(file) } },
-                    onRemove: { viewModel.removeFile($0) }
-                )
-            }
-
             if let typingLabel {
                 Text(typingLabel)
                     .font(.caption)
@@ -4272,6 +4240,45 @@ private struct SessionInputBar: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // Attachments sit inside the box, above the text, as on the
+            // web composer: they belong to the message being written.
+            if !viewModel.attachedImages.isEmpty || !viewModel.attachedFiles.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !viewModel.attachedImages.isEmpty {
+                        AttachedImagesRow(
+                            images: viewModel.attachedImages,
+                            onRemove: { image in
+                                guard let index = viewModel.attachedImages.firstIndex(of: image)
+                                else { return }
+                                viewModel.draft = ImageAttachmentComments.rebasing(
+                                    viewModel.draft, removingImageAt: index
+                                )
+                                viewModel.attachedImages.remove(at: index)
+                            },
+                            onComment: { index, region, text in
+                                viewModel.draft = ImageAttachmentComments.appending(
+                                    to: viewModel.draft,
+                                    imageIndex: index,
+                                    region: region,
+                                    comment: text
+                                )
+                            }
+                        )
+                    }
+
+                    if !viewModel.attachedFiles.isEmpty {
+                        AttachedFilesRow(
+                            files: viewModel.attachedFiles,
+                            staging: viewModel.stagingFileIDs,
+                            failed: viewModel.failedFileIDs,
+                            onRetry: { file in Task { await viewModel.stage(file) } },
+                            onRemove: { viewModel.removeFile($0) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
+            }
             // Bottom-aligned: as the draft grows the field rises and the round
             // buttons stay seated on the pill's bottom edge, rather than
             // drifting to the middle of a tall row.
@@ -4297,7 +4304,10 @@ private struct SessionInputBar: View {
                 // Dims `>` quote lines in place: colour only, on the field's
                 // own text view, so metrics, selection, IME and the send key
                 // stay the stock field's.
-                .background(ComposerQuoteHighlight(text: projectedDraft.wrappedValue))
+                .background(ComposerQuoteHighlight(
+                    text: projectedDraft.wrappedValue,
+                    sessionRanges: sessionProjection.displayedReferenceRanges
+                ))
                 .textFieldStyle(.plain)
                 .disabled(viewModel.safety != nil)
                 .lineLimit(1...10)

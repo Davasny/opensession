@@ -105,6 +105,12 @@ final class ComposerSessionProjectionState {
         return projection
     }
 
+    /// Where the field shows each session reference, for the pill paint.
+    /// Read after the binding's getter has projected the current draft.
+    var displayedReferenceRanges: [NSRange] {
+        cachedProjection?.references.map(\.displayRange) ?? []
+    }
+
     private func cache(_ projection: ComposerSessionProjection, generation: Int) {
         cachedCanonical = projection.canonicalText
         cachedGeneration = generation

@@ -1,3 +1,4 @@
+import ImageIO
 import SwiftUI
 import PhotosUI
 import CoreTransferable
@@ -242,22 +243,30 @@ struct AttachedImagesRow: View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {
                 ForEach(images) { image in
-                    ZStack(alignment: .topTrailing) {
-                        thumbnail(image)
-                        Button {
-                            onRemove(image)
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 15))
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, .black.opacity(0.6))
+                    // The web's ImageThumbs: the picture at its own shape,
+                    // 56pt tall, with a solid ✕ badge on the corner.
+                    thumbnail(image)
+                        .overlay(alignment: .topTrailing) {
+                            Button {
+                                onRemove(image)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(OS1VisualStyle.background)
+                                    .frame(width: 20, height: 20)
+                                    .background(OS1VisualStyle.text, in: Circle())
+                                    .frame(width: 32, height: 32)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove attached image")
+                            .offset(x: 10, y: -10)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Remove attached image")
-                        .padding(2)
-                    }
                 }
             }
+            // Room for the corner badges, which overhang each thumbnail.
+            .padding(.top, 8)
+            .padding(.trailing, 10)
             .padding(.vertical, 2)
         }
         .scrollIndicators(.hidden)
@@ -307,9 +316,17 @@ struct AttachedImagesRow: View {
     }
 
     private func thumbnailImage(_ image: AttachedImage) -> some View {
-        DataImage(data: image.jpegData)
-            .frame(width: 56, height: 56)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return DataImage(data: image.jpegData)
+            .frame(width: Self.thumbnailWidth(image), height: 56)
+            .clipShape(shape)
+            .overlay { shape.strokeBorder(OS1VisualStyle.border, lineWidth: 1) }
+    }
+
+    /// 56pt tall at the picture's own aspect, between 40 and 120pt wide.
+    private static func thumbnailWidth(_ image: AttachedImage) -> CGFloat {
+        guard let size = image.pixelSize, size.height > 0 else { return 56 }
+        return min(120, max(40, 56 * size.width / size.height))
     }
 }
 
@@ -2039,5 +2056,18 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+extension AttachedImage {
+    /// Pixel dimensions from the encoded header only (no decode), for
+    /// sizing a thumbnail at the picture's own aspect.
+    var pixelSize: CGSize? {
+        guard let source = CGImageSourceCreateWithData(jpegData as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? CGFloat,
+              let height = properties[kCGImagePropertyPixelHeight] as? CGFloat
+        else { return nil }
+        return CGSize(width: width, height: height)
     }
 }
