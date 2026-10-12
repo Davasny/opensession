@@ -135,22 +135,15 @@ struct SessionView: View {
         horizontalSizeClass == .compact ? 16 : 20
     }
 
-    /// Where the reader was when a page of earlier history landed, measured
-    /// from the END of the transcript — the one coordinate the page doesn't
-    /// move (see `TranscriptScroll.distanceFromEnd`). Set from the scroll
-    /// geometry's PREVIOUS value the first time the content grows, which is
-    /// the last thing measured before the page was laid out.
-    @State private var prependDistanceFromEnd: CGFloat?
-    /// The content height before the page landed. A lazy stack can briefly
-    /// report less than this while re-realizing its rows; that is not a valid
-    /// restoration target yet.
-    @State private var prependBaselineContentHeight: CGFloat?
-    /// Armed when a page lands, disarmed by the height change it is waiting
-    /// for.
-    @State private var awaitingPrepend = false
-    /// A page requested before the reader began a newer gesture must not claim
-    /// their position when its delayed response finally arrives.
-    @State private var prependRequestInteraction: Int?
+    /// The row the reader was on when a page of earlier history landed, and
+    /// where it sat then. While it is set, every move of that row (the page
+    /// laying out above it, its rows realizing and their markdown settling)
+    /// moves the visible top by the same amount, so the passage stays put.
+    /// Anchored to a row rather than to the end of the transcript, it holds
+    /// through a flick in progress and through output arriving at the tail.
+    @State private var prependHold: TranscriptPrependHold?
+    @State private var prependHoldExpiry: Task<Void, Never>?
+    @State private var scrollNudge = TranscriptScrollNudge.Handle()
     @State private var scrollInteractionGeneration = 0
     /// Lets the generic new-output observer distinguish a history page from a
     /// real tail append, regardless of modifier callback ordering.
@@ -434,16 +427,20 @@ struct SessionView: View {
                         )
                     } action: { old, new in
                         readerTracker.visibleTop = new.offset + new.insetTop
-                        let wasFollowing = pinnedToBottom && !readerMovedTowardHistory
-                        if awaitingPrepend, new.contentHeight != old.contentHeight {
-                            awaitingPrepend = false
-                            prependDistanceFromEnd = TranscriptScroll.distanceFromEnd(
-                                offset: old.offset,
-                                contentHeight: old.contentHeight
-                            )
-                            prependBaselineContentHeight = old.contentHeight
+                        readerTracker.visibleHeight = new.containerHeight - new.insetTop - new.insetBottom
+                        #if DEBUG
+                        if ScrollTrace.on {
+                            let a = readerTracker.anchor
+                            ScrollTrace.log("geo off=\(Int(new.offset)) h=\(Int(new.contentHeight)) anchor=\(a?.blockId.suffix(8) ?? "-") ao=\(Int(a?.offset ?? 0)) hold=\(prependHold?.blockId.suffix(8) ?? "-") active=\(readerScrollActive)")
                         }
-                        restoreAfterPrependIfPossible(new)
+                        #endif
+                        let wasFollowing = pinnedToBottom && !readerMovedTowardHistory
+                        // Ask for the next page well before the reader reaches
+                        // the top, so it is usually in before they get there.
+                        if readerMovedTowardHistory,
+                           new.offset + new.insetTop < new.containerHeight * 2 {
+                            requestEarlier()
+                        }
                         let nearBottom = TranscriptScroll.isNearBottom(
                             TranscriptScroll.Geometry(
                                 visibleMaxY: new.visibleMaxY,
@@ -574,10 +571,15 @@ struct SessionView: View {
                         let readerPhase = phase == .tracking
                             || phase == .interacting
                             || phase == .decelerating
+                        #if DEBUG
+                        ScrollTrace.log("phase \(old) -> \(phase)")
+                        #endif
                         if phase == .interacting, old != .interacting {
                             scrollInteractionGeneration += 1
                             endHold()
-                            cancelPrependRestore()
+                            // A page landing mid-flick still holds the
+                            // reader's row (`prependHold`): that is a fix to
+                            // the layout, not a scroll competing with theirs.
                             cancelAnchorRestore()
                             if !readerMovedTowardHistory {
                                 readerMovedTowardHistory = true
@@ -605,7 +607,10 @@ struct SessionView: View {
                         }
                         // Remember the reader's place once scrolling rests,
                         // not per frame. Disappearing saves it too.
-                        if phase == .idle, old != .idle { rememberReaderPlace() }
+                        if phase == .idle, old != .idle {
+                            rememberReaderPlace()
+                            recoverBlankViewport(proxy)
+                        }
                         // Reading counts as being here: a hand on the transcript
                         // is what keeps our face on this session (the view model
                         // throttles it). Output scrolling past on its own does
@@ -716,16 +721,15 @@ struct SessionView: View {
 
                     outputScroll
                         .onChange(of: viewModel.historyPrependSeq) {
+                        #if DEBUG
+                        ScrollTrace.log("prependSeq pending=\(pendingReaderAnchor != nil)")
+                        #endif
                         if pendingReaderAnchor != nil {
                             continuePendingAnchor(proxy)
                             return
                         }
-                        // Keep the reader where they were. The rows land above
-                        // everything on screen, so the geometry observer above
-                        // takes the measurement and `restoreAfterPrepend` puts
-                        // the position back. A "jump to the start" walk pages
-                        // repeatedly on its way and ends with a scroll of its
-                        // own, so it opts out.
+                        // Keep the reader where they were: the rows land above
+                        // everything on screen (`prependHold`).
                         beginPrependRestoreIfPossible()
                         }
                         // A landed "jump to the start": the walk's last page is
@@ -1266,9 +1270,12 @@ struct SessionView: View {
     }
 
     private func requestEarlier() {
-        guard viewModel.canLoadEarlier, !viewModel.loadingEarlier else { return }
-        cancelPrependRestore()
-        prependRequestInteraction = scrollInteractionGeneration
+        guard viewModel.canLoadEarlier, !viewModel.loadingEarlier,
+              pendingReaderAnchor == nil, !viewModel.jumpingToStart
+        else { return }
+        #if DEBUG
+        ScrollTrace.log("request earlier gen=\(scrollInteractionGeneration)")
+        #endif
         viewModel.loadEarlier()
     }
 
@@ -1748,30 +1755,50 @@ struct SessionView: View {
         // switch): keep what the last resting save recorded.
     }
 
-    /// Put the reader back where the page of earlier history found them as
-    /// soon as the lazy stack reports a valid post-prepend height.
-    ///
-    /// SwiftUI anchors a scroll view across a pure SIZE change, but not across
-    /// the data change a prepend is: measured on an iPhone 17 Pro, one page
-    /// moved the reader 1,254pt the first time and 2,186pt the next — to the
-    /// top of the transcript, several screens from the line they were reading.
-    ///
-    /// Later markdown growth is an ordinary size change that SwiftUI anchors
-    /// itself. Rewriting the offset for every growth step fought scroll
-    /// momentum and made one history page feel like a dozen jumps.
-    private func restoreAfterPrependIfPossible(_ geometry: TranscriptGeometry) {
-        guard let distance = prependDistanceFromEnd,
-              let baseline = prependBaselineContentHeight
-        else { return }
-        guard let y = TranscriptScroll.restoredScrollY(
-            distanceFromEnd: distance,
-            contentHeight: geometry.contentHeight,
-            insetTop: geometry.insetTop,
-            minimumContentHeight: baseline
-        ) else { return }
-        prependDistanceFromEnd = nil
-        prependBaselineContentHeight = nil
-        scrollPosition.scrollTo(y: y)
+    /// The held row laid out again (`TranscriptPrependHold`).
+    private func holdPrependRow(maxY: CGFloat) {
+        guard var hold = prependHold else { return }
+        let shift = hold.moved(toMaxY: maxY)
+        prependHold = hold
+        if let shift { nudgeReader(by: shift, "row") }
+    }
+
+    /// A lazy stack can come to rest over a stretch it has not built rows
+    /// for, and then shows nothing until a long scroll rebuilds them. When the
+    /// reader stops on a screen no row covers, bring the nearest row in by id,
+    /// which makes the stack lay out around it.
+    private func recoverBlankViewport(_ proxy: ScrollViewProxy) {
+        let generation = scrollInteractionGeneration
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard generation == scrollInteractionGeneration, !viewModel.displayBlocks.isEmpty
+            else { return }
+            let top = readerTracker.visibleTop
+            let bottom = top + max(readerTracker.visibleHeight, 1)
+            let rows = readerTracker.rows
+            // Rows on both sides and none across the screen: a gap the stack
+            // left unbuilt, never a screen showing something untracked (the
+            // live reply, the history loader).
+            guard !rows.contains(where: { $0.value.maxY > top && $0.value.minY < bottom }),
+                  rows.contains(where: { $0.value.maxY <= top }),
+                  let target = rows.filter({ $0.value.minY >= bottom }).min(by: { $0.value.minY < $1.value.minY })?.key
+            else { return }
+            #if DEBUG
+            ScrollTrace.log("blank viewport at \(Int(top)): bringing in \(target.suffix(8))")
+            #endif
+            proxy.scrollTo(target, anchor: .top)
+        }
+    }
+
+    private func nudgeReader(by shift: CGFloat, _ reason: String) {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["OS1_NO_HOLD"] == "1" { return }
+        ScrollTrace.log("hold \(reason) shift=\(Int(shift))")
+        #endif
+        if !scrollNudge.nudge(by: shift) {
+            readerTracker.visibleTop += shift
+            scrollPosition.scrollTo(y: readerTracker.visibleTop)
+        }
     }
 
     @ViewBuilder private var transcriptRows: some View {
@@ -1874,6 +1901,7 @@ struct SessionView: View {
                 alignment: .top
             )
             .coordinateSpace(name: Self.transcriptContentSpace)
+            .background(TranscriptScrollNudge(handle: scrollNudge))
         }
         .softScrollEdges()
         .environment(\.transcriptQuoteSelection, viewModel.quoteSelection)
@@ -1944,30 +1972,67 @@ struct SessionView: View {
         .onGeometryChange(for: TranscriptRowExtent.self) { geometry in
             let frame = geometry.frame(in: .named(Self.transcriptContentSpace))
             return TranscriptRowExtent(minY: frame.minY, maxY: frame.maxY)
-        } action: { [readerTracker] extent in
+        } action: { extent in
             readerTracker.record(block.id, extent)
+            #if DEBUG
+            if ScrollTrace.on, block.id == prependHold?.blockId || block.id == viewModel.displayBlocks.first?.id {
+                ScrollTrace.log("row \(block.id.suffix(8)) minY=\(Int(extent.minY)) first=\(block.id == viewModel.displayBlocks.first?.id)")
+            }
+            #endif
+            if block.id == prependHold?.blockId { holdPrependRow(maxY: extent.maxY) }
         }
         .onDisappear { [readerTracker] in readerTracker.forget(block.id) }
     }
 
+    /// A page of history just landed: hold the row the reader is on, as it
+    /// was laid out before the page (the tracker has not seen the new layout
+    /// yet). A "jump to the start" walk ends with a scroll of its own.
     private func beginPrependRestoreIfPossible() {
-        guard !viewModel.jumpingToStart,
-              prependRequestInteraction == scrollInteractionGeneration
+        // The row in the middle of the screen, as laid out before the page
+        // (the tracker has not seen the new layout yet): what the reader is
+        // looking at. Never the first row: the session's opening message
+        // stays first and every page lands below it, so it never moves. A turn
+        // split across the page boundary comes back as one block under its
+        // earlier entry's id: the row is then that block, found by an entry
+        // it held.
+        guard !viewModel.jumpingToStart, !holdingAtLatest,
+              let anchor = TranscriptScroll.readerAnchor(
+                  visibleTop: readerTracker.visibleTop + readerTracker.visibleHeight / 2,
+                  rows: readerTracker.rows.filter { $0.key != viewModel.displayBlocks.first?.id }
+              ),
+              let row = readerTracker.rows[anchor.blockId]
         else {
             cancelPrependRestore()
             return
         }
-        prependRequestInteraction = nil
-        awaitingPrepend = true
+        let survives = viewModel.displayBlocks.contains { $0.id == anchor.blockId }
+        guard let held = survives ? anchor.blockId : viewModel.blockId(containing: anchor.blockId) else {
+            #if DEBUG
+            ScrollTrace.log("prepend no hold for \(anchor.blockId.suffix(8))")
+            #endif
+            cancelPrependRestore()
+            return
+        }
+        #if DEBUG
+        ScrollTrace.log("rows " + readerTracker.rows.sorted { $0.value.minY < $1.value.minY }.prefix(6).map { "\($0.key.suffix(8))@\(Int($0.value.minY))-\(Int($0.value.maxY))" }.joined(separator: " ") + " top=\(Int(readerTracker.visibleTop)) vh=\(Int(readerTracker.visibleHeight))")
+        ScrollTrace.log("prepend landed hold=\(held.suffix(8)) was=\(anchor.blockId.suffix(8)) maxY=\(Int(row.maxY))")
+        #endif
+        prependHold = TranscriptPrependHold(blockId: held, maxY: row.maxY, measured: survives)
+        // Long enough for the page's rows near the reader to realize and
+        // their markdown to settle; after that the reader's own scrolling
+        // owns the position again.
+        prependHoldExpiry?.cancel()
+        prependHoldExpiry = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled else { return }
+            prependHold = nil
+        }
     }
 
     private func displayItemsChanged() {
         let isHistoryPrepend = lastDisplayHistoryPrependSeq != viewModel.historyPrependSeq
         lastDisplayHistoryPrependSeq = viewModel.historyPrependSeq
         if isHistoryPrepend { return }
-        // A tail append during a restore breaks its pure-prepend invariant, so
-        // the reader's current position wins over the stale distance from end.
-        cancelPrependRestore()
         if !pinnedToBottom, !holdingAtLatest {
             newBelow = true
         }
@@ -1978,7 +2043,6 @@ struct SessionView: View {
     }
 
     private func liveTextChanged() {
-        cancelPrependRestore()
         if !pinnedToBottom, !viewModel.liveText.isEmpty {
             newBelow = true
         }
@@ -1993,10 +2057,9 @@ struct SessionView: View {
     }
 
     private func cancelPrependRestore() {
-        awaitingPrepend = false
-        prependDistanceFromEnd = nil
-        prependBaselineContentHeight = nil
-        prependRequestInteraction = nil
+        prependHold = nil
+        prependHoldExpiry?.cancel()
+        prependHoldExpiry = nil
     }
 
     /// Take the transcript to its last row — the ask card, the run clock, the
@@ -2076,6 +2139,18 @@ struct SessionView: View {
         proxy.scrollTo(target, anchor: .top)
     }
 }
+
+#if DEBUG
+/// `OS1_SCROLL_TRACE=1`: the transcript's scroll geometry and history-page
+/// events on stdout, for diagnosing jumps.
+enum ScrollTrace {
+    static let on = ProcessInfo.processInfo.environment["OS1_SCROLL_TRACE"] == "1"
+    static func log(_ line: @autoclosure () -> String) {
+        guard on else { return }
+        print("TRACE \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime)) \(line())")
+    }
+}
+#endif
 
 private extension View {
     /// Mark the transcript's last row, which carries the clearance that keeps

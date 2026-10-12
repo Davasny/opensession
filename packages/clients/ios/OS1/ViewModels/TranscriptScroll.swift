@@ -35,45 +35,6 @@ enum TranscriptScroll {
         geometry.contentHeight + geometry.insetBottom - geometry.visibleMaxY
     }
 
-    /// Where the reader is, measured from the END of the transcript.
-    ///
-    /// This is the coordinate a page of earlier history does not move: its
-    /// rows land above everything on screen, so the distance from the content's
-    /// end is the same before and after, while the offset from the TOP has
-    /// grown by the whole page.
-    static func distanceFromEnd(offset: CGFloat, contentHeight: CGFloat) -> CGFloat {
-        contentHeight - offset
-    }
-
-    /// What to hand `ScrollPosition.scrollTo(y:)` to put the reader back where
-    /// a prepend found them.
-    ///
-    /// The inverse of `distanceFromEnd`, plus the top inset, and both halves
-    /// are load-bearing. It is a function rather than one line at the call
-    /// site because the restore re-runs as the prepended rows settle:
-    /// markdown parses asynchronously and the lazy stack realizes rows as it
-    /// goes, so `contentHeight` keeps climbing for a beat after the page
-    /// arrives and the answer has to be recomputed against the newest one.
-    ///
-    /// The inset is the trap. `scrollTo(y:)` measures from the top of the
-    /// content AREA, while `contentOffset` — what `distanceFromEnd` is built
-    /// from — starts one top inset above it. Without the term every restore
-    /// lands short by the height of the navigation bar; measured on an iPhone
-    /// 17 Pro, exactly 116pt, on every tick.
-    static func restoredScrollY(
-        distanceFromEnd: CGFloat,
-        contentHeight: CGFloat,
-        insetTop: CGFloat,
-        minimumContentHeight: CGFloat = 0
-    ) -> CGFloat? {
-        guard contentHeight >= minimumContentHeight else { return nil }
-        let y = contentHeight - distanceFromEnd + insetTop
-        // A LazyVStack can briefly report less content than it had before the
-        // prepend while it re-realizes rows. There is no valid position above
-        // zero, so wait for the next measurement instead of clamping to top.
-        return y >= 0 ? y : nil
-    }
-
     /// Whether new output should follow the reader down.
     ///
     /// `tolerance` has to clear the transcript's trailing padding: scrolling to
@@ -165,6 +126,34 @@ struct TranscriptReaderAnchor: Equatable, Sendable {
     /// Visible top minus the block's top, in points. Negative when the
     /// visible top sits in the gap above the block.
     var offset: CGFloat
+}
+
+/// The row a page of earlier history must not move: while a page lays out
+/// above the reader, each new report of the row's bottom edge says how far
+/// to move the reader with it. The bottom edge, because a reader inside one
+/// long turn that the page extends upwards keeps their place relative to
+/// everything below them in it.
+struct TranscriptPrependHold: Equatable {
+    let blockId: String
+    /// Where the bottom edge should be for the reader not to have moved.
+    private var expectedMaxY: CGFloat
+    /// Where it last reported it; nil for a block the page just formed.
+    private var reportedMaxY: CGFloat?
+
+    init(blockId: String, maxY: CGFloat, measured: Bool) {
+        self.blockId = blockId
+        expectedMaxY = maxY
+        reportedMaxY = measured ? maxY : nil
+    }
+
+    /// The row reported `maxY`: how far to move the reader, or nil.
+    mutating func moved(toMaxY maxY: CGFloat) -> CGFloat? {
+        guard maxY != reportedMaxY else { return nil }
+        reportedMaxY = maxY
+        let shift = maxY - expectedMaxY
+        expectedMaxY = maxY
+        return abs(shift) >= 0.5 ? shift : nil
+    }
 }
 
 /// A transcript row's vertical extent in the scroll CONTENT's coordinates,
@@ -280,6 +269,8 @@ final class TranscriptReaderTracker {
     /// `contentOffset.y + contentInsets.top`: the visible top edge in
     /// content coordinates.
     var visibleTop: CGFloat = 0
+    /// The visible height between the top and bottom insets.
+    var visibleHeight: CGFloat = 0
     private(set) var rows: [String: TranscriptRowExtent] = [:]
 
     func record(_ id: String, _ extent: TranscriptRowExtent) { rows[id] = extent }
