@@ -6,6 +6,9 @@ import type { z } from "zod";
 import { isCompiledBinary } from "../runner-host/exe";
 import { SIMULATOR_VIEWER_ASSETS_ENV } from "../simulator-portal/assets";
 import {
+  darwinIosToolsCheckScript,
+  darwinIosToolsInstallScript,
+  darwinIosToolsPaths,
   remoteGuestOsForProvider,
   remoteLayoutForProvider,
   shellQuoteWord,
@@ -159,6 +162,30 @@ export function sandboxSupportsSimulatorPortal(sandbox: Sandbox): boolean {
   return remoteGuestOsForProvider(sandbox.provider) === "darwin";
 }
 
+/** idb, idb_companion and xcodegen in the guest. Sandboxes prepared before
+ *  they joined macOS guest preparation, or whose background install has not
+ *  finished, get the install started and a clear answer instead of a viewer
+ *  that fails to boot. */
+async function ensureGuestIosTools(sandbox: Sandbox): Promise<void> {
+  const guest = remoteLayoutForProvider(sandbox.provider);
+  const check = await sandbox.exec([
+    "bash",
+    "-c",
+    darwinIosToolsCheckScript(guest),
+  ]);
+  if (check.exitCode === 0) return;
+  const { log, lock } = darwinIosToolsPaths(guest);
+  const running = (await sandbox.exec(["test", "-d", lock])).exitCode === 0;
+  if (!running)
+    await sandbox.exec(["bash", "-c", darwinIosToolsInstallScript(guest)], {
+      background: true,
+      timeoutMs: 15_000,
+    });
+  throw new Error(
+    `idb, idb_companion and xcodegen are ${running ? "still installing" : "now installing"} in this Sandbox, which takes a few minutes. Its log is ${log}. Call start_simulator_portal again once it ends with "iOS simulator tools ready".`,
+  );
+}
+
 /** The Portal start for a simulator viewer inside a macOS Sandbox. */
 export async function sandboxSimulatorPortalCommand(
   input: z.infer<z.ZodObject<typeof simulatorPortalInput>> & {
@@ -171,6 +198,7 @@ export async function sandboxSimulatorPortalCommand(
       "Simulator Portals need a macOS Sandbox (Mac VM or use.computer).",
     );
   const app = sandboxSimulatorAppPath(input.appPath);
+  await ensureGuestIosTools(input.sandbox);
   const dir = await uploadGuestBundle(
     input.sandbox,
     input.sessionId,
