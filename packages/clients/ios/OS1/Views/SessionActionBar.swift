@@ -136,8 +136,12 @@ struct NextUnreadTab: View {
     let navigation: PhoneSessionNavigation
     var cornerRadius: CGFloat = 22
 
-    /// How far the tab tucks under the composer, as the queue flap does.
+    /// How far the tab tucks under the composer, as the web's `-mb-3.5`.
     static let tuck: CGFloat = 14
+    /// The input bar stacks its rows 4pt apart; the tab sits flush on the
+    /// composer, so it takes that gap back too. Without this only 10pt was
+    /// tucked and the tab stood 4pt taller than the web's.
+    static let barSpacing: CGFloat = 4
 
     var body: some View {
         if let next = navigation.chats.first {
@@ -194,7 +198,7 @@ struct NextUnreadTab: View {
             bottomLeadingRadius: 0,
             bottomTrailingRadius: 0,
             topTrailingRadius: cornerRadius,
-            style: .continuous
+            style: .circular
         )
         return HStack(spacing: 8) { content() }
             .font(.subheadline.weight(.medium))
@@ -212,7 +216,7 @@ struct NextUnreadTab: View {
             .frame(maxWidth: 320, alignment: .trailing)
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.horizontal, 12)
-            .padding(.bottom, -Self.tuck)
+            .padding(.bottom, -(Self.tuck + Self.barSpacing))
     }
 }
 #endif

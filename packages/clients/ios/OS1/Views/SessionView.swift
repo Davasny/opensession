@@ -4132,7 +4132,7 @@ private struct SessionInputBar: View {
             bottomLeadingRadius: composerCornerRadius,
             bottomTrailingRadius: composerCornerRadius,
             topTrailingRadius: top,
-            style: .continuous
+            style: composerCornerStyle
         )
     }
 
@@ -4144,7 +4144,7 @@ private struct SessionInputBar: View {
             bottomLeadingRadius: 0,
             bottomTrailingRadius: 0,
             topTrailingRadius: composerCornerRadius,
-            style: .continuous
+            style: composerCornerStyle
         )
     }
 
@@ -4221,7 +4221,9 @@ private struct SessionInputBar: View {
     /// tighter, longstanding values.
     private var multiLineInset: (horizontal: CGFloat, top: CGFloat, bottom: CGFloat) {
         #if os(iOS)
-        (16, 14, 6)
+        // The web phone's expanded box: 12pt in from the sides, 10 from
+        // the top (`phone:px-3 phone:pt-2.5`).
+        (12, 10, 6)
         #else
         (10, 9, 5)
         #endif
@@ -4436,7 +4438,7 @@ private struct SessionInputBar: View {
                 // priority over the translucent action bar. Applying glass on
                 // top of this fill tinted the white back toward the canvas.
                 .background(
-                    OS1VisualStyle.background,
+                    OS1VisualStyle.composerSurface,
                     in: composerShape
                 )
                 #else
@@ -4787,16 +4789,12 @@ private struct SessionInputBar: View {
             // to begin with, and the dimming SwiftUI applies to a disabled
             // button on top of that left the disc invisible against the
             // near-white composer (measured: 242 vs a 252 background).
-            .foregroundStyle(
-                canSubmit ? OS1VisualStyle.onAccent : OS1VisualStyle.textDim
-            )
+            .foregroundStyle(OS1VisualStyle.onAccent)
             .frame(width: 32, height: 32)
-            .background(
-                canSubmit
-                    ? AnyShapeStyle(OS1VisualStyle.accent)
-                    : AnyShapeStyle(OS1VisualStyle.hover),
-                in: Circle()
-            )
+            // The web's send disc: always the accent plate, faded to 35%
+            // while there is nothing to send.
+            .background(OS1VisualStyle.accent, in: Circle())
+            .opacity(canSubmit ? 1 : 0.35)
             .animation(.easeOut(duration: 0.15), value: canSubmit)
     }
 
@@ -4908,11 +4906,23 @@ private struct SessionInputBar: View {
         #endif
     }
 
+    /// The installed web app draws these corners as plain arcs (`--cs:
+    /// round`); a continuous corner at this radius read as a capsule.
+    private var composerCornerStyle: RoundedCornerStyle {
+        #if os(iOS)
+        .circular
+        #else
+        .continuous
+        #endif
+    }
+
     private var composerCornerRadius: CGFloat {
         #if os(macOS)
         18
         #else
-        26
+        // `--composer-radius` on the web phone: 28 × its 0.771 radius
+        // factor, a rounded box rather than a capsule even at rest.
+        22
         #endif
     }
 

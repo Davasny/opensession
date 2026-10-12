@@ -19,8 +19,17 @@ enum OS1VisualStyle {
     /// surface stays bright, then uses translucent white against the dark page.
     static let composerBorder = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(white: 1, alpha: 0.20)
+            // Faint on the grey box, as the web's 35% border mix.
+            ? UIColor(white: 1, alpha: 0.08)
             : UIColor(white: 1, alpha: 1)
+    })
+    /// The composer's fill: the web's `--composer-surface`, white on light
+    /// and its `--control-surface` grey (#292929) on dark, so the box reads
+    /// as a raised control over a black page rather than a hole in it.
+    static let composerSurface = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.161, alpha: 1)
+            : .white
     })
     static let text = Color(uiColor: .label)
     static let textDim = Color(uiColor: .secondaryLabel)
