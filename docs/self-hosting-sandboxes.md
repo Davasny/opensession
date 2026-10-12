@@ -517,9 +517,12 @@ hours or more runs two VMs (5 CPU, 8 GB each), and sandboxes inside the
 reservation are free to create and delete. **Connect** takes the account API
 key (`uc_live_…`) from the service's Settings; add a reservation id under
 **Provider settings** only when the account holds more than one active
-reservation. The qualification checks the reservation and its free slots,
-creates a disposable sandbox, proves exec semantics, file upload, and guest
-preparation, restores a snapshot of it into a second sandbox, and deletes
+reservation. That includes booking a replacement Mac before the current one
+ends: while both are active the service refuses to pick one, and its API
+cannot list them, so enter the new reservation's id before the next sandbox
+starts. Update or clear it once that reservation ends. The qualification
+checks the reservation and its free slots, creates a disposable sandbox,
+proves exec semantics, file upload, and guest preparation, restores a snapshot of it into a second sandbox, and deletes
 everything. It takes about six minutes; the snapshot dominates.
 
 The guest user is `lume` with home `/Users/lume`; the workspace lives under
