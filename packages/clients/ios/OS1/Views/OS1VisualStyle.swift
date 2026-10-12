@@ -140,10 +140,14 @@ enum OS1VisualStyle {
     /// contrast when that prose is the part of a turn worth reading. These
     /// neutrals measure ~6.4:1 and stay plainly below the answer's ~20:1, so
     /// the text still reads as context rather than conclusion.
+    ///
+    /// The web's `--text-dim` (#a2a2a2 dark, #646464 light), which is what it
+    /// gives provider reasoning. Brighter than that, thinking read as one more
+    /// paragraph of narration next to the prose it sits between.
     static let textNarration = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(white: 0.720, alpha: 1)
-            : UIColor(white: 0.360, alpha: 1)
+            ? UIColor(white: 0.635, alpha: 1)
+            : UIColor(white: 0.392, alpha: 1)
     })
     /// The transcript's canvas — the session screen behind the messages, and
     /// the washes that ramp into it. Its own colour rather than `background`
@@ -274,8 +278,8 @@ enum OS1VisualStyle {
     /// neutral rather than `textDim`.
     static let textNarration = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(white: 0.720, alpha: 1)
-            : NSColor(white: 0.360, alpha: 1)
+            ? NSColor(white: 0.635, alpha: 1)
+            : NSColor(white: 0.392, alpha: 1)
     })
     /// The Mac window background is already a grey the composer floats on, so
     /// the transcript needs no canvas of its own here — see the iOS note.

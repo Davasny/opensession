@@ -231,106 +231,24 @@ final class TranscriptScrollTests: XCTestCase {
     }
 }
 
-/// Keeping the reader's place when a page of earlier history is prepended.
-/// The fixtures are the numbers a running iPhone 17 Pro logged while paging a
-/// 5,901-entry session, back when the restore aimed at a block instead.
-final class TranscriptPrependRestoreTests: XCTestCase {
-    /// The navigation bar's inset, as the phone reports it.
-    private let insetTop: CGFloat = 116
-
-    func testAPageOfHistoryLeavesTheDistanceFromTheEndAlone() throws {
-        // Measured: 11,495pt of transcript with the reader 29.8pt from its top,
-        // and 12,603pt after the page landed. The rows arrived ABOVE the
-        // reader, so their distance from the end is what has to survive.
-        let before = TranscriptScroll.distanceFromEnd(offset: 29.8, contentHeight: 11_495)
-        let y = try XCTUnwrap(TranscriptScroll.restoredScrollY(
-            distanceFromEnd: before, contentHeight: 12_603, insetTop: insetTop
-        ))
-        // What the scroll view will report as its offset afterwards.
-        XCTAssertEqual(
-            TranscriptScroll.distanceFromEnd(offset: y - insetTop, contentHeight: 12_603),
-            before,
-            accuracy: 0.001
-        )
+/// A page of history landing above the reader: the held row's bottom edge
+/// says how far the reader has to move with it.
+final class TranscriptPrependHoldTests: XCTestCase {
+    func testTheReaderMovesWithEachNewLayoutOfTheirRow() {
+        var hold = TranscriptPrependHold(blockId: "b", maxY: 900, measured: true)
+        XCTAssertEqual(hold.moved(toMaxY: 900), nil, "the same report is not a move")
+        XCTAssertEqual(hold.moved(toMaxY: 2_300), 1_400, "the page laid out above it")
+        XCTAssertEqual(hold.moved(toMaxY: 2_260), -40, "the page's rows realized smaller")
+        XCTAssertEqual(hold.moved(toMaxY: 2_260), nil)
     }
 
-    func testTheTopInsetIsPartOfTheAnswer() throws {
-        // Dropping it is not a rounding error: the restore lands a whole
-        // navigation bar short, every tick, which reads as the transcript
-        // creeping while it settles.
-        let distance = TranscriptScroll.distanceFromEnd(offset: 21, contentHeight: 11_058)
-        let withInset = try XCTUnwrap(TranscriptScroll.restoredScrollY(
-            distanceFromEnd: distance, contentHeight: 12_404, insetTop: insetTop
-        ))
-        let without = try XCTUnwrap(TranscriptScroll.restoredScrollY(
-            distanceFromEnd: distance, contentHeight: 12_404, insetTop: 0
-        ))
-        XCTAssertEqual(withInset - without, insetTop)
-    }
-
-    func testLeavingTheOffsetAloneIsTheJumpWeMeasured() {
-        // What the app did before: the offset stayed put while the content
-        // grew under it, which walked the reader back a page — 1,108pt here,
-        // and the observed jumps ran to 2,186pt.
-        let distanceBefore = TranscriptScroll.distanceFromEnd(
-            offset: 29.8, contentHeight: 11_495
-        )
-        let distanceAfter = TranscriptScroll.distanceFromEnd(
-            offset: 29.8, contentHeight: 12_603
-        )
-        XCTAssertEqual(distanceAfter - distanceBefore, 1108, accuracy: 0.001)
-    }
-
-    func testTheRestoreFollowsRowsThatKeepMeasuring() throws {
-        // A page's height lands in steps — the rows realize and their markdown
-        // parses afterwards — so the restore recomputes against the newest
-        // height instead of setting one offset and trusting it.
-        let distance = TranscriptScroll.distanceFromEnd(offset: 26.3, contentHeight: 11_129)
-        let settling: [CGFloat] = [11_915, 11_926, 12_017, 12_064, 12_110, 12_156]
-        for height in settling {
-            let y = try XCTUnwrap(TranscriptScroll.restoredScrollY(
-                distanceFromEnd: distance, contentHeight: height, insetTop: insetTop
-            ))
-            XCTAssertEqual(
-                TranscriptScroll.distanceFromEnd(offset: y - insetTop, contentHeight: height),
-                distance,
-                accuracy: 0.001,
-                "every step has to land the reader in the same place"
-            )
-        }
-    }
-
-    func testTheRestoreWaitsForALazyStackThatBrieflyShrinks() {
-        // The live stack briefly reported 19,298pt after it had already been
-        // 21,095pt before the prepend. Treating that as a real target sent the
-        // reader to the top; the next measurement is the one that can restore.
-        let distance = TranscriptScroll.distanceFromEnd(
-            offset: -124, contentHeight: 21_095
-        )
-        XCTAssertNil(TranscriptScroll.restoredScrollY(
-            distanceFromEnd: distance,
-            contentHeight: 19_298,
-            insetTop: insetTop,
-            minimumContentHeight: 21_095
-        ))
-        XCTAssertNotNil(TranscriptScroll.restoredScrollY(
-            distanceFromEnd: distance,
-            contentHeight: 22_000,
-            insetTop: insetTop,
-            minimumContentHeight: 21_095
-        ))
-    }
-
-    func testTheBaselineRejectsAPositiveButStaleLazyHeight() {
-        // A reader far enough down can still get a positive target from a
-        // shrunken lazy stack. The baseline, not y's sign alone, keeps that
-        // stale target from visibly moving the reader upward.
-        XCTAssertNil(TranscriptScroll.restoredScrollY(
-            distanceFromEnd: 8_000,
-            contentHeight: 10_500,
-            insetTop: insetTop,
-            minimumContentHeight: 12_000
-        ))
+    func testABlockThePageFormedIsMeasuredAgainstWhereItsOldSelfEnded() {
+        // A turn split across the page boundary comes back as a new block:
+        // its first report counts even when it matches the old bottom edge's
+        // value, and only the difference from that edge moves the reader.
+        var hold = TranscriptPrependHold(blockId: "merged", maxY: 4_000, measured: false)
+        XCTAssertEqual(hold.moved(toMaxY: 4_000.25), nil, "sub-point noise is not a move")
+        XCTAssertEqual(hold.moved(toMaxY: 6_000), 1_999.75, "older entries joined it above the reader")
     }
 }
 

@@ -1738,12 +1738,14 @@ export function PrPanel({
       <ReviewToolbar compact={compactToolbar}>
         {phoneLayout ? (
           <PhoneReviewHeader
+            // The overview names the PR by number; its own first lines
+            // carry the full title.
             title={
               page === "files"
                 ? diffSource === "worktree"
                   ? "Worktree changes"
                   : "Files changed"
-                : pr.title
+                : `#${pr.number}`
             }
             subtitle={
               page === "files" && diffSource === "pull-request" ? (
@@ -1755,8 +1757,10 @@ export function PrPanel({
                     −{files.reduce((sum, file) => sum + file.deletions, 0)}
                   </span>
                 </span>
+              ) : active?.repo ? (
+                repoLabel(active.repo)
               ) : (
-                `${active?.repo ? repoLabel(active.repo) + " · " : ""}#${pr.number}`
+                provider.name
               )
             }
             navigation={
@@ -1898,6 +1902,7 @@ export function PrPanel({
           send={send}
           railStacked={railStacked}
           rail={rail}
+          statusMark={statusMark}
           hideWideOverviewRail={hideWideOverviewRail}
           walkthrough={walkthrough}
           bodyHtml={bodyHtml}
@@ -1968,7 +1973,7 @@ export function PrPanel({
           aria-label="Review actions"
           className="flex shrink-0 items-center gap-2 bg-surface px-3 pt-2 pb-[max(8px,env(safe-area-inset-bottom))]"
         >
-          {phoneMergeAction}
+          {/* Merge and Ready for review live in the overview's status card. */}
           <Button
             variant="soft"
             className="min-h-11 flex-1"

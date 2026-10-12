@@ -2233,6 +2233,9 @@ final class SessionViewModel {
             isServerHandoffPending = true
 
         case .transcriptInit(let id, let newEntries, let cursor) where id == session.id:
+            #if DEBUG
+            ScrollTrace.log("vm init entries=\(newEntries.count) had=\(entries.count) truncated=\(cursor.truncated) firstSeq=\(cursor.firstSeq ?? -1) v2=\(cursor.v2)")
+            #endif
             // A re-watch after a dropped socket: thread frames sent while it
             // was down are gone, so re-read the list (the first open already
             // loads it in `startConnection`).
@@ -2313,6 +2316,9 @@ final class SessionViewModel {
             reconcileFinishedLiveText()
 
         case .transcriptHistory(let id, let older, let cursor) where id == session.id:
+            #if DEBUG
+            ScrollTrace.log("vm history older=\(older.count) had=\(entries.count) firstSeq=\(cursor.firstSeq ?? -1) blocks=\(displayBlocks.count)")
+            #endif
             let known = Set(entries.map(\.id))
             let added = older.filter { !known.contains($0.id) }
             entries.insert(contentsOf: added, at: 0)

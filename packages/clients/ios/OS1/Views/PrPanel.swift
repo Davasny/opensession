@@ -967,6 +967,7 @@ struct PrPanelView: View {
     private func overviewPage(_ pr: PrDetails) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
+                summaryCard(pr)
                 descriptionCard(pr)
                 let comments = conversation(pr)
                 if comments.isEmpty {
@@ -985,6 +986,118 @@ struct PrPanelView: View {
         }
         .background(OS1VisualStyle.background)
         .refreshable { await viewModel.refreshPr() }
+    }
+
+    /// The answers a reviewer looks for before reading a word of the
+    /// description: how big, where it lands, whether it is green, approved
+    /// and mergeable. One line each; the Info page holds the detail, so the
+    /// whole card crosses there.
+    private func summaryCard(_ pr: PrDetails) -> some View {
+        let checks = pr.checks ?? []
+        let decision = reviewBadge(pr.reviewDecision)
+        let files = pr.changedFiles ?? pr.files?.count ?? 0
+        return Button {
+            page = .info
+            Haptics.play(.selection)
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Label(stateLabel(pr), systemImage: stateSymbol(pr))
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(pr.summary.color.opacity(0.14), in: Capsule())
+                            .foregroundStyle(pr.summary.color)
+                        Text(verbatim: "+\(pr.additions ?? 0)")
+                            .foregroundStyle(OS1VisualStyle.greenInk)
+                        Text(verbatim: "−\(pr.deletions ?? 0)")
+                            .foregroundStyle(OS1VisualStyle.redInk)
+                        if files > 0 {
+                            Text(files == 1 ? "1 file" : "\(files) files")
+                                .foregroundStyle(OS1VisualStyle.textDim)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(OS1VisualStyle.textFaint)
+                    }
+                    .font(.footnote.monospacedDigit())
+                    if let head = pr.headRefName, let base = pr.baseRefName {
+                        HStack(spacing: 4) {
+                            Text(head).lineLimit(1).truncationMode(.middle)
+                            Image(systemName: "arrow.right")
+                                .font(.caption2)
+                                .foregroundStyle(OS1VisualStyle.textFaint)
+                            Text(base).lineLimit(1).layoutPriority(1)
+                        }
+                        .font(.caption.monospaced())
+                        .foregroundStyle(OS1VisualStyle.textDim)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text("\(head) into \(base)"))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                if !checks.isEmpty {
+                    Divider().padding(.leading, 14)
+                    summaryRow(
+                        symbol: checksRank(checks) == .failure ? "xmark.circle.fill"
+                            : checksRank(checks) == .pending ? "clock" : "checkmark.circle.fill",
+                        title: "Checks",
+                        value: checksHeader(checks),
+                        tint: checkTone(checksRank(checks))
+                    )
+                }
+                if let decision {
+                    Divider().padding(.leading, 14)
+                    summaryRow(
+                        symbol: "person.crop.circle.badge.checkmark",
+                        title: "Review",
+                        value: decision.label,
+                        tint: decision.color
+                    )
+                }
+                if pr.isOpen {
+                    let conflicting = pr.mergeable == "CONFLICTING"
+                    Divider().padding(.leading, 14)
+                    summaryRow(
+                        symbol: conflicting ? "exclamationmark.triangle.fill" : "arrow.triangle.merge",
+                        title: "Merge",
+                        value: conflicting
+                            ? "Conflicts with \(pr.baseRefName ?? "the base")"
+                            : "No conflicts",
+                        tint: conflicting ? OS1VisualStyle.yellowInk : OS1VisualStyle.greenInk
+                    )
+                }
+            }
+            .background(
+                OS1VisualStyle.raised,
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(Text("Shows checks, reviewers, commits and files"))
+    }
+
+    private func summaryRow(symbol: String, title: String, value: String, tint: Color) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.subheadline)
+                .foregroundStyle(tint)
+                .frame(width: 20)
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(OS1VisualStyle.text)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(tint)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 44)
     }
 
     @ViewBuilder

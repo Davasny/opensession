@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { prStatusMark } from "../../lib/pr-status";
 import { providerFromUrl } from "../../lib/provider";
 import type { PrDetails } from "../../lib/types";
 import { PrOverviewPage } from "./PrOverviewPage";
@@ -28,7 +29,7 @@ for (const [state, isDraft, label] of [
   ["MERGED", false, "Merged"],
   ["CLOSED", false, "Closed"],
 ] as const) {
-  test(`phone overview shows the full title and ${label} status before metadata`, () => {
+  test(`phone overview leads with the ${label} identity, then status, then the description`, () => {
     const html = renderToStaticMarkup(
       <PrOverviewPage
         compactToolbar={false}
@@ -41,19 +42,22 @@ for (const [state, isDraft, label] of [
             <button>Metadata action</button>
           </aside>
         }
+        statusMark={prStatusMark({ state, isDraft })}
         hideWideOverviewRail={false}
         bodyHtml="<p>Description first</p>"
         comments={[]}
       />,
     );
     expect(html).toContain(pr.title);
-    expect(html).toContain(`<span>${label}</span>`);
+    expect(html).toContain(label);
+    expect(html).toContain("+10");
+    expect(html).toContain("1 file");
+    expect(html).toContain("feature");
     expect(html.indexOf(pr.title)).toBeLessThan(
-      html.indexOf("Description first"),
-    );
-    expect(html.indexOf("Description first")).toBeLessThan(
       html.indexOf("Metadata action"),
     );
-    expect(html).toContain('class="desktop:order-first"');
+    expect(html.indexOf("Metadata action")).toBeLessThan(
+      html.indexOf("Description first"),
+    );
   });
 }
