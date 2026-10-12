@@ -4556,22 +4556,6 @@ private struct SessionInputBar: View {
                 .padding(.top, isSingleRow ? 0 : multiLineInset.top)
                 .padding(.bottom, isSingleRow ? 0 : multiLineInset.bottom)
                 .focused($inputFocused)
-                #if os(iOS)
-                // A way to put the keyboard away without scrolling the
-                // transcript: the bar Safari draws over the PWA's composer
-                // has the same check.
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button {
-                            inputFocused = false
-                        } label: {
-                            Image(systemName: "checkmark")
-                        }
-                        .accessibilityLabel("Hide keyboard")
-                    }
-                }
-                #endif
                 .onChange(of: inputFocused) { _, focused in
                     if !focused { viewModel.userIsTyping(false) }
                 }
@@ -4622,7 +4606,18 @@ private struct SessionInputBar: View {
                     Spacer(minLength: 8)
 
                     ComposerDictationButton(dictation: dictation, draft: $viewModel.draft)
+                    #if os(iOS)
+                    // An iPhone keyboard has no key that puts it away (the
+                    // iPad's does), so while typing the call button's seat
+                    // takes one; Safari's bar gives the PWA the same.
+                    if inputFocused {
+                        hideKeyboardButton
+                    } else if voiceAvailable {
+                        callButton
+                    }
+                    #else
                     if voiceAvailable { callButton }
+                    #endif
 
                     if viewModel.isRunning {
                         stopButton
@@ -4887,6 +4882,22 @@ private struct SessionInputBar: View {
         !noteMode && viewModel.session.archived != true
             && ["opensession", "slack"].contains(viewModel.session.source ?? "opensession")
     }
+
+    #if os(iOS)
+    private var hideKeyboardButton: some View {
+        Button {
+            inputFocused = false
+        } label: {
+            Image(systemName: "keyboard.chevron.compact.down")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(OS1VisualStyle.textDim)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Hide keyboard")
+    }
+    #endif
 
     private var callButton: some View {
         let active = call?.active == true
