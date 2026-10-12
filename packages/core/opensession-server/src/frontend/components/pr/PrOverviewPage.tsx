@@ -138,28 +138,30 @@ function PhoneIdentity({
       <h1 className="m-0 break-words text-lg font-semibold leading-snug text-fg">
         {pr.title}
       </h1>
-      <div className="flex min-w-0 items-center gap-2 text-supporting">
-        {pr.author && (
-          <span className="flex min-w-0 shrink-0 items-center gap-1.5 font-medium text-fg">
-            <UserAvatar
-              name={pr.author}
-              login={provider.key === "github" ? pr.author : null}
-              size={18}
-              edge={false}
-            />
-            <span className="max-w-[140px] truncate">{pr.author}</span>
-          </span>
-        )}
-        {pr.headRefName && pr.baseRefName && (
-          <span className="flex min-w-0 items-center gap-1 font-mono text-meta text-dim">
-            <span className="min-w-0 truncate" title={pr.headRefName}>
-              {pr.headRefName}
-            </span>
-            <IconArrowRight size={12} className="shrink-0 text-faint" />
-            <span className="shrink-0">{pr.baseRefName}</span>
-          </span>
-        )}
-      </div>
+      {pr.author && (
+        <div className="flex min-w-0 items-center gap-2 text-supporting font-medium text-fg">
+          <UserAvatar
+            name={pr.author}
+            login={provider.key === "github" ? pr.author : null}
+            size={20}
+            edge={false}
+          />
+          <span className="min-w-0 truncate">{pr.author}</span>
+        </div>
+      )}
+      {/* Its own line, wrapping rather than truncating: a branch name's
+          distinguishing part is usually its end. */}
+      {pr.headRefName && pr.baseRefName && (
+        <p className="m-0 break-all font-mono text-meta leading-relaxed text-dim">
+          {pr.headRefName}
+          <IconArrowRight
+            size={12}
+            className="mx-1 inline-block align-[-1px] text-faint"
+          />
+          <span className="sr-only"> into </span>
+          {pr.baseRefName}
+        </p>
+      )}
     </header>
   );
 }
