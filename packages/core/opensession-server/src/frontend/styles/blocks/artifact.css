@@ -75,7 +75,8 @@
   display: block;
   width: 100%;
   border: 0;
-  /* Only ever seen before the document paints; it takes the page colour. */
+  /* The page colour behind the document, whose root is transparent so its
+     text keeps greyscale antialiasing (artifact-document.ts). */
   background: var(--bg);
 }
 /* A frame swallows pointer events, which would end a drag the moment the

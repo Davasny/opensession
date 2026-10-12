@@ -124,7 +124,10 @@ function baseStyle(theme: ArtifactTheme): string {
   return (
     "<style>" +
     `:root{color-scheme:${theme.scheme === "light" ? "light" : "dark"};${variables}` +
-    "background:var(--background);color:var(--foreground);" +
+    // Transparent: the frame element paints the page colour behind it. An
+    // opaque root makes Chrome switch the document's text to subpixel
+    // antialiasing, which reads fuzzier than the reply around it.
+    "background:transparent;color:var(--foreground);" +
     "font-family:var(--font-sans);font-size:var(--font-size,15px);font-weight:var(--font-weight,450);line-height:1.6}" +
     "body{margin:0}" +
     "a{color:var(--link)}" +

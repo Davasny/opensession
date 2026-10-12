@@ -68,7 +68,7 @@ describe("artifact html document", () => {
     expect(doc.startsWith(artifactDocumentHead(THEME))).toBe(true);
     expect(doc).toContain("--background:#1c1c1c");
     expect(doc).toContain("--chart-1:#58a6ff");
-    expect(doc).toContain("background:var(--background)");
+    expect(doc).toContain("background:transparent");
     expect(doc).toContain("color:var(--foreground)");
     expect(doc).toContain("color-scheme:dark");
     expect(doc.endsWith("</head><body><h1>Hi</h1></body></html>")).toBe(true);
