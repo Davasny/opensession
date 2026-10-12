@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   composerSessionRef,
   sessionPath,
+  assetSuffix,
   splitSessionRef,
   subagentSuffix,
   workspacePanePath,
@@ -110,5 +111,21 @@ describe("composerSessionRef", () => {
     expect(composerSessionRef({ id: "bks-ghpr-5099-review" })).toBe(
       "https://os.tella.dev/session/bks-ghpr-5099-review",
     );
+  });
+});
+
+describe("asset links", () => {
+  test("round-trips an asset open over a session", () => {
+    const path = sessionPath({ id: "os-1" }) + assetSuffix("reports/a b.html");
+    expect(path).toEndWith("/session/os-1/asset/reports/a%20b.html");
+    expect(splitSessionRef(path.replace(/^.*\/session\//, ""))).toEqual({
+      id: "os-1",
+      subagent: [],
+      asset: "reports/a b.html",
+    });
+  });
+
+  test("writes nothing when no asset is open", () => {
+    expect(assetSuffix(null)).toBe("");
   });
 });

@@ -42,6 +42,7 @@ import { useSessionRuntimeController } from "./useSessionRuntimeController";
 import { reviewLoopResult, type ReviewLoopResult } from "../lib/review-loop";
 import { useSidePanel } from "./useSidePanel";
 import { useSessionAssets } from "../components/AssetsPanel";
+import { setOpenAsset, useOpenAssetPath } from "../lib/asset-overlay-store";
 import { useSessionReports } from "../components/SessionReportsPanel";
 import { useSessionDatabases } from "../components/SessionDatabasesPanel";
 import { fetchThreadsApi } from "../lib/api";
@@ -376,21 +377,31 @@ export function useSessionViewStateController({
   const [selectedAssetPath, setSelectedAssetPath] = useState<string | null>(
     null,
   );
-  const [overlayAssetPath, setOverlayAssetPath] = useState<string | null>(null);
+  const overlayAssetPath = useOpenAssetPath(session.id);
+  const setOverlayAssetPath = useCallback(
+    (path: string | null) => setOpenAsset(session.id, path),
+    [session.id],
+  );
   const openAssetsRef = useRef(openAssets);
   useLayoutEffect(() => {
     openAssetsRef.current = openAssets;
   }, [openAssets]);
   const openAssetFromTranscript = useCallback(
     (path: string) => setOverlayAssetPath(path),
-    [],
+    [setOverlayAssetPath],
   );
-  const closeAssetOverlay = useCallback(() => setOverlayAssetPath(null), []);
-  const promoteAssetToTab = useCallback((path: string) => {
-    setSelectedAssetPath(path);
-    setOverlayAssetPath(null);
-    openAssetsRef.current?.();
-  }, []);
+  const closeAssetOverlay = useCallback(
+    () => setOverlayAssetPath(null),
+    [setOverlayAssetPath],
+  );
+  const promoteAssetToTab = useCallback(
+    (path: string) => {
+      setSelectedAssetPath(path);
+      setOverlayAssetPath(null);
+      openAssetsRef.current?.();
+    },
+    [setOverlayAssetPath],
+  );
   const sessionReports = useSessionReports(session.id, addHandler);
   const sessionDatabases = useSessionDatabases(session.id, addHandler);
   const [threads, setThreads] = useState<CommentThread[]>([]);

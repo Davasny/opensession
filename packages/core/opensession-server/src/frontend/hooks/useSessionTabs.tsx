@@ -30,7 +30,11 @@ import { sessionApiKeyFilter } from "../lib/api-swr";
 import { newClientSessionId } from "../lib/session-id";
 import { siblingTabPrRefs } from "../lib/session-prs";
 import type { NewTabMorphOrigin, ViewTab } from "../lib/session-tabs-types";
-import { sessionPath, workspacePanePath } from "../lib/share-link";
+import {
+  syncOpenAssetWithRoute,
+  useOpenAssetPath,
+} from "../lib/asset-overlay-store";
+import { assetSuffix, sessionPath, workspacePanePath } from "../lib/share-link";
 import { matchesShortcut } from "../lib/shortcuts";
 import { sidebarWorkspaceIdForSession } from "../lib/sidebar-workspaces";
 import {
@@ -277,10 +281,20 @@ export function useSessionTabs({
       activeViewTab === "video")
       ? workspacePanePath(activeWorkspaceId, activeViewTab)
       : null;
+  // An asset open over the session rides along as `/asset/<path>`, so the
+  // address bar and a copied link reopen it. A link that names one opens it.
+  const routeSessionId = route.view === "session" ? route.id : null;
+  const routeAsset = route.view === "session" ? route.asset : undefined;
+  useLayoutEffect(
+    () => syncOpenAssetWithRoute(routeSessionId, routeAsset),
+    [routeSessionId, routeAsset],
+  );
+  const openAssetPath = useOpenAssetPath(routeSessionId);
+  const openAssetSuffix = assetSuffix(openAssetPath);
   const copyLinkPath =
     activeWorkspacePane ??
     (route.view === "session" && currentSession
-      ? sessionPath(currentSession) + openSubagentPath
+      ? sessionPath(currentSession) + openSubagentPath + openAssetSuffix
       : route.view === "workspace" || route.view === "pr"
         ? routePath(route)
         : null);
@@ -308,7 +322,8 @@ export function useSessionTabs({
       (activeWorkspaceId
         ? `${BASE_PATH}/workspace/${encodeURIComponent(activeWorkspaceId)}/session/${encodeURIComponent(route.id)}`
         : `${BASE_PATH}/session/${encodeURIComponent(route.id)}`) +
-        openSubagentPath;
+        openSubagentPath +
+        openAssetSuffix;
     if (location.pathname !== canonical) canonicalizePath(canonical);
   }, [
     route,
@@ -316,6 +331,7 @@ export function useSessionTabs({
     activeWorkspaceId,
     activeWorkspacePane,
     openSubagentPath,
+    openAssetSuffix,
     canonicalizePath,
   ]);
   const byCreated = (a: UnifiedSession, b: UnifiedSession) =>
