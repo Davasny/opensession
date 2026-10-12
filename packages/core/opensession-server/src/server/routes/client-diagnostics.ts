@@ -52,7 +52,10 @@ export async function handleClientDiagnosticsRoutes(
     return undefined;
   const login = ctx.authUser?.login;
   if (!login)
-    return Response.json({ error: "Sign in to send diagnostics." }, { status: 401 });
+    return Response.json(
+      { error: "Sign in to send diagnostics." },
+      { status: 401 },
+    );
   const length = Number(ctx.req.headers.get("content-length") || 0);
   if (length > MAX_CLIENT_DIAGNOSTIC_BYTES)
     return Response.json({ error: "Diagnostic too large." }, { status: 413 });
@@ -67,7 +70,10 @@ export async function handleClientDiagnosticsRoutes(
   }
   if (!body || typeof body !== "object" || Array.isArray(body))
     return Response.json({ error: "Expected a JSON object." }, { status: 400 });
-  const file = await recordClientDiagnostic(login, body as Record<string, unknown>);
+  const file = await recordClientDiagnostic(
+    login,
+    body as Record<string, unknown>,
+  );
   console.log(`[client-diagnostics] stored ${file}`);
   return Response.json({ ok: true });
 }
