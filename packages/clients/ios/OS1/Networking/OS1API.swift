@@ -2404,6 +2404,25 @@ enum OS1API {
         return answer.text
     }
 
+    /// Whether this instance serves typing autocomplete (an OpenAI key is
+    /// configured and the kill switch is off). `GET /api/composer-autocomplete`.
+    static func composerAutocompleteAvailable() async throws -> Bool {
+        struct Response: Decodable, Sendable { let available: Bool? }
+        let response: Response = try await get("/api/composer-autocomplete")
+        return response.available == true
+    }
+
+    struct ComposerCompletion: Decodable, Sendable {
+        let completion: String?
+        let available: Bool?
+    }
+
+    /// The suggested rest of a draft (server/composer-autocomplete.ts).
+    static func composerComplete(sessionId: String, draft: String) async throws -> ComposerCompletion {
+        let id = sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId
+        return try await post("/api/sessions/\(id)/composer-complete", body: ["draft": draft])
+    }
+
     /// One MetricKit crash or hang report (see `CrashReporter`).
     static func sendClientDiagnostic(_ body: [String: Any]) async throws {
         _ = try await mutateData("/api/client-diagnostics", method: "POST", body: body)

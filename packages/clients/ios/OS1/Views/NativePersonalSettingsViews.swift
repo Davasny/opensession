@@ -159,6 +159,8 @@ struct PreferencesSettingsView: View {
     @AppStorage(ThinkingMessages.storageKey) private var nativeThinkingMessages = "latest"
     @AppStorage("os1.composer.replySuggestions") private var nativeReplySuggestions = true
     @AppStorage("os1.composer.nextChatButton") private var nativeNextChatButton = true
+    @AppStorage("os1.composer.predictions") private var nativePredictions = true
+    @AppStorage("os1.composer.autocomplete") private var nativeAutocomplete = false
     @AppStorage("os1.transcript.liveTyping") private var nativeLiveTyping = false
     @AppStorage("os1.desk.voice") private var deskVoice = "off"
     /// The one control on this screen that stays on the device — see the type
@@ -181,6 +183,10 @@ struct PreferencesSettingsView: View {
     @State private var thinkingMessages: String
     @State private var replySuggestions: Bool
     @State private var nextChatButton: Bool
+    @State private var predictions: Bool
+    @State private var autocomplete: Bool
+    /// The instance can serve autocomplete (an OpenAI key is set).
+    @State private var autocompleteAvailable = true
     @State private var liveTyping: Bool
     @State private var loading = true
     @State private var saving = false
@@ -199,6 +205,27 @@ struct PreferencesSettingsView: View {
     /// fetch still runs; it corrects rather than reveals. Writing back is
     /// unaffected: `commit()` waits for `prefsLoaded`, so nothing is saved
     /// against a baseline the server has not confirmed.
+    /// The web's pair, together so each can be switched off alone.
+    private var suggestionsSection: some View {
+        Section {
+            Toggle("Predicted reply", isOn: $predictions)
+            Toggle("Autocomplete", isOn: Binding(
+                get: { autocomplete && autocompleteAvailable },
+                set: { autocomplete = $0 }
+            ))
+            .disabled(!autocompleteAvailable)
+        } footer: {
+            Text(autocompleteAvailable
+                ? "Predicted reply suggests your next message when a turn ends. Autocomplete suggests the rest of your message as you type. Tap Use to take either."
+                : "Predicted reply suggests your next message when a turn ends. Autocomplete needs an OpenAI key in Settings, Desk voice.")
+        }
+        .task { autocompleteAvailable = await ComposerAutocomplete.available() }
+        // Here rather than on the form: one more modifier there is past what
+        // the type checker will solve in time.
+        .onChange(of: predictions) { _, _ in commit() }
+        .onChange(of: autocomplete) { _, _ in commit() }
+    }
+
     init() {
         let defaults = UserDefaults.standard
         let activity = TurnActivity(
@@ -224,6 +251,8 @@ struct PreferencesSettingsView: View {
             ).rawValue,
             "reply-suggestions": (defaults.object(forKey: "os1.composer.replySuggestions") as? Bool ?? true) ? "on" : "off",
             "next-chat-button": (defaults.object(forKey: "os1.composer.nextChatButton") as? Bool ?? true) ? "on" : "off",
+            "composer-predictions": (defaults.object(forKey: "os1.composer.predictions") as? Bool ?? true) ? "on" : "off",
+            "composer-autocomplete": (defaults.object(forKey: "os1.composer.autocomplete") as? Bool ?? false) ? "on" : "off",
             "live-typing": (defaults.object(forKey: "os1.transcript.liveTyping") as? Bool ?? false) ? "on" : "off",
         ]
         _seededPrefs = State(initialValue: seeded)
@@ -241,6 +270,8 @@ struct PreferencesSettingsView: View {
         )
         _replySuggestions = State(initialValue: seeded["reply-suggestions"] != "off")
         _nextChatButton = State(initialValue: seeded["next-chat-button"] != "off")
+        _predictions = State(initialValue: seeded["composer-predictions"] != "off")
+        _autocomplete = State(initialValue: seeded["composer-autocomplete"] == "on")
         _liveTyping = State(initialValue: seeded["live-typing"] == "on")
         let cachedCatalog = SettingsCache.value("model-catalog", as: ModelCatalogSettings.self)
         _repos = State(initialValue: SettingsCache.value("repos") ?? [])
@@ -366,6 +397,8 @@ struct PreferencesSettingsView: View {
             } footer: {
                 Text("Quick replies fill the draft. Next opens the next chat.")
             }
+
+            suggestionsSection
 
             #if os(iOS)
             // Directly under Sending, because sending is what it mostly
@@ -506,6 +539,12 @@ struct PreferencesSettingsView: View {
                     NativePreferences.nextChatButtonEnabled(prefs["next-chat-button"])
                         ?? nextChatButton
                 ) ? "on" : "off",
+                "composer-predictions": (
+                    NativePreferences.liveTypingEnabled(prefs["composer-predictions"]) ?? predictions
+                ) ? "on" : "off",
+                "composer-autocomplete": (
+                    NativePreferences.liveTypingEnabled(prefs["composer-autocomplete"]) ?? autocomplete
+                ) ? "on" : "off",
                 "live-typing": (
                     NativePreferences.liveTypingEnabled(prefs["live-typing"]) ?? liveTyping
                 ) ? "on" : "off",
@@ -534,6 +573,12 @@ struct PreferencesSettingsView: View {
             if (nextChatButton ? "on" : "off") == seededPrefs["next-chat-button"] {
                 nextChatButton = server["next-chat-button"] != "off"
             }
+            if (predictions ? "on" : "off") == seededPrefs["composer-predictions"] {
+                predictions = server["composer-predictions"] != "off"
+            }
+            if (autocomplete ? "on" : "off") == seededPrefs["composer-autocomplete"] {
+                autocomplete = server["composer-autocomplete"] == "on"
+            }
             if (liveTyping ? "on" : "off") == seededPrefs["live-typing"] {
                 liveTyping = server["live-typing"] == "on"
             }
@@ -550,6 +595,8 @@ struct PreferencesSettingsView: View {
             nativeThinkingMessages = thinkingMessages
             nativeReplySuggestions = replySuggestions
             nativeNextChatButton = nextChatButton
+            nativePredictions = predictions
+            nativeAutocomplete = autocomplete
             nativeLiveTyping = liveTyping
             savedPrefs = server
             if let legacyValue = prefs["turn-activity"],
@@ -659,6 +706,12 @@ struct PreferencesSettingsView: View {
             nextChatButton = NativePreferences.nextChatButtonEnabled(
                 confirmed["next-chat-button"]
             ) ?? nextChatButton
+            predictions = NativePreferences.liveTypingEnabled(
+                confirmed["composer-predictions"]
+            ) ?? predictions
+            autocomplete = NativePreferences.liveTypingEnabled(
+                confirmed["composer-autocomplete"]
+            ) ?? autocomplete
             liveTyping = NativePreferences.liveTypingEnabled(
                 confirmed["live-typing"]
             ) ?? liveTyping
@@ -676,6 +729,8 @@ struct PreferencesSettingsView: View {
             nativeThinkingMessages = thinkingMessages
             nativeReplySuggestions = replySuggestions
             nativeNextChatButton = nextChatButton
+            nativePredictions = predictions
+            nativeAutocomplete = autocomplete
             nativeLiveTyping = liveTyping
             savedPrefs = confirmed
         } catch {
@@ -720,6 +775,8 @@ struct PreferencesSettingsView: View {
             ThinkingMessages.prefKey: thinkingMessages,
             "reply-suggestions": replySuggestions ? "on" : "off",
             "next-chat-button": nextChatButton ? "on" : "off",
+            "composer-predictions": predictions ? "on" : "off",
+            "composer-autocomplete": autocomplete ? "on" : "off",
             "live-typing": liveTyping ? "on" : "off",
         ]
     }

@@ -117,6 +117,13 @@ final class SessionViewModel {
     /// Quick replies for the last settled turn. A pick fills the draft; it
     /// never sends, because the server's suggestion is still only a guess.
     private(set) var replySuggestions: [ReplySuggestion] = []
+    /// The server's guess at the next message, shown as the empty
+    /// composer's placeholder and taken with Use (web: Tab / double tap).
+    private(set) var composerPrediction: String?
+
+    #if DEBUG
+    func showPredictionForScreenshot(_ text: String) { composerPrediction = text }
+    #endif
     private(set) var pendingSlackComposer: SlackComposeRequest?
     private(set) var slackComposeReceipt: SlackComposeReceipt?
     /// The request id currently being removed from Slack. Keeping the receipt
@@ -841,6 +848,7 @@ final class SessionViewModel {
         stopTyping()
         stopped = true
         replySuggestions = []
+        composerPrediction = nil
         actionCards.deactivate()
         localFolders.deactivate()
         outbox.stopObserving(sessionId: session.id)
@@ -1474,6 +1482,7 @@ final class SessionViewModel {
         // clears any sidebar hide covering it (opening it deliberately doesn't).
         HideStore.shared.unhide(for: session)
         replySuggestions = []
+        composerPrediction = nil
         draft = ""
         attachedImages = []
         attachedFiles = []
@@ -1504,6 +1513,7 @@ final class SessionViewModel {
         rebuildDisplayItems()
         HideStore.shared.unhide(for: session)
         replySuggestions = []
+        composerPrediction = nil
         sendSeq += 1
     }
 
@@ -1684,6 +1694,7 @@ final class SessionViewModel {
             ? suggestion.text
             : "\(existing)\n\(suggestion.text)"
         replySuggestions = []
+        composerPrediction = nil
     }
 
     /// Hold the draft until `at` — the server sends it then, whether or not
@@ -2382,6 +2393,7 @@ final class SessionViewModel {
             landedBlockIds = []
             resyncAssistantCandidates = []
             replySuggestions = []
+            composerPrediction = nil
             isStreaming = true
             streamEnded = false
             rebuildDisplayItems()
@@ -2587,6 +2599,9 @@ final class SessionViewModel {
 
         case .replySuggestions(let id, let suggestions) where id == session.id:
             replySuggestions = suggestions
+
+        case .composerPrediction(let id, let text) where id == session.id:
+            composerPrediction = text
 
         case .slackComposer(let id, let request) where id == session.id:
             if let request, request.id == slackComposeReceipt?.requestId { break }

@@ -85,6 +85,9 @@ enum ServerEvent: Sendable {
     /// metadata, a broad invalidation): re-read the list.
     case sessionListChanged
     case replySuggestions(sessionId: String, suggestions: [ReplySuggestion])
+    /// The predicted next message for the empty composer, or nil to retire
+    /// it (server/composer-prediction.ts).
+    case composerPrediction(sessionId: String, text: String?)
     case slackComposer(sessionId: String, request: SlackComposeRequest?)
     case slackComposerResolved(sessionId: String, receipt: SlackComposeReceipt)
     /// A dynamic workflow snapshot changed. The session view model owns the
@@ -273,6 +276,10 @@ enum ServerEvent: Sendable {
             // The server sends null to retire the row. Treat it as an empty
             // collection so state handling has one clear path.
             return .replySuggestions(sessionId: id, suggestions: frame.suggestions ?? [])
+        case "composer_prediction":
+            guard let id = frame.sessionId else { return .ignored }
+            let text = frame.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .composerPrediction(sessionId: id, text: text?.isEmpty == false ? text : nil)
         case "slack_composer":
             guard let id = frame.sessionId else { return .ignored }
             return .slackComposer(sessionId: id, request: frame.request)

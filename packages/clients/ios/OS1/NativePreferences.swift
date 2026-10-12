@@ -185,6 +185,23 @@ enum NativePreferences {
             resetMissing: changedIdentity,
             in: defaults
         )
+        // The composer's predicted reply (on by default) and typing
+        // autocomplete (off by default: each suggestion is a paid call),
+        // the web's `composer-predictions` / `composer-autocomplete`.
+        setBool(
+            liveTypingEnabled(prefs["composer-predictions"]),
+            default: true,
+            key: "os1.composer.predictions",
+            resetMissing: changedIdentity,
+            in: defaults
+        )
+        setBool(
+            liveTypingEnabled(prefs["composer-autocomplete"]),
+            default: false,
+            key: "os1.composer.autocomplete",
+            resetMissing: changedIdentity,
+            in: defaults
+        )
         setBool(
             liveTypingEnabled(prefs["live-typing"]),
             default: false,

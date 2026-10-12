@@ -3364,6 +3364,15 @@ private struct SessionInputBar: View {
     @AppStorage("os1.composer.replySuggestions") private var showReplySuggestions = true
     /// On by default, like the account's `next-chat-button` preference.
     @AppStorage("os1.composer.nextChatButton") private var showNextChatButton = true
+    /// The web's `composer-predictions` and `composer-autocomplete` switches.
+    @AppStorage("os1.composer.predictions") private var predictionsOn = true
+    @AppStorage("os1.composer.autocomplete") private var autocompleteOn = false
+    @State private var autocompleteAvailable = false
+    /// The last completion and the draft it was asked for.
+    @State private var completion: ComposerAutocomplete.Suggestion?
+    /// Escape dismissed suggestions for this draft; asks again once it changes.
+    @State private var completionDismissedFor: String?
+    @State private var ghostHeight: CGFloat = 0
     /// Matches the transcript column cap so the bar centers with it.
     let contentMaxWidth: CGFloat
     let horizontalInset: CGFloat
@@ -3674,6 +3683,30 @@ private struct SessionInputBar: View {
             // composer, the one place the question card's letters must not
             // reach.
             if ProcessInfo.processInfo.environment["OS1_FOCUS_COMPOSER"] == "1" {
+                inputFocused = true
+            }
+            // `OS1_AUTOCOMPLETE_FIXTURE="typed|rest"`: a draft with a
+            // completion showing, for screenshots of the faint suggestion.
+            // The typed text syncs to the account's server draft like any
+            // other; run OS1_PREDICTION_FIXTURE (which clears it) afterwards.
+            if let fixture = ProcessInfo.processInfo.environment["OS1_AUTOCOMPLETE_FIXTURE"],
+               let bar = fixture.firstIndex(of: "|") {
+                let typed = String(fixture[..<bar])
+                viewModel.draft = typed
+                completion = ComposerAutocomplete.Suggestion(
+                    base: typed, completion: String(fixture[fixture.index(after: bar)...])
+                )
+                autocompleteOn = true
+                autocompleteAvailable = true
+                inputFocused = true
+                inputSelection = TextSelection(insertionPoint: projectedDraft.wrappedValue.endIndex)
+            }
+            // `OS1_PREDICTION_FIXTURE="text"`: a predicted reply in the
+            // focused, empty composer.
+            if let fixture = ProcessInfo.processInfo.environment["OS1_PREDICTION_FIXTURE"] {
+                viewModel.draft = ""
+                viewModel.showPredictionForScreenshot(fixture)
+                predictionsOn = true
                 inputFocused = true
             }
             // A simulator has no mic to open, so the recording pills are
@@ -4314,6 +4347,51 @@ private struct SessionInputBar: View {
                 .disabled(viewModel.safety != nil)
                 .lineLimit(1...10)
                 .foregroundStyle(OS1VisualStyle.text)
+                // Autocomplete: the rest of the message, faint, after the
+                // caret. The draft is drawn clear in the same font so the
+                // suggestion starts exactly where the typed text ends.
+                .overlay(alignment: .topLeading) {
+                    if let ghost {
+                        (Text(projectedDraft.wrappedValue).foregroundColor(.clear)
+                            + Text(ghost).foregroundColor(OS1VisualStyle.textFaint))
+                            // Wraps like the web's: the box grows to the
+                            // suggestion's height (`ghostHeight`, below).
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                ghostHeight = $0
+                            }
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                // Tab takes a suggestion (a hardware keyboard, or the Mac);
+                // Escape puts the faint one away until the draft changes.
+                .onKeyPress(.tab) {
+                    guard let suggestion = suggestionToTake else { return .ignored }
+                    takeSuggestion(suggestion)
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    guard ghost != nil else { return .ignored }
+                    completionDismissedFor = viewModel.draft
+                    completion = nil
+                    return .handled
+                }
+                .task(id: AutocompleteRequest(
+                    draft: viewModel.draft, enabled: autocompleteLive
+                )) { await requestCompletion() }
+                .task(id: autocompleteOn) {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["OS1_AUTOCOMPLETE_FIXTURE"] != nil {
+                        autocompleteAvailable = true
+                        return
+                    }
+                    #endif
+                    autocompleteAvailable = autocompleteOn
+                        ? await ComposerAutocomplete.available()
+                        : false
+                }
                 // Measured on the field itself, BEFORE the frame and padding
                 // below — so the reading is the text's own height and doesn't
                 // move when the surrounding layout does.
@@ -4350,7 +4428,11 @@ private struct SessionInputBar: View {
                 // the send button off the right edge. The minimum height is
                 // the round buttons' own, so a one-line draft sits centred
                 // between them instead of hugging the bottom alignment.
-                .frame(maxWidth: .infinity, minHeight: isSingleRow ? 44 : nil)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: isSingleRow ? 44 : (ghost != nil ? ghostHeight : nil),
+                    alignment: isSingleRow ? .center : .topLeading
+                )
                 // In the single row the buttons set the pill's height and the
                 // field just sits between them. Multi-line, the text owns the
                 // full width of the box and gets real air around it — the
@@ -4408,6 +4490,10 @@ private struct SessionInputBar: View {
                     modelPill.layoutPriority(1)
                     #endif
                     Spacer(minLength: 8)
+
+                    if suggestionToTake != nil {
+                        useSuggestionButton
+                    }
 
                     ComposerDictationButton(dictation: dictation, draft: $viewModel.draft)
                     if voiceAvailable { callButton }
@@ -4557,6 +4643,7 @@ private struct SessionInputBar: View {
             return noteMode ? "Team note" : "Ask \(shortModelName)"
         }
         #endif
+        if let shownPrediction { return shownPrediction }
         if noteMode { return "Only your team will see this" }
         if viewModel.safety != nil { return "Paused for safety" }
         if viewModel.quoteSelection.text != nil { return "Chat with selected text" }
@@ -4590,6 +4677,96 @@ private struct SessionInputBar: View {
     /// A tap sends with the person's busy-send preference. During a run, a
     /// long press exposes Steer and Queue without shrinking the familiar send
     /// arrow or spending the common tap on a menu.
+    // MARK: - Predicted reply and autocomplete
+
+    /// The predicted next message, standing in for the placeholder only where
+    /// the placeholder is the generic prompt (web: `shownPrediction`).
+    private var shownPrediction: String? {
+        guard predictionsOn, !noteMode, !isSingleRow,
+              viewModel.draft.isEmpty,
+              viewModel.quoteSelection.text == nil,
+              viewModel.safety == nil,
+              forkState.point == nil,
+              let prediction = viewModel.composerPrediction
+        else { return nil }
+        return prediction
+    }
+
+    private var autocompleteLive: Bool {
+        autocompleteOn && autocompleteAvailable && inputFocused && !noteMode
+            && !isSingleRow && viewModel.safety == nil
+    }
+
+    /// The part of the last completion still ahead of the caret.
+    private var ghost: String? {
+        guard autocompleteLive, caretAtEnd else { return nil }
+        return ComposerAutocomplete.ghostSuffix(draft: viewModel.draft, suggestion: completion)
+    }
+
+    /// What Use (or Tab) would type in.
+    private var suggestionToTake: String? {
+        shownPrediction ?? ghost
+    }
+
+    private var caretAtEnd: Bool {
+        guard let selection = inputSelection else { return true }
+        let text = projectedDraft.wrappedValue
+        guard case .selection(let range) = selection.indices else { return false }
+        return range.isEmpty && range.upperBound.utf16Offset(in: text) >= text.utf16.count
+    }
+
+    private struct AutocompleteRequest: Equatable {
+        let draft: String
+        let enabled: Bool
+    }
+
+    /// After a pause with the caret at the end, ask for the rest of the
+    /// message. A new draft cancels this task, so at most one request is in
+    /// flight and none outlives the text it was asked about.
+    private func requestCompletion() async {
+        let draft = viewModel.draft
+        guard autocompleteLive,
+              ComposerAutocomplete.wantsCompletion(draft),
+              completionDismissedFor != draft,
+              ComposerAutocomplete.ghostSuffix(draft: draft, suggestion: completion) == nil
+        else { return }
+        try? await Task.sleep(for: ComposerAutocomplete.pause)
+        guard !Task.isCancelled, caretAtEnd else { return }
+        guard let text = await ComposerAutocomplete.complete(
+            sessionId: viewModel.session.id, draft: draft
+        ), !Task.isCancelled, viewModel.draft == draft else { return }
+        completion = ComposerAutocomplete.Suggestion(base: draft, completion: text)
+    }
+
+    /// Types a suggestion in at the end of the draft. It never sends.
+    private func takeSuggestion(_ insert: String) {
+        Haptics.play(.selection)
+        completion = nil
+        viewModel.draft += insert
+        inputSelection = TextSelection(insertionPoint: projectedDraft.wrappedValue.endIndex)
+        inputFocused = true
+    }
+
+    /// Touch has no Tab key. The web takes a suggestion on a double tap; a
+    /// visible Use keeps the field's own double tap for selecting words.
+    private var useSuggestionButton: some View {
+        Button {
+            if let suggestionToTake { takeSuggestion(suggestionToTake) }
+        } label: {
+            Text("Use")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(OS1VisualStyle.textDim)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .overlay { Capsule().strokeBorder(OS1VisualStyle.border, lineWidth: 1) }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(shownPrediction != nil ? "Use predicted reply" : "Accept suggestion")
+        .accessibilityValue(suggestionToTake ?? "")
+        .transition(.opacity)
+    }
+
     // MARK: - Voice call and model pill
 
     /// The web's `voiceAvailable`: Open Session and Slack threads that are
