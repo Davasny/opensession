@@ -129,6 +129,18 @@ describe("entriesForWire", () => {
   const pinnedGoal =
     "[Pinned session goal — keep working toward it and note how this turn advanced it: Ship the stable sandbox flow.]";
 
+  it("trims a fence opener a model left at the end of its reply", () => {
+    const [entry] = entriesForWire([
+      {
+        id: "reply",
+        type: "assistant",
+        content: 'Pushed.\n\n<opensession:context source="memory">',
+        timestamp: TS,
+      },
+    ]);
+    expect(entry.content).toBe("Pushed.");
+  });
+
   it("removes legacy pinned goals from stored user messages", () => {
     const [entry] = entriesForWire([
       {

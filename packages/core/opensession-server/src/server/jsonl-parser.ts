@@ -8,7 +8,7 @@ import {
 } from "@tellahq/opensession-protocol/notices";
 import { withToolPresentations } from "@tellahq/opensession-protocol/tool-presentation";
 import { SLACK_ID_TO_NAME } from "./shared/user-mappings";
-import { stripContext } from "./prompt-context";
+import { stripContext, stripDanglingContextOpen } from "./prompt-context";
 import { configuredIntegration } from "./config";
 import {
   assistantProseFields,
@@ -1339,6 +1339,23 @@ function stripStoredUserContext(entries: TranscriptEntry[]): TranscriptEntry[] {
   return changed ? shown : entries;
 }
 
+/** A model that runs past its answer can start writing the next injected
+ * turn and stop on the bare fence opener. Trim it from assistant text on the
+ * way out, so stored rows need no migration. */
+function stripAssistantContextTail(
+  entries: TranscriptEntry[],
+): TranscriptEntry[] {
+  let changed = false;
+  const shown = entries.map((entry) => {
+    if (entry.type !== "assistant" || !entry.content) return entry;
+    const content = stripDanglingContextOpen(entry.content);
+    if (content === entry.content) return entry;
+    changed = true;
+    return { ...entry, content };
+  });
+  return changed ? shown : entries;
+}
+
 /** Hide model-only context while preserving the one structural fact a reader
  * needs: a background wait starts another agent turn. The payload stays
  * private; clients receive only a content-free boundary carrying the original
@@ -1413,7 +1430,11 @@ export function prepareEntriesForWire(
 ): TranscriptEntry[] {
   return stripInternalWireFields(
     withToolPresentations(
-      classifyEntries(stripStoredUserContext(projectContextForWire(entries))),
+      classifyEntries(
+        stripAssistantContextTail(
+          stripStoredUserContext(projectContextForWire(entries)),
+        ),
+      ),
     ),
   );
 }

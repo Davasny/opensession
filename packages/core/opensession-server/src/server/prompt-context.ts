@@ -140,6 +140,22 @@ export function stripContext(text: string): string {
   return ATTRIBUTION_ONLY_RE.test(shown.trim()) ? "" : shown;
 }
 
+// A fence opener on its own line that is never closed, through the end of the
+// text. Every injected turn starts with one, so a model that runs past its
+// answer sometimes begins writing the next user turn and stops right after
+// the tag (2026-10-12: a reply ended in a bare `<opensession:context
+// source="memory">`). Anchored to a line start so prose or code that quotes
+// the tag mid-sentence is left alone.
+const DANGLING_OPEN_RE =
+  /(?:^|\n)[ \t]*<(?:opensession|backstage):context(?:\s[^>\n]*)?>(?![\s\S]*<\/(?:opensession|backstage):context>)[\s\S]*$/;
+
+/** Remove an unclosed fence opener (and anything after it) that a model
+ *  emitted at the end of its own reply. */
+export function stripDanglingContextOpen(text: string): string {
+  if (!text || !hasFence(text)) return text;
+  return text.replace(DANGLING_OPEN_RE, "").trimEnd();
+}
+
 /** Is this prompt nothing but injected context — plumbing the human never
  *  typed (the auto-continue nudge, see auto-continue.ts)? Such a turn takes no
  *  delivery attribution: there'd be no message to attribute it to. */

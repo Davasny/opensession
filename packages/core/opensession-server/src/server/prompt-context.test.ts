@@ -7,6 +7,7 @@ import {
   isContextOnly,
   parseContextBlocks,
   withPromptAttribution,
+  stripDanglingContextOpen,
 } from "./prompt-context";
 import { AUTO_CONTINUE_PROMPT, AUTO_CONTINUE_USER } from "./auto-continue";
 
@@ -95,6 +96,31 @@ describe("prompt-context", () => {
     expect(isContextOnly("just a normal message")).toBe(false);
     expect(isContextOnly("")).toBe(false);
     expect(isContextOnly(wrapContext("only plumbing"))).toBe(true);
+  });
+
+  describe("dangling fence opener in a reply", () => {
+    it("drops a bare opener the model emitted at the end of its answer", () => {
+      expect(
+        stripDanglingContextOpen(
+          'Done.\n\n- Light mode not checked.\n\n<opensession:context source="memory">',
+        ),
+      ).toBe("Done.\n\n- Light mode not checked.");
+    });
+
+    it("drops a started block that never closed", () => {
+      expect(
+        stripDanglingContextOpen(
+          "Answer.\n<opensession:context>\nRelevant memory:\n- x",
+        ),
+      ).toBe("Answer.");
+    });
+
+    it("keeps a tag quoted mid-sentence or a closed block", () => {
+      const quoted = "The parser strips `<opensession:context>` blocks.";
+      expect(stripDanglingContextOpen(quoted)).toBe(quoted);
+      const closed = `Example:\n${CTX_OPEN}\nx\n${CTX_CLOSE}`;
+      expect(stripDanglingContextOpen(closed)).toBe(closed);
+    });
   });
 
   describe("prompt attribution", () => {
