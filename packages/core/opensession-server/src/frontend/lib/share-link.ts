@@ -41,17 +41,40 @@ export function subagentSuffix(subagent: readonly string[] = []): string {
 }
 
 /**
+ * The `/asset/<path>` tail of a session URL with an asset open over it. Each
+ * path segment is encoded on its own, so a nested asset still reads as a path.
+ */
+export function assetSuffix(asset?: string | null): string {
+  return asset
+    ? `/asset/${asset.split("/").map(encodeURIComponent).join("/")}`
+    : "";
+}
+
+/**
  * Read back what `sessionPath` wrote: everything after `/session/`, split into
- * the session id and the sub-agent breadcrumb. The id keeps the whole remainder
- * when no `/subagent/` marker is present, so a session id that somehow carries a
- * slash still resolves the way it always did.
+ * the session id, the sub-agent breadcrumb, and an open asset. The id keeps the
+ * whole remainder when no marker is present, so a session id that somehow
+ * carries a slash still resolves the way it always did.
  */
 interface SessionRef {
   id: string;
   subagent: string[];
+  asset?: string;
 }
 
 export function splitSessionRef(rest: string): SessionRef {
+  const assetMarker = "/asset/";
+  const assetAt = rest.indexOf(assetMarker);
+  if (assetAt !== -1) {
+    const asset = rest
+      .slice(assetAt + assetMarker.length)
+      .split("/")
+      .filter(Boolean)
+      .map(decodeURIComponent)
+      .join("/");
+    const ref = splitSessionRef(rest.slice(0, assetAt));
+    return asset ? { ...ref, asset } : ref;
+  }
   const marker = "/subagent/";
   const at = rest.indexOf(marker);
   if (at === -1) return { id: decodeURIComponent(rest), subagent: [] };

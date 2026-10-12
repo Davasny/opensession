@@ -1,13 +1,13 @@
 import { BASE_PATH, stripBasePath } from "./base";
 import type { SettingsSectionKey } from "./settings-sections";
-import { splitSessionRef, subagentSuffix } from "./share-link";
+import { assetSuffix, splitSessionRef, subagentSuffix } from "./share-link";
 
 export type Route =
   | { view: "prs" }
   | { view: "issues" }
   | { view: "feed" }
   | { view: "new"; prompt?: string }
-  | { view: "session"; id: string; subagent?: string[] }
+  | { view: "session"; id: string; subagent?: string[]; asset?: string }
   | {
       view: "workspace";
       id: string;
@@ -85,10 +85,11 @@ function isSettingsSection(value: string): value is SettingsSectionKey {
 }
 
 function sessionRoute(rest: string): Route {
-  const { id, subagent } = splitSessionRef(rest);
-  return subagent.length
-    ? { view: "session", id, subagent }
-    : { view: "session", id };
+  const { id, subagent, asset } = splitSessionRef(rest);
+  const route: Extract<Route, { view: "session" }> = { view: "session", id };
+  if (subagent.length) route.subagent = subagent;
+  if (asset) route.asset = asset;
+  return route;
 }
 
 export function firstMileRequested(pathname: string, search: string): boolean {
@@ -208,7 +209,7 @@ export function parseRoute(pathname: string): Route {
 export function routePath(route: Route): string {
   switch (route.view) {
     case "session":
-      return `${BASE_PATH}/session/${encodeURIComponent(route.id)}${subagentSuffix(route.subagent)}`;
+      return `${BASE_PATH}/session/${encodeURIComponent(route.id)}${subagentSuffix(route.subagent)}${assetSuffix(route.asset)}`;
     case "workspace":
       return `${BASE_PATH}/workspace/${encodeURIComponent(route.id)}${route.tab ? `/${route.tab}` : ""}`;
     case "pr":

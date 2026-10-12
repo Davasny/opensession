@@ -23,6 +23,9 @@ describe("parseRoute", () => {
       id: "os-1",
       subagent: ["agent-a"],
     });
+    expect(
+      parseRoute("/workspace/work-1/session/os-1/asset/report.html"),
+    ).toEqual({ view: "session", id: "os-1", asset: "report.html" });
     expect(parseRoute("/session/legacy/slashed-id")).toEqual({
       view: "session",
       id: "legacy/slashed-id",
@@ -62,6 +65,7 @@ describe("parseRoute", () => {
 describe("routePath", () => {
   const routes: Route[] = [
     { view: "session", id: "os/1", subagent: ["agent/a"] },
+    { view: "session", id: "os-1", asset: "reports/summary.html" },
     { view: "workspace", id: "workspace 1", tab: "conversation" },
     { view: "pr", repo: "tellahq/opensession", branch: "feature/route" },
     { view: "pr", repo: "tellahq/opensession", number: 42 },
