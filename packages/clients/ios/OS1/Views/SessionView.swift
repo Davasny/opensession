@@ -4582,6 +4582,22 @@ private struct SessionInputBar: View {
                 .padding(.top, isSingleRow ? 0 : multiLineInset.top)
                 .padding(.bottom, isSingleRow ? 0 : multiLineInset.bottom)
                 .focused($inputFocused)
+                #if os(iOS)
+                // A way to put the keyboard away without scrolling the
+                // transcript: the bar Safari draws over the PWA's composer
+                // has the same check.
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button {
+                            inputFocused = false
+                        } label: {
+                            Image(systemName: "checkmark")
+                        }
+                        .accessibilityLabel("Hide keyboard")
+                    }
+                }
+                #endif
                 .onChange(of: inputFocused) { _, focused in
                     if !focused { viewModel.userIsTyping(false) }
                 }
