@@ -48,7 +48,7 @@ export const GIT_LABEL = "flex-1 overflow-hidden text-ellipsis";
  *  `data-popup-open` keeps the menu triggers ("Request", "Change") lit while
  *  their own menu is open. */
 const GIT_ACTION_BOX =
-  "inline-flex min-h-[22px] shrink-0 items-center whitespace-nowrap rounded-md px-2 text-label font-semibold transition-[color,background-color] disabled:cursor-default disabled:opacity-60";
+  "inline-flex min-h-[22px] shrink-0 items-center whitespace-nowrap rounded-md px-2 text-label phone:min-h-9 phone:px-3 font-semibold transition-[color,background-color] disabled:cursor-default disabled:opacity-60";
 const GIT_ACTION_NEUTRAL =
   "bg-control text-dim enabled:hover:bg-active enabled:hover:text-fg data-[popup-open]:bg-active data-[popup-open]:text-fg";
 export const GIT_ACTION = `${GIT_ACTION_BOX} ${GIT_ACTION_NEUTRAL}`;
