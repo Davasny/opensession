@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   getOpenAssetForTest,
+  openAssetPathFor,
   setOpenAsset,
   syncOpenAssetWithRoute,
 } from "./asset-overlay-store";
@@ -24,5 +25,14 @@ describe("asset overlay store", () => {
     expect(getOpenAssetForTest()?.path).toBe("a.html");
     setOpenAsset("os-1", null);
     expect(getOpenAssetForTest()).toBeNull();
+  });
+});
+
+describe("openAssetPathFor", () => {
+  test("reads only the named session's asset", () => {
+    setOpenAsset("os-1", "a.html");
+    expect(openAssetPathFor("os-1")).toBe("a.html");
+    expect(openAssetPathFor("os-2")).toBeNull();
+    setOpenAsset("os-1", null);
   });
 });

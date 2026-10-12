@@ -49,6 +49,11 @@ export function useOpenAssetPath(sessionId: string | null): string | null {
   );
 }
 
+/** The asset open over `sessionId` right now, read outside React (a click). */
+export function openAssetPathFor(sessionId: string): string | null {
+  return current?.sessionId === sessionId ? current.path : null;
+}
+
 export function getOpenAssetForTest(): OpenAsset {
   return current;
 }

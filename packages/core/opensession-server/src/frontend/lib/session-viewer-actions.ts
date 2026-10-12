@@ -17,7 +17,13 @@ import {
   undoSlackComposer,
 } from "./api/shipped-changes";
 import { ApiError } from "./api/request";
-import { absoluteLink, sessionPath, workspacePanePath } from "./share-link";
+import { openAssetPathFor } from "./asset-overlay-store";
+import {
+  absoluteLink,
+  assetSuffix,
+  sessionPath,
+  workspacePanePath,
+} from "./share-link";
 
 type Toast = (message: string) => void;
 export type SlackComposer = {
@@ -294,20 +300,24 @@ export function shareSessionAction({
   pane: SharePaneContext;
   shareLink: ShareLink;
 }) {
-  const path = context.workspaceScoped
-    ? `${BASE_PATH}/workspace/${encodeURIComponent(context.session.workspaceId || "")}`
-    : (() => {
-        const activePane = pane.showReview
-          ? "review"
-          : pane.showConversation
-            ? "conversation"
-            : pane.showVideo
-              ? "video"
-              : null;
-        return activePane && context.session.workspaceId
-          ? workspacePanePath(context.session.workspaceId, activePane)
-          : sessionPath(context.session, pane.subagentIds);
-      })();
+  // An asset open over the session is what's on screen, so the link opens it.
+  const openAsset = openAssetPathFor(context.session.id);
+  const path = openAsset
+    ? sessionPath(context.session, pane.subagentIds) + assetSuffix(openAsset)
+    : context.workspaceScoped
+      ? `${BASE_PATH}/workspace/${encodeURIComponent(context.session.workspaceId || "")}`
+      : (() => {
+          const activePane = pane.showReview
+            ? "review"
+            : pane.showConversation
+              ? "conversation"
+              : pane.showVideo
+                ? "video"
+                : null;
+          return activePane && context.session.workspaceId
+            ? workspacePanePath(context.session.workspaceId, activePane)
+            : sessionPath(context.session, pane.subagentIds);
+        })();
   shareLink(absoluteLink(path), {
     toast: "Link copied",
     title: context.workspaceName || context.session.title || undefined,
