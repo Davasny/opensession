@@ -76,6 +76,9 @@ export function NextUnreadButton({ phone = false }: { phone?: boolean }) {
       </Button>
     );
 
+  // Name the workspace it opens; a session without one falls back to its title.
+  const nextLabel = next.workspace || next.title;
+
   return (
     <Popover.Root
       open={open}
@@ -101,7 +104,7 @@ export function NextUnreadButton({ phone = false }: { phone?: boolean }) {
         closeDelay={150}
         render={<Button variant="ghost" />}
         className={cn(surface, "active:scale-100")}
-        aria-label={`Next unread: ${next.title}`}
+        aria-label={`Next unread: ${nextLabel}`}
         aria-description={
           phone
             ? "Tap to open. Hold to choose another unread session."
@@ -184,7 +187,7 @@ export function NextUnreadButton({ phone = false }: { phone?: boolean }) {
         <span aria-hidden>
           <RepoTile name={next.repo} size={18} />
         </span>
-        <span className="min-w-0 flex-1 truncate">{next.title}</span>
+        <span className="min-w-0 flex-1 truncate">{nextLabel}</span>
         <IconArrowRight size={18} className="shrink-0" aria-hidden />
       </Popover.Trigger>
       <Popover.Popup

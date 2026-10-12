@@ -9,6 +9,9 @@ struct UnreadChat: Equatable, Identifiable {
     /// The workspace row it sits under, shown when it differs from `title`.
     let workspace: String
     let repo: String?
+
+    /// What the Next tab names: the workspace, or the session when it has none.
+    var label: String { workspace.isEmpty ? title : workspace }
 }
 
 /// Where a conversation pushed from the sidebar can go next, installed by the
@@ -166,7 +169,7 @@ struct NextUnreadTab: View {
                         RepoTile(name: repo, size: 18)
                             .accessibilityHidden(true)
                     }
-                    Text(next.title)
+                    Text(next.label)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Image(systemName: "arrow.right")
@@ -180,7 +183,7 @@ struct NextUnreadTab: View {
             }
             .menuStyle(.button)
             .buttonStyle(.plain)
-            .accessibilityLabel("Next unread: \(next.title)")
+            .accessibilityLabel("Next unread: \(next.label)")
             .accessibilityHint("Hold to choose another unread session.")
             .transition(.move(edge: .bottom).combined(with: .opacity))
         } else if navigation.allRead {
