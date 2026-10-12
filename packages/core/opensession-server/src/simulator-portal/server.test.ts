@@ -150,6 +150,14 @@ test("helper rejects foreign hosts, cross-origin control, absent tokens, and mut
   expect(
     (await fetch(base, { headers: { Host: "attacker.example" } })).status,
   ).toBe(403);
+  // A Sandbox Portal relay addresses the viewer as localhost:<port>.
+  const port = new URL(base).port;
+  expect(
+    (await fetch(base, { headers: { Host: `localhost:${port}` } })).status,
+  ).toBe(200);
+  expect((await fetch(base, { headers: { Host: "localhost:1" } })).status).toBe(
+    403,
+  );
   expect((await fetch(base, { method: "POST" })).status).toBe(405);
   expect(
     (

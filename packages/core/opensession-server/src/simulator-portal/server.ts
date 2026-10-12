@@ -366,7 +366,9 @@ export function startSimulatorViewer(options: {
       const url = new URL(request.url);
       const allowedHost =
         url.host === new URL(origin).host ||
-        url.host === `127.0.0.1:${server.port}`;
+        url.host === `127.0.0.1:${server.port}` ||
+        // A Sandbox Portal relay addresses the app as localhost:<port>.
+        url.host === `localhost:${server.port}`;
       if (!allowedHost)
         return new Response("Invalid viewer host", { status: 403 });
       if (request.method !== "GET")
