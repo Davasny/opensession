@@ -3373,6 +3373,8 @@ private struct SessionInputBar: View {
     /// Escape dismissed suggestions for this draft; asks again once it changes.
     @State private var completionDismissedFor: String?
     @State private var ghostHeight: CGFloat = 0
+    @State private var fieldHeight: CGFloat = 0
+    @State private var ghostRects = ComposerGhostRects()
     /// Matches the transcript column cap so the bar centers with it.
     let contentMaxWidth: CGFloat
     let horizontalInset: CGFloat
@@ -4347,13 +4349,20 @@ private struct SessionInputBar: View {
                 .disabled(viewModel.safety != nil)
                 .lineLimit(1...10)
                 .foregroundStyle(OS1VisualStyle.text)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    fieldHeight = $0
+                }
                 // Autocomplete: the rest of the message, faint, after the
                 // caret. The draft is drawn clear in the same font so the
                 // suggestion starts exactly where the typed text ends.
                 .overlay(alignment: .topLeading) {
                     if let ghost {
                         (Text(projectedDraft.wrappedValue).foregroundColor(.clear)
-                            + Text(ghost).foregroundColor(OS1VisualStyle.textFaint))
+                            + Text(ghost).foregroundColor(OS1VisualStyle.textFaint)
+                                .customAttribute(ComposerGhostRun()))
+                            // Records where the faint words landed, so a
+                            // double tap can tell it hit them.
+                            .textRenderer(ComposerGhostRenderer(rects: ghostRects))
                             // Wraps like the web's: the box grows to the
                             // suggestion's height (`ghostHeight`, below).
                             .fixedSize(horizontal: false, vertical: true)
@@ -4433,6 +4442,36 @@ private struct SessionInputBar: View {
                     minHeight: isSingleRow ? 44 : (ghost != nil ? ghostHeight : nil),
                     alignment: isSingleRow ? .center : .topLeading
                 )
+                // The field's text view ends at its own last line; this gives
+                // the faint lines wrapped below it a hit area, so the double
+                // tap below reaches them.
+                .overlay(alignment: .topLeading) {
+                    if ghost != nil, ghostHeight > fieldHeight + 1 {
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                            .frame(height: ghostHeight - fieldHeight)
+                            .contentShape(Rectangle())
+                            .padding(.top, fieldHeight)
+                            .accessibilityHidden(true)
+                    }
+                }
+                // Touch has no Tab key (web: `handleTouchEnd`): a double tap
+                // on the field takes the prediction, one on the faint
+                // completion takes that. Elsewhere it stays the field's own
+                // word selection. The frame's origin is the field's, so the
+                // tap and the ghost rects share coordinates.
+                .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { tap in
+                    if let shownPrediction {
+                        takeSuggestion(shownPrediction)
+                    } else if let ghost, ghostRects.contains(tap.location) {
+                        takeSuggestion(ghost)
+                    }
+                })
+                .accessibilityActions {
+                    if let suggestionToTake {
+                        Button("Use suggestion") { takeSuggestion(suggestionToTake) }
+                    }
+                }
                 // In the single row the buttons set the pill's height and the
                 // field just sits between them. Multi-line, the text owns the
                 // full width of the box and gets real air around it — the
@@ -4490,10 +4529,6 @@ private struct SessionInputBar: View {
                     modelPill.layoutPriority(1)
                     #endif
                     Spacer(minLength: 8)
-
-                    if suggestionToTake != nil {
-                        useSuggestionButton
-                    }
 
                     ComposerDictationButton(dictation: dictation, draft: $viewModel.draft)
                     if voiceAvailable { callButton }
@@ -4703,7 +4738,7 @@ private struct SessionInputBar: View {
         return ComposerAutocomplete.ghostSuffix(draft: viewModel.draft, suggestion: completion)
     }
 
-    /// What Use (or Tab) would type in.
+    /// What Tab or a double tap would type in.
     private var suggestionToTake: String? {
         shownPrediction ?? ghost
     }
@@ -4745,26 +4780,12 @@ private struct SessionInputBar: View {
         viewModel.draft += insert
         inputSelection = TextSelection(insertionPoint: projectedDraft.wrappedValue.endIndex)
         inputFocused = true
-    }
-
-    /// Touch has no Tab key. The web takes a suggestion on a double tap; a
-    /// visible Use keeps the field's own double tap for selecting words.
-    private var useSuggestionButton: some View {
-        Button {
-            if let suggestionToTake { takeSuggestion(suggestionToTake) }
-        } label: {
-            Text("Use")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(OS1VisualStyle.textDim)
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .overlay { Capsule().strokeBorder(OS1VisualStyle.border, lineWidth: 1) }
-                .contentShape(Capsule())
+        // The same double tap also reached the field, which selects a word
+        // once it settles: put the caret back at the end after that.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(60))
+            inputSelection = TextSelection(insertionPoint: projectedDraft.wrappedValue.endIndex)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(shownPrediction != nil ? "Use predicted reply" : "Accept suggestion")
-        .accessibilityValue(suggestionToTake ?? "")
-        .transition(.opacity)
     }
 
     // MARK: - Voice call and model pill

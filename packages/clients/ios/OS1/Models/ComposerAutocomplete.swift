@@ -1,8 +1,10 @@
 import Foundation
+import SwiftUI
 
 /// The composer's two suggestions, as on the web (lib/composer-prediction.ts):
 /// a predicted next message in the empty composer, and typing autocomplete,
-/// faint text after the caret. Neither ever sends; taking one types it in.
+/// faint text after the caret. Neither ever sends; a double tap (or Tab)
+/// types it in.
 enum ComposerAutocomplete {
     /// How long the draft has to sit still before a completion is asked for.
     static let pause: Duration = .milliseconds(300)
@@ -57,5 +59,35 @@ enum ComposerAutocomplete {
         if response.available == false { cachedAvailability = false }
         guard let completion = response.completion, !completion.isEmpty else { return nil }
         return completion
+    }
+}
+
+/// Marks the faint completion inside the composer's ghost text.
+struct ComposerGhostRun: TextAttribute {}
+
+/// Where the faint completion was last drawn, in the field's coordinates.
+/// A plain box, not observed: drawing writes it, a double tap reads it.
+final class ComposerGhostRects {
+    var rects: [CGRect] = []
+
+    /// A finger's worth of slack around each line, as on the web.
+    func contains(_ point: CGPoint) -> Bool {
+        rects.contains { $0.insetBy(dx: -16, dy: -12).contains(point) }
+    }
+}
+
+/// Draws the ghost text unchanged and records the completion's line rects.
+struct ComposerGhostRenderer: TextRenderer {
+    let rects: ComposerGhostRects
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        var found: [CGRect] = []
+        for line in layout {
+            for run in line {
+                if run[ComposerGhostRun.self] != nil { found.append(run.typographicBounds.rect) }
+                context.draw(run)
+            }
+        }
+        rects.rects = found
     }
 }

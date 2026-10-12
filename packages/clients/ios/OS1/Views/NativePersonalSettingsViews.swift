@@ -216,7 +216,7 @@ struct PreferencesSettingsView: View {
             .disabled(!autocompleteAvailable)
         } footer: {
             Text(autocompleteAvailable
-                ? "Predicted reply suggests your next message when a turn ends. Autocomplete suggests the rest of your message as you type. Tap Use to take either."
+                ? "Predicted reply suggests your next message when a turn ends. Autocomplete suggests the rest of your message as you type. Double tap to use either."
                 : "Predicted reply suggests your next message when a turn ends. Autocomplete needs an OpenAI key in Settings, Desk voice.")
         }
         .task { autocompleteAvailable = await ComposerAutocomplete.available() }

@@ -118,7 +118,7 @@ final class SessionViewModel {
     /// never sends, because the server's suggestion is still only a guess.
     private(set) var replySuggestions: [ReplySuggestion] = []
     /// The server's guess at the next message, shown as the empty
-    /// composer's placeholder and taken with Use (web: Tab / double tap).
+    /// composer's placeholder and taken with a double tap or Tab, as on the web.
     private(set) var composerPrediction: String?
 
     #if DEBUG
