@@ -2510,7 +2510,17 @@ struct SessionsListView: View {
 
     /// What the pushed session's action pill and Next tab act on.
     private func phoneNavigation(for session: Session) -> PhoneSessionNavigation {
-        let chats = unreadChats(after: session)
+        var chats = unreadChats(after: session)
+        #if DEBUG
+        // `OS1_NEXT_TAB_FIXTURE=1`: an unread session for screenshots of the
+        // Next tab on an account that has read everything.
+        if chats.isEmpty, ProcessInfo.processInfo.environment["OS1_NEXT_TAB_FIXTURE"] == "1" {
+            chats = [UnreadChat(
+                id: "fixture-next", title: "Fix the sidebar row spacing",
+                workspace: "Sidebar polish", repo: session.effectiveRepo
+            )]
+        }
+        #endif
         let current = workspace(containing: session)
         return PhoneSessionNavigation(
             chats: chats,

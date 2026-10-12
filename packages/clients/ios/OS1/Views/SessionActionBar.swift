@@ -138,10 +138,11 @@ struct NextUnreadTab: View {
 
     /// How far the tab tucks under the composer, as the web's `-mb-3.5`.
     static let tuck: CGFloat = 14
-    /// The input bar stacks its rows 4pt apart; the tab sits flush on the
-    /// composer, so it takes that gap back too. Without this only 10pt was
-    /// tucked and the tab stood 4pt taller than the web's.
-    static let barSpacing: CGFloat = 4
+    /// The input bar stacks its rows 4pt apart, and the (usually empty)
+    /// mention palette sits between this tab and the composer, so two such
+    /// gaps separate them. The tab takes both back to sit 44pt above the
+    /// composer like the web's (58pt tall, 14 tucked).
+    static let barSpacing: CGFloat = 8
 
     var body: some View {
         if let next = navigation.chats.first {
