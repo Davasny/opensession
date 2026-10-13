@@ -17,7 +17,7 @@ import {
   withDynamicCredentials,
 } from "./connections";
 import { userMatchesAny } from "./shared/user-mappings";
-import { configuredPaths } from "./config";
+import { configuredIntegration, configuredPaths } from "./config";
 
 /** Claude Code CLI binary the Meridian bridge / anthropic-bridge spawn.
  *  OPENSESSION_CLAUDE_BIN env → config `paths.claudeBin` → this VPS's path. */
@@ -107,6 +107,62 @@ export const STRIPE_CONFIRM_TOOLS: Record<string, string> = {
   mcp__stripe__stripe_api_execute: "Execute a raw Stripe API call",
   mcp__stripe__stripe_api_write: "Execute a mutating Stripe API call",
 };
+
+/**
+ * Confirm-gated tools that Stripe's own two-party approvals can gate
+ * (https://docs.stripe.com/account/approvals): with an agent-tagged restricted
+ * key, "Refund is created" and "Subscription is canceled" pause on an
+ * `approval_required` error until a Dashboard reviewer approves them. The raw
+ * write tools are included because the key, not the tool, bounds what they
+ * reach; the operator must restrict its write access to approval-gated
+ * resources. `update_subscription` is absent: Stripe cannot gate updates.
+ */
+export const STRIPE_APPROVAL_GATED_TOOLS: ReadonlySet<string> = new Set([
+  "mcp__stripe__create_refund",
+  "mcp__stripe__cancel_subscription",
+  "mcp__stripe__stripe_api_execute",
+  "mcp__stripe__stripe_api_write",
+]);
+
+/** `integrations.stripe.approvalsEnforced`: the operator attests that the
+ *  Stripe MCP key is agent-tagged, that approval rules cover every write it
+ *  can make, and that a different person reviews them. Off unless literally
+ *  `true`. */
+export function stripeApprovalsEnforced(): boolean {
+  return configuredIntegration("stripe").approvalsEnforced === true;
+}
+
+/**
+ * The confirm-gated tool catalog for one run. Unattended runs (automations,
+ * their descendants, goals, webhooks) always get the full catalog. A
+ * human-driven interactive run drops the tools Stripe itself gates when
+ * `stripeApprovalsEnforced()`, so the model can submit a refund that waits
+ * for a reviewer in the Stripe Dashboard. Deny lists (a Plain discussion's)
+ * still win over this, since runToolPolicy applies them first.
+ */
+export function stripeConfirmToolsFor(opts: {
+  interactive: boolean;
+  /** Test seam; defaults to the configured flag. */
+  approvalsEnforced?: boolean;
+}): Record<string, string> {
+  const enforced = opts.approvalsEnforced ?? stripeApprovalsEnforced();
+  if (!opts.interactive || !enforced) return STRIPE_CONFIRM_TOOLS;
+  return Object.fromEntries(
+    Object.entries(STRIPE_CONFIRM_TOOLS).filter(
+      ([name]) => !STRIPE_APPROVAL_GATED_TOOLS.has(name),
+    ),
+  );
+}
+
+/** Interactive-run guidance while Stripe enforces approvals. */
+export const STRIPE_APPROVALS_NOTE =
+  "Stripe refunds and subscription cancellations: the Stripe MCP key is " +
+  "agent-tagged and Stripe requires a reviewer's approval for them. Make " +
+  "one only when the person asks for it, with the exact object and amount. " +
+  "An `approval_required` error is not a failure: Stripe has queued the " +
+  "action for review in the Dashboard (Settings > Approvals > Requests). " +
+  "Tell the person it is waiting for approval, do not retry it, and do not " +
+  "report the money as moved until Stripe shows it succeeded.";
 
 // `strict` matching applies to successful results too — the CLI reports usage
 // limits as a plain result text ("Claude AI usage limit reached|<ts>",

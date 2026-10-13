@@ -97,7 +97,7 @@ import {
 import { createSlackPostScanner, linkThreadInIndex } from "./slack-links";
 import { createIncidentDeclarationRecorder } from "./incident-declarations";
 import {
-  STRIPE_CONFIRM_TOOLS,
+  stripeConfirmToolsFor,
   looksLikeFabricatedToolTranscript,
 } from "./runner-shared";
 import {
@@ -2257,7 +2257,9 @@ export async function maybeLaunchSandboxedRun(
       reposNoteHasPreset: !opts.isAutomationSession && !!session.presetNote,
       deniedTools: opts.deniedTools,
       publicationPolicy: security.publicationPolicy,
-      confirmTools: STRIPE_CONFIRM_TOOLS,
+      confirmTools: stripeConfirmToolsFor({
+        interactive: !opts.isAutomationSession && !session.plainDiscussionId,
+      }),
       aws: false,
       author: commitAuthorFor(
         opts.isAutomationSession ? undefined : opts.user,
@@ -3385,7 +3387,9 @@ async function runSessionPromptInner(
                 headBranch: session.branch || "",
               }
             : undefined,
-          confirmTools: STRIPE_CONFIRM_TOOLS,
+          confirmTools: stripeConfirmToolsFor({
+            interactive: !isAutomationSession && !session.plainDiscussionId,
+          }),
           aws:
             (!isAutomationSession && !session.plainDiscussionId) ||
             agentAwsCredsForUntrustedRuns(),
@@ -3494,7 +3498,9 @@ async function runSessionPromptInner(
             headBranch: session.branch || "",
           }
         : undefined,
-      confirmTools: STRIPE_CONFIRM_TOOLS,
+      confirmTools: stripeConfirmToolsFor({
+        interactive: !isAutomationSession && !session.plainDiscussionId,
+      }),
       // Automation descendants and Plain discussion sessions (untrusted
       // ticket text) receive AWS credentials only when the instance opts
       // them in (`integrations.aws.untrustedRuns`).

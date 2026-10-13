@@ -74,6 +74,43 @@ exception is Plain's fail-closed approval flow: a verified teammate explicitly
 approves a previously proposed refund or cancellation in the same Plain thread,
 and a dedicated run receives the mutators for that action.
 
+### Stripe two-party approvals
+
+Stripe can hold refunds and subscription cancellations for a second person's
+approval ([two-party approvals](https://docs.stripe.com/account/approvals)).
+When the API key is **agent-tagged**, a refund or cancellation that matches an
+approval rule returns an `approval_required` error and waits in the Dashboard
+under Settings > Approvals > Requests. With that in place, set:
+
+```json
+{ "integrations": { "stripe": { "approvalsEnforced": true } } }
+```
+
+Human-driven interactive sessions then keep `create_refund`,
+`cancel_subscription` and the raw-API mutators, and are told to treat
+`approval_required` as queued for review. Automations, their descendants,
+goals, workflows, webhook runs and Plain discussions stay stripped exactly as
+above. `update_subscription` stays stripped everywhere because Stripe cannot
+gate subscription updates.
+
+Before turning it on:
+
+1. Use an **agent-tagged** restricted key for the Stripe MCP. Stripe's default
+   rules only apply to agent-tagged keys; an untagged key refunds immediately.
+2. Keep "Refund is created" and "Subscription is canceled" set to
+   **Require approval** with no amount threshold you are not willing to lose,
+   and name reviewers other than the people driving sessions.
+3. Limit the key's writes to Refunds and the subscription cancel endpoint.
+   The raw-API write tool reaches anything the key allows, so drop write on
+   Subscriptions updates, Invoices, Customers and every other resource that has
+   no approval rule.
+4. Test it: from a session, refund a small live charge through the MCP key and
+   confirm Stripe returns `approval_required` and creates a pending request,
+   and that nothing moves until a reviewer approves it.
+
+The flag is an operator attestation. Open Session does not check the key or
+Stripe's rules itself.
+
 ## WorkOS
 
 No WorkOS server ships in this repo. Add your own stdio or HTTP WorkOS MCP to

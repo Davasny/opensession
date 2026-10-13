@@ -5,7 +5,7 @@ import {
   resolveSessionRunInputs,
   type SessionRunInputs,
 } from "./session-run-inputs";
-import { filterMcpServers, STRIPE_CONFIRM_TOOLS } from "./runner-shared";
+import { filterMcpServers, stripeConfirmToolsFor } from "./runner-shared";
 import {
   hasValidRequiredAllowedUsers,
   readMcpConfig,
@@ -236,7 +236,7 @@ export function describeStrippedTools(
     rows.push({
       tool,
       ids: deniedToolIds(tool, { broad: true }),
-      source: "runner-shared.ts STRIPE_CONFIRM_TOOLS (every run)",
+      source: "runner-shared.ts STRIPE_CONFIRM_TOOLS (stripeConfirmToolsFor)",
       reason: `${label} — no per-call approval bridge on this engine, so the tool is never in the model's list`,
     });
   }
@@ -420,15 +420,18 @@ export async function buildSessionEffectiveConfig(
     },
   };
 
+  const confirmTools = stripeConfirmToolsFor({
+    interactive: !inputs.isAutomationSession && !session.plainDiscussionId,
+  });
   const policy = runToolPolicy({
     deniedTools: inputs.deniedTools,
-    confirmTools: STRIPE_CONFIRM_TOOLS,
+    confirmTools,
     journalKind,
   });
   const tools: Record<string, ConfigRow> = {
     unattended: row(policy.unattended, "run-policy.ts runToolPolicy"),
     stripped: row(
-      describeStrippedTools(policy, inputs.deniedTools, STRIPE_CONFIRM_TOOLS),
+      describeStrippedTools(policy, inputs.deniedTools, confirmTools),
       "run-policy.ts runToolPolicy",
     ),
     disabledIds: row(

@@ -132,7 +132,8 @@
       "apiUrl": "https://core-api.uk.plain.com/graphql/v1"
     },
     "stripe": {
-      "enabled": false
+      "enabled": false,
+      "approvalsEnforced": false
     },
     "grafana": {
       "enabled": false
