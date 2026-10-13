@@ -133,7 +133,8 @@
     },
     "stripe": {
       "enabled": false,
-      "approvalsEnforced": false
+      "approvalsEnforced": false,
+      "approvalsSlackChannel": "C0123456789"
     },
     "grafana": {
       "enabled": false

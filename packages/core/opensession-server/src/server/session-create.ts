@@ -106,7 +106,7 @@ import {
   sessionMentionsNote,
   watchExternalRunAndDrain,
 } from "./run-session";
-import { type McpScope, stripeConfirmToolsFor } from "./runner-shared";
+import { type McpScope, STRIPE_CONFIRM_TOOLS } from "./runner-shared";
 import { plainDiscussionDeniedTools } from "./automation-denied-tools";
 import {
   mirrorTurnToPlainDiscussion,
@@ -2046,9 +2046,7 @@ export async function openCreatedSession(
                 : {}),
               deniedTools: openingDeniedTools,
               publicationPolicy: openingTrust.publicationPolicy,
-              confirmTools: stripeConfirmToolsFor({
-                interactive: !automationChild && !spec.plainDiscussionId,
-              }),
+              confirmTools: STRIPE_CONFIRM_TOOLS,
               aws: openingTrust.aws,
               author: commitAuthorFor(spec.user, spec.createdBy),
               user: openingTrust.user,

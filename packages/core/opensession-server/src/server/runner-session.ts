@@ -33,7 +33,7 @@ import { registerRunWsHost, runWsConnector } from "./run-ws";
 import type { UnifiedSession } from "./types";
 import { interactiveMcpServers } from "./interactive-mcp";
 import { interactiveFallbackModel } from "./models";
-import { stripeConfirmToolsFor } from "./runner-shared";
+import { STRIPE_CONFIRM_TOOLS } from "./runner-shared";
 import { sessionPrincipal } from "./session-actors";
 import { commitAuthorFor } from "./shared/user-mappings";
 import { makeAskHandler } from "./asks";
@@ -195,9 +195,7 @@ export async function maybeLaunchRunnerRun(
     reposNote: runInputs.isAutomationSession ? undefined : opts.reposNote,
     deniedTools: runInputs.deniedTools,
     publicationPolicy,
-    confirmTools: stripeConfirmToolsFor({
-      interactive: !runInputs.isAutomationSession && !session.plainDiscussionId,
-    }),
+    confirmTools: STRIPE_CONFIRM_TOOLS,
     aws: !runInputs.isAutomationSession || agentAwsCredsForUntrustedRuns(),
     author: commitAuthorFor(opts.user, sessionPrincipal(session)),
     user: runUser,

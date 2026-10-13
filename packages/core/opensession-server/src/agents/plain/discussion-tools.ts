@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { createSdkMcpServer, tool } from "../../server/inprocess-mcp";
 import { findSession } from "../../server/session-cache";
+import { stripeApprovalsEnforced } from "../../server/stripe-approvals";
 import {
   requestDiscussionToolCallApproval,
   upsertDiscussionToolCall,
@@ -195,82 +196,94 @@ export function createPlainDiscussionMcpServer(ctx: {
           }
         },
       ),
-      tool(
-        "execute_stripe_action",
-        "Run a specific Stripe refund or subscription cancellation/update, after the teammate approves it in Plain. Describe the exact action (customer, subscription or charge, amount, reason); the card shows that description and, on approval, a dedicated execution turn with the Stripe tools carries out that action and nothing else. Propose in your reply first; call this only when the teammate asked for the action to happen.",
-        {
-          proposal: z
-            .string()
-            .min(1)
-            .max(4000)
-            .describe(
-              "The exact Stripe action: who, which object (sub_/ch_/pi_ id if known), amount, reason.",
+      // With Stripe approvals enforced the session calls the Stripe tools
+      // itself and Stripe holds the action for a reviewer, so a second
+      // approval card here would only ask twice.
+      ...(stripeApprovalsEnforced()
+        ? []
+        : [
+            tool(
+              "execute_stripe_action",
+              "Run a specific Stripe refund or subscription cancellation/update, after the teammate approves it in Plain. Describe the exact action (customer, subscription or charge, amount, reason); the card shows that description and, on approval, a dedicated execution turn with the Stripe tools carries out that action and nothing else. Propose in your reply first; call this only when the teammate asked for the action to happen.",
+              {
+                proposal: z
+                  .string()
+                  .min(1)
+                  .max(4000)
+                  .describe(
+                    "The exact Stripe action: who, which object (sub_/ch_/pi_ id if known), amount, reason.",
+                  ),
+              },
+              async (args: { proposal: string }) => {
+                const gate: GateContext = {
+                  discussionId: ctx.discussionId,
+                  toolCallId: `stripe-${crypto.randomUUID()}`,
+                  heading: "Run a Stripe refund/cancellation",
+                };
+                const action = beginDiscussionAction(
+                  ctx.discussionId,
+                  gate.toolCallId,
+                );
+                try {
+                  const outcome = await openGate(gate, args.proposal);
+                  if (outcome.status !== "APPROVED")
+                    return text(await explainNoGo(gate, outcome));
+                  const threadId = threadFor();
+                  let threadContext = "";
+                  if (threadId) {
+                    const { getThreadWithMessages, formatThreadContext } =
+                      await import("./api");
+                    threadContext = formatThreadContext(
+                      await getThreadWithMessages(threadId),
+                      true,
+                    );
+                  }
+                  const { executeApprovedStripeAction } =
+                    await import("./handlers");
+                  // Last check before the execution turn starts; once it runs, a
+                  // Stop aborts it through the engine's own cancel path.
+                  throwIfStopped(action.signal);
+                  const result = await executeApprovedStripeAction(
+                    args.proposal,
+                    threadContext,
+                    "discussion",
+                    action.signal,
+                  );
+                  if (action.signal.aborted) {
+                    await closeGate(
+                      gate,
+                      "ERROR",
+                      "The teammate stopped the turn.",
+                    );
+                    return text(
+                      `The teammate stopped the turn while the Stripe execution was running; it was aborted. Verify in Stripe whether anything went through before telling the customer.\n\n${result}`,
+                    );
+                  }
+                  const failed = /^error\b/i.test(result.trim());
+                  await closeGate(
+                    gate,
+                    failed ? "ERROR" : "SUCCESS",
+                    failed ? result : "done",
+                  );
+                  return text(
+                    `Execution turn finished${failed ? " with an error" : ""}. Verify in Stripe before telling the customer.\n\n${result}`,
+                  );
+                } catch (e) {
+                  const message = e instanceof Error ? e.message : String(e);
+                  await closeGate(gate, "ERROR", message);
+                  if (e instanceof StoppedError)
+                    return text(
+                      "The teammate stopped the turn before the Stripe execution started. Nothing was done.",
+                    );
+                  return text(
+                    `The Stripe execution failed: ${message}. No money moved if Stripe was not reached — verify in Stripe.`,
+                  );
+                } finally {
+                  action.release();
+                }
+              },
             ),
-        },
-        async (args: { proposal: string }) => {
-          const gate: GateContext = {
-            discussionId: ctx.discussionId,
-            toolCallId: `stripe-${crypto.randomUUID()}`,
-            heading: "Run a Stripe refund/cancellation",
-          };
-          const action = beginDiscussionAction(
-            ctx.discussionId,
-            gate.toolCallId,
-          );
-          try {
-            const outcome = await openGate(gate, args.proposal);
-            if (outcome.status !== "APPROVED")
-              return text(await explainNoGo(gate, outcome));
-            const threadId = threadFor();
-            let threadContext = "";
-            if (threadId) {
-              const { getThreadWithMessages, formatThreadContext } =
-                await import("./api");
-              threadContext = formatThreadContext(
-                await getThreadWithMessages(threadId),
-                true,
-              );
-            }
-            const { executeApprovedStripeAction } = await import("./handlers");
-            // Last check before the execution turn starts; once it runs, a
-            // Stop aborts it through the engine's own cancel path.
-            throwIfStopped(action.signal);
-            const result = await executeApprovedStripeAction(
-              args.proposal,
-              threadContext,
-              "discussion",
-              action.signal,
-            );
-            if (action.signal.aborted) {
-              await closeGate(gate, "ERROR", "The teammate stopped the turn.");
-              return text(
-                `The teammate stopped the turn while the Stripe execution was running; it was aborted. Verify in Stripe whether anything went through before telling the customer.\n\n${result}`,
-              );
-            }
-            const failed = /^error\b/i.test(result.trim());
-            await closeGate(
-              gate,
-              failed ? "ERROR" : "SUCCESS",
-              failed ? result : "done",
-            );
-            return text(
-              `Execution turn finished${failed ? " with an error" : ""}. Verify in Stripe before telling the customer.\n\n${result}`,
-            );
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            await closeGate(gate, "ERROR", message);
-            if (e instanceof StoppedError)
-              return text(
-                "The teammate stopped the turn before the Stripe execution started. Nothing was done.",
-              );
-            return text(
-              `The Stripe execution failed: ${message}. No money moved if Stripe was not reached — verify in Stripe.`,
-            );
-          } finally {
-            action.release();
-          }
-        },
-      ),
+          ]),
     ],
   });
 }

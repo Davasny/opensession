@@ -86,15 +86,46 @@ under Settings > Approvals > Requests. With that in place, set:
 { "integrations": { "stripe": { "approvalsEnforced": true } } }
 ```
 
-Human-driven interactive sessions then keep `create_refund`,
-`cancel_subscription` and the raw-API mutators, and are told to treat
-`approval_required` as queued for review: they add a reason to the request
-and share its Dashboard approval link with its expiry. A request nobody
-reviews before `expires_at` (24 hours in practice, not the 14 days the docs
-mention) lapses without refunding. Automations, their descendants,
-goals, workflows, webhook runs and Plain discussions stay stripped exactly as
-above. `update_subscription` stays stripped everywhere because Stripe cannot
-gate subscription updates.
+Every agent run (interactive sessions, automations and their sessions,
+goals, Plain, GitHub and Linear runs) then keeps `create_refund`,
+`cancel_subscription` and the raw-API writer. Plain discussion sessions call
+them directly instead of `execute_stripe_action`, so the teammate approves
+once, in Stripe. `update_subscription` stays stripped everywhere because
+Stripe cannot hold subscription updates. Workflow scripts' direct MCP calls
+never reach the Stripe server.
+
+The server also narrows the raw writer (`stripe-approvals.ts`): only
+`PostRefunds`, `DeleteSubscriptionsSubscriptionExposedId` and the requester's
+`PostV2CoreApprovalRequestsId` / `PostV2CoreApprovalRequestsIdCancel` go
+through; any other operation fails before it reaches Stripe. Runs are told to
+treat `approval_required` as queued for review, add a reason to the request,
+and share its Dashboard approval link with its expiry. The server appends the
+session link to that reason. A request nobody reviews before `expires_at`
+(24 hours in practice, not the 14 days the docs mention) lapses without
+refunding.
+
+#### Approval alerts
+
+To hear about requests, add an event destination in Stripe (Workbench >
+Webhooks) with **thin** payloads, the six `v2.core.approval_request.*` events
+(`created`, `rejected`, `canceled`, `expired`, `succeeded`, `failed`) and the
+same `POST /stripe/webhook` URL. Append its signing secret to
+`STRIPE_WEBHOOK_SECRET`, comma-separated, and name a Slack channel:
+
+```json
+{
+  "integrations": {
+    "stripe": { "approvalsEnforced": true, "approvalsSlackChannel": "C0123" }
+  }
+}
+```
+
+New requests post to that channel with the reason, the approval link and the
+deadline; later outcomes reply in the same thread. When a request is rejected,
+expires, succeeds or fails, the session that asked for it gets a message and
+tells the person. The server fetches each request with `STRIPE_API_KEY` if
+set, otherwise with the Stripe MCP server's key. The Slack bot must be in the
+channel.
 
 Before turning it on:
 
@@ -103,10 +134,10 @@ Before turning it on:
 2. Keep "Refund is created" and "Subscription is canceled" set to
    **Require approval** with no amount threshold you are not willing to lose,
    and name reviewers other than the people driving sessions.
-3. Limit the key's writes to Refunds and the subscription cancel endpoint.
-   The raw-API write tool reaches anything the key allows, so drop write on
-   Subscriptions updates, Invoices, Customers and every other resource that has
-   no approval rule.
+3. Give the key "Charges and Refunds" write (without it refunds fail with
+   `more_permissions_required`, which the Stripe MCP reports only as "Error
+   POSTing to endpoint") and nothing else it does not need. The server limits
+   the raw writer to held operations, but the key is the outer bound.
 4. Test it: from a session, refund a small live charge through the MCP key and
    confirm Stripe returns `approval_required` and creates a pending request,
    and that nothing moves until a reviewer approves it.

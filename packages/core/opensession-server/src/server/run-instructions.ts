@@ -69,6 +69,9 @@ export function buildRunInstructions(input: {
    *  verbatim so operator-private guidance never has to live in the tracked
    *  AGENTS.md. */
   localInstructions?: string;
+  /** Stripe approvals guidance (stripeApprovalsNote), set only when the
+   *  run can reach the Stripe server while approvals are enforced. */
+  stripeApprovalsNote?: string;
   /** The Dial: tells a dial-preset run about its oracle subagent. Only set for
    *  dial runs — other sessions never learn the oracle agents exist. */
   dialOracle?: {
@@ -316,6 +319,7 @@ export function buildRunInstructions(input: {
       "table, one row each with short cells; keep prose for fewer, and a chart or " +
       "mermaid when the point is a trend or a flow.",
   );
+  if (input.stripeApprovalsNote) parts.push(input.stripeApprovalsNote);
   // Instance-local operator instructions last: they're the deployment's own
   // additions and may refine anything above.
   if (input.localInstructions?.trim())

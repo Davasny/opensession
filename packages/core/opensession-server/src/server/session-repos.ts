@@ -52,10 +52,6 @@ import { personalOutputStyleNoteFor } from "./personal-output-style";
 import { personalPromptNoteFor } from "./personal-prompts";
 import { PSTACK_MODE_NOTE } from "./pstack-mode";
 import {
-  STRIPE_APPROVALS_NOTE,
-  stripeApprovalsEnforced,
-} from "./runner-shared";
-import {
   findSession,
   getCachedSessionsAsync,
   touchNativeSession,
@@ -369,11 +365,6 @@ export async function buildSessionNote(
     [
       session.presetNote || "",
       session.pstackMode ? PSTACK_MODE_NOTE : "",
-      // Stripe's two-party approvals gate refunds for this deployment, so
-      // interactive runs keep the refund tools (stripeConfirmToolsFor).
-      stripeApprovalsEnforced() && !session.plainDiscussionId
-        ? STRIPE_APPROVALS_NOTE
-        : "",
       // The standing Desk session gets its concierge charter first — role
       // discipline for the summonable overlay (see desk.ts) — then the
       // user's live state, rebuilt per turn (desk-state.ts) so it can

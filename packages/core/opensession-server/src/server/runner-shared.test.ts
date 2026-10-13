@@ -11,8 +11,6 @@ import {
   isProviderOverloadError,
   isTransientRunError,
   isUpstreamIdleStallError,
-  STRIPE_CONFIRM_TOOLS,
-  stripeConfirmToolsFor,
   usageLimitResetAt,
 } from "./runner-shared";
 
@@ -337,27 +335,5 @@ describe("askBashDenyReason", () => {
     expect(askBashDenyReason("jq '.a; .b' f.json")).toBeNull();
     // Literal $( inside single quotes is data too.
     expect(askBashDenyReason("grep -n '$(x)' file")).toBeNull();
-  });
-});
-
-describe("stripeConfirmToolsFor", () => {
-  test("keeps every money mover gated unless Stripe approvals are enforced", () => {
-    expect(
-      stripeConfirmToolsFor({ interactive: true, approvalsEnforced: false }),
-    ).toEqual(STRIPE_CONFIRM_TOOLS);
-  });
-
-  test("unattended runs stay gated even when approvals are enforced", () => {
-    expect(
-      stripeConfirmToolsFor({ interactive: false, approvalsEnforced: true }),
-    ).toEqual(STRIPE_CONFIRM_TOOLS);
-  });
-
-  test("interactive runs keep only what Stripe cannot gate", () => {
-    expect(
-      Object.keys(
-        stripeConfirmToolsFor({ interactive: true, approvalsEnforced: true }),
-      ),
-    ).toEqual(["mcp__stripe__update_subscription"]);
   });
 });

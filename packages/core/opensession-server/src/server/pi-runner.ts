@@ -105,6 +105,11 @@ import {
 } from "./run-instructions";
 import { stampIncidentDeclaration } from "./incident-declarations";
 import {
+  guardStripeApprovalCall,
+  stripeApprovalsEnforced,
+  stripeApprovalsNote,
+} from "./stripe-approvals";
+import {
   logInjectedContext,
   logStandingContext,
   logStandingJson,
@@ -2471,10 +2476,16 @@ async function* runPiAttempt(
       });
     }
 
+    // Stripe two-party approvals hold refunds and cancellations, so every
+    // run keeps those tools; guardStripeApprovalCall narrows the raw writer.
+    const stripeApprovals =
+      stripeApprovalsEnforced() &&
+      (!Array.isArray(mcpServers) || mcpServers.includes("stripe"));
     const policy = runToolPolicy({
       deniedTools: opts.deniedTools,
       confirmTools,
       journalKind: journal?.kind,
+      stripeApprovals,
     });
     // Command-policy gate: kind-based like previous runner (NOT policy.unattended) —
     // the trusted-human loops carry deniedTools but shouldn't trip the gate.
@@ -2719,12 +2730,15 @@ async function* runPiAttempt(
       legacyProxyMcp: mcpMounts.legacyProxy,
       // An incident this run declares names the session it came from, so the
       // responder and the people in the channel can find the evidence.
-      rewriteArgs: (tool, args) =>
-        stampIncidentDeclaration(
-          tool.name,
-          args,
-          journal?.osSessionId ? sessionLink(journal.osSessionId) : undefined,
-        ),
+      rewriteArgs: (tool, args) => {
+        const link = journal?.osSessionId
+          ? sessionLink(journal.osSessionId)
+          : undefined;
+        const stamped = stampIncidentDeclaration(tool.name, args, link);
+        return stripeApprovals
+          ? guardStripeApprovalCall(tool, stamped, link)
+          : stamped;
+      },
       onAudit: (e) =>
         audit({
           msg: "pi_mcp_call",
@@ -2878,6 +2892,9 @@ async function* runPiAttempt(
       repoHost: isScratch ? undefined : cwdRepo?.host,
       publicRepo,
       localInstructions: readLocalInstructions(context.dir),
+      stripeApprovalsNote: stripeApprovals
+        ? stripeApprovalsNote(policy.unattended)
+        : undefined,
       inProcessMcp: opts.inProcessMcp,
       sandboxed: !!remote || process.env.OPENSESSION_SANDBOX === "1",
       hasSession: !!journal?.osSessionId,
