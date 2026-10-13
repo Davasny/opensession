@@ -160,9 +160,11 @@ export const STRIPE_APPROVALS_NOTE =
   "agent-tagged and Stripe requires a reviewer's approval for them. Make " +
   "one only when the person asks for it, with the exact object and amount. " +
   "An `approval_required` error is not a failure: Stripe has queued the " +
-  "action for review in the Dashboard (Settings > Approvals > Requests). " +
-  "Tell the person it is waiting for approval, do not retry it, and do not " +
-  "report the money as moved until Stripe shows it succeeded.";
+  "action for review. Add a short reason to the approval request " +
+  "(PostV2CoreApprovalRequestsId), then give the person its approval URL " +
+  "(the request's `dashboard_url`) as a clickable link so a reviewer can " +
+  "approve it. Do not retry, and do not report the money as moved until the " +
+  "request's status is `succeeded`.";
 
 // `strict` matching applies to successful results too — the CLI reports usage
 // limits as a plain result text ("Claude AI usage limit reached|<ts>",

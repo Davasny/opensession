@@ -88,7 +88,8 @@ under Settings > Approvals > Requests. With that in place, set:
 
 Human-driven interactive sessions then keep `create_refund`,
 `cancel_subscription` and the raw-API mutators, and are told to treat
-`approval_required` as queued for review. Automations, their descendants,
+`approval_required` as queued for review: they add a reason to the request
+and share its Dashboard approval link. Automations, their descendants,
 goals, workflows, webhook runs and Plain discussions stay stripped exactly as
 above. `update_subscription` stays stripped everywhere because Stripe cannot
 gate subscription updates.
