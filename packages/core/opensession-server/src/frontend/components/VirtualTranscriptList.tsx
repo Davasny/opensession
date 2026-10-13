@@ -731,6 +731,10 @@ class TranscriptVirtualizer extends React.Component<
         this.virtualizer.scrollToIndex(index, { align: "start" });
         return true;
       },
+      rowKeyForEntry: (entryId) => {
+        const index = indexByEntry.get(entryId);
+        return index === undefined ? undefined : this.props.items[index]?.key;
+      },
     };
     this.navigationCleanup = registerTranscriptVirtualNavigation(
       container,

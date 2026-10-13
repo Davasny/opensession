@@ -67,6 +67,7 @@ export type ShortcutId =
   | "transcript-up"
   | "transcript-down"
   | "transcript-comment"
+  | "transcript-find"
   | "ask-focus"
   | "effort-up"
   | "effort-down"
@@ -310,6 +311,15 @@ export const SHORTCUT_COMMANDS: ShortcutCommand[] = [
     description: "Start a comment thread on the selected transcript text",
     group: "Transcript",
     defaults: ["mod+alt+m"],
+  },
+  // The transcript is virtualized and the Mac app has no find bar, so the
+  // browser's own find cannot see most of a session. This one can.
+  {
+    id: "transcript-find",
+    title: "Find in session",
+    description: "Search the messages in the open session",
+    group: "Transcript",
+    defaults: ["mod+f"],
   },
   // The letters answer from anywhere but a text field. This is the way in
   // from the one place they cannot reach: the composer, which is where the

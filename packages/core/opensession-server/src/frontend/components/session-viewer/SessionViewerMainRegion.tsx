@@ -59,6 +59,7 @@ import {
   type SlackSent,
 } from "../ShippedChangeComposer";
 import { MessageRail } from "../MessageRail";
+import { TranscriptFind } from "../TranscriptFind";
 import { Tooltip } from "../../ui/tooltip";
 import { ReplySuggestions } from "../ReplySuggestions";
 import { TypingIndicator } from "../TypingIndicator";
@@ -820,7 +821,12 @@ export function SessionViewerMainRegion({
           />
         </div>
       ) : (
-        <div className="relative flex min-h-0 flex-1 flex-col">
+        // data-session-find-scope: where ⌘F means "find in this session"
+        // (TranscriptFind). Focus anywhere else keeps the browser's find.
+        <div
+          className="relative flex min-h-0 flex-1 flex-col"
+          data-session-find-scope
+        >
           {fileDragActive &&
             createPortal(
               <>
@@ -1186,6 +1192,22 @@ export function SessionViewerMainRegion({
                 messages={sentMessages}
                 containerRef={messagesRef}
                 leaveLatest={leaveLatest}
+              />
+            )}
+
+            {!loading && (
+              <TranscriptFind
+                focused={focused}
+                entries={entries}
+                containerRef={messagesRef}
+                leaveLatest={leaveLatest}
+                onLoadAll={
+                  !transcriptIndexExpected &&
+                  historyTruncated &&
+                  !loadingHistory
+                    ? loadAllHistory
+                    : undefined
+                }
               />
             )}
 

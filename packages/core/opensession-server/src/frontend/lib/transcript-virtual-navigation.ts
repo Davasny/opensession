@@ -1,5 +1,8 @@
 export interface TranscriptVirtualNavigation {
   scrollToEntry(entryId: string): boolean;
+  /** The key of the row an entry renders in, even when the entry itself draws
+   * nothing yet (folded inside a turn). */
+  rowKeyForEntry?(entryId: string): string | undefined;
 }
 
 const virtualNavigation = new WeakMap<
@@ -25,4 +28,17 @@ export function scrollToVirtualTranscriptEntry(
   entryId: string,
 ): boolean {
   return virtualNavigation.get(container)?.scrollToEntry(entryId) ?? false;
+}
+
+/** The mounted virtual row holding an entry, or null when it is not mounted
+ * (or the transcript is not virtual). */
+export function virtualTranscriptRowFor(
+  container: HTMLElement,
+  entryId: string,
+): HTMLElement | null {
+  const key = virtualNavigation.get(container)?.rowKeyForEntry?.(entryId);
+  if (key === undefined) return null;
+  return container.querySelector<HTMLElement>(
+    `[data-transcript-key="${CSS.escape(key)}"]`,
+  );
 }

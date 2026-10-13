@@ -169,6 +169,16 @@ body {
   background: color-mix(in srgb, var(--yellow) 50%, transparent);
 }
 
+/* Find in session matches, and the one the find bar is on. Registered by
+   TranscriptFind with Custom Highlights, so the virtual transcript's markup is
+   never rewritten. Accent rather than yellow, which comments already use. */
+::highlight(find) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+::highlight(find-current) {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
 /* Text the user may legitimately want to select and copy: supporting copy,
    message rows and their prose, names, system text, code, diffs, inputs. The
    row wrapper is included on purpose — a drag has to be able to start in a

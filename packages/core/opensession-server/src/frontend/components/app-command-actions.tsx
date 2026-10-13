@@ -6,6 +6,7 @@ import { absoluteLink, copyToClipboard } from "../lib/share-link";
 import { shortcutPrimaryKeys } from "../lib/shortcuts";
 import { setThemePref, type EffectiveTheme } from "../lib/theme";
 import { copySessionTranscript } from "../lib/transcript-copy";
+import { TRANSCRIPT_FIND_EVENT } from "../lib/transcript-find";
 import type { UnifiedSession } from "../lib/types";
 import type { CommandPaletteAction } from "./SessionSearch";
 import {
@@ -27,6 +28,7 @@ import {
   IconPlus,
   IconIssue,
   IconPullRequest,
+  IconSearch,
   IconSidebarLeft,
   IconStack,
   IconUnarchive,
@@ -132,6 +134,16 @@ export function buildAppCommandActions({
                 },
               ]
             : []),
+          {
+            id: "find-in-session",
+            label: "Find in session",
+            description: "Search the messages in this session",
+            category: "Actions" as const,
+            keywords: ["search", "transcript", "messages"],
+            shortcut: shortcutPrimaryKeys("transcript-find") ?? undefined,
+            icon: <IconSearch size={18} />,
+            run: () => window.dispatchEvent(new Event(TRANSCRIPT_FIND_EVENT)),
+          },
           {
             id: "copy-transcript",
             label: "Copy conversation",
