@@ -948,7 +948,7 @@ export function AssetOverlay({
       // Assets float directly on the scrim, like transcript media. Files
       // that need a page surface bring their own inside the stage below.
       modalClassName="h-[min(820px,78vh)] w-[min(1120px,84vw)] max-w-none overflow-visible bg-transparent [box-shadow:none]!"
-      sheetClassName="top-0 h-[100dvh] max-h-none bg-black [border-radius:0]! [box-shadow:none]!"
+      sheetClassName="top-0 h-[100dvh] max-h-none bg-black pt-[env(safe-area-inset-top,0px)] [border-radius:0]! [box-shadow:none]!"
       backdropClassName="bg-black/85"
       showPhoneGrabber={false}
     >
@@ -999,7 +999,7 @@ export function AssetOverlay({
         <button
           type="button"
           aria-label="Close"
-          className="absolute right-3 top-3 z-20 grid size-11 place-items-center rounded-full border-0 bg-white/15 text-white backdrop-blur-xl transition-[transform,background-color] active:scale-[0.96] hover:bg-white/20"
+          className="absolute right-[calc(12px+env(safe-area-inset-right,0px))] top-[calc(12px+env(safe-area-inset-top,0px))] z-20 grid size-11 place-items-center rounded-full border-0 bg-white/15 text-white backdrop-blur-xl transition-[transform,background-color] active:scale-[0.96] hover:bg-white/20"
           onClick={onClose}
         >
           <IconX size={24} />
