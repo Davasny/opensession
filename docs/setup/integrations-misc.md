@@ -89,7 +89,9 @@ under Settings > Approvals > Requests. With that in place, set:
 Human-driven interactive sessions then keep `create_refund`,
 `cancel_subscription` and the raw-API mutators, and are told to treat
 `approval_required` as queued for review: they add a reason to the request
-and share its Dashboard approval link. Automations, their descendants,
+and share its Dashboard approval link with its expiry. A request nobody
+reviews before `expires_at` (24 hours in practice, not the 14 days the docs
+mention) lapses without refunding. Automations, their descendants,
 goals, workflows, webhook runs and Plain discussions stay stripped exactly as
 above. `update_subscription` stays stripped everywhere because Stripe cannot
 gate subscription updates.

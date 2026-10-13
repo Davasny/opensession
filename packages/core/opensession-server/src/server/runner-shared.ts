@@ -163,8 +163,10 @@ export const STRIPE_APPROVALS_NOTE =
   "action for review. Add a short reason to the approval request " +
   "(PostV2CoreApprovalRequestsId), then give the person its approval URL " +
   "(the request's `dashboard_url`) as a clickable link so a reviewer can " +
-  "approve it. Do not retry, and do not report the money as moved until the " +
-  "request's status is `succeeded`.";
+  "approve it, and say when it expires (`expires_at`, often 24 hours): an " +
+  "unreviewed request lapses and nothing is refunded. Do not retry, and " +
+  "do not report the money as moved until the request's status is " +
+  "`succeeded`.";
 
 // `strict` matching applies to successful results too — the CLI reports usage
 // limits as a plain result text ("Claude AI usage limit reached|<ts>",
