@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { STRIPE_APPROVAL_GATED_TOOLS } from "./stripe-approvals";
 
 export const INTERACTIVE_KINDS = new Set([
   "prompt",
@@ -80,24 +81,44 @@ export function deniedToolIds(
   return [`${match[1]}_${match[2]}`];
 }
 
+/** Drop the tools Stripe's two-party approvals hold from a deny or confirm
+ *  catalog. With approvals enforced, Stripe (not the tool list) is what
+ *  stops a refund or cancellation, so every run keeps them. */
+export function withoutStripeApprovalTools(
+  tools: Record<string, string> | undefined,
+  stripeApprovals: boolean | undefined,
+): Record<string, string> | undefined {
+  if (!tools || !stripeApprovals) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(
+      ([name]) => !STRIPE_APPROVAL_GATED_TOOLS.has(name),
+    ),
+  );
+}
+
 /** Strip denied and approval-gated tools before the model sees them. */
 export function runToolPolicy(opts: {
   deniedTools?: Record<string, string>;
   confirmTools?: Record<string, string>;
   journalKind?: string;
   disableLocalWorkspaceTools?: boolean;
+  /** `integrations.stripe.approvalsEnforced` (stripeApprovalsEnforced). */
+  stripeApprovals?: boolean;
 }): RunToolPolicy {
   const disables: Record<string, false> = { question: false };
   if (opts.disableLocalWorkspaceTools) {
     for (const name of LOCAL_WORKSPACE_TOOL_IDS) disables[name] = false;
   }
-  const denied = opts.deniedTools || {};
   const unattended =
-    Object.keys(denied).length > 0 ||
+    Object.keys(opts.deniedTools || {}).length > 0 ||
     isUnattendedKind(baseJournalKind(opts.journalKind));
+  const denied =
+    withoutStripeApprovalTools(opts.deniedTools, opts.stripeApprovals) || {};
+  const confirm =
+    withoutStripeApprovalTools(opts.confirmTools, opts.stripeApprovals) || {};
   const merged: Record<string, string> = { ...denied };
-  const broadNames = new Set(Object.keys(opts.confirmTools || {}));
-  for (const [name, label] of Object.entries(opts.confirmTools || {})) {
+  const broadNames = new Set(Object.keys(confirm));
+  for (const [name, label] of Object.entries(confirm)) {
     if (name in merged) continue;
     merged[name] = unattended
       ? `"${label}" requires per-call human approval, and this run is unattended. ` +

@@ -1,9 +1,11 @@
 /**
  * Stripe Agent Module — receives Stripe webhooks and fires automation events.
  *
- * Currently it handles `charge.dispute.created`: when a chargeback is filed,
- * it fires the `stripe:charge.dispute.created` event, which the dispute
- * investigation automation subscribes to via its eventKey.
+ * It handles `charge.dispute.created`: when a chargeback is filed, it fires
+ * the `stripe:charge.dispute.created` event, which the dispute investigation
+ * automation subscribes to via its eventKey. It also handles the thin
+ * `v2.core.approval_request.*` events from Stripe two-party approvals
+ * (approvals.ts).
  */
 import type { AgentModule } from "../types";
 import { verifyStripeSignature } from "../../server/shared/signature";
@@ -16,6 +18,11 @@ import {
 import { handleStripeEvent } from "./handlers";
 
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+/** Comma-separated: the classic webhook endpoint and the thin-event
+ *  destination for approval requests each have their own signing secret. */
+const STRIPE_WEBHOOK_SECRETS = STRIPE_WEBHOOK_SECRET.split(",")
+  .map((secret) => secret.trim())
+  .filter(Boolean);
 
 export class StripeAgent implements AgentModule {
   name = "stripe";
@@ -37,7 +44,11 @@ export class StripeAgent implements AgentModule {
       }
       const signature = req.headers.get("stripe-signature") || "";
 
-      if (!verifyStripeSignature(body, signature, STRIPE_WEBHOOK_SECRET)) {
+      if (
+        !STRIPE_WEBHOOK_SECRETS.some((secret) =>
+          verifyStripeSignature(body, signature, secret),
+        )
+      ) {
         console.error("[stripe] Invalid webhook signature");
         return Response.json({ error: "Invalid signature" }, { status: 401 });
       }

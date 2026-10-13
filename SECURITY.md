@@ -74,10 +74,11 @@ Anything that breaks that is in scope, especially:
   is. The money-moving Stripe tools are stripped from the model's tool list
   rather than merely discouraged — a way to reach them would be critical.
   The one opt-in exception is `integrations.stripe.approvalsEnforced`: an
-  operator attests that Stripe two-party approvals gate the key, and
-  human-driven interactive sessions then keep the refund and cancellation
-  tools. Reaching them from an unattended run, or with the flag off, is
-  still critical.
+  operator attests that Stripe two-party approvals hold the key's refunds
+  and cancellations, and every run then keeps those tools, with the raw
+  writer limited to the operations Stripe holds. With the flag off, reaching
+  them is still critical; with it on, so is any Stripe write outside
+  `STRIPE_APPROVAL_OPERATIONS`.
 - **Bypassing the Runner gates.** Registering a Runner from outside the
   tailnet, using a revoked Runner's credential, or reaching `run_on_runner`
   from an automation. See [docs/runners.md](docs/runners.md).

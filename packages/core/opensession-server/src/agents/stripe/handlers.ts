@@ -1,13 +1,17 @@
 /**
  * Stripe webhook handlers.
  *
- * The only event we act on is `charge.dispute.created` — a chargeback was filed.
+ * `v2.core.approval_request.*` thin events go to approvals.ts (Slack and the
+ * requesting session). Otherwise the only event we act on is
+ * `charge.dispute.created` — a chargeback was filed.
  * We fire the `stripe:charge.dispute.created` automation event with the dispute's
  * identifiers and headline facts. The investigation automation treats Stripe as
  * source of truth and re-fetches the full dispute itself via the Stripe MCP, so
  * we deliberately forward a small payload (no 10KB-truncation risk) rather than
  * the whole event object.
  */
+
+import { APPROVAL_EVENT_PREFIX, handleApprovalEvent } from "./approvals";
 
 export const DISPUTE_CREATED_EVENT = "stripe:charge.dispute.created";
 
@@ -28,6 +32,8 @@ interface StripeEvent {
   type: string;
   livemode?: boolean;
   data?: { object?: StripeDispute };
+  /** Thin (v2) events name their object here instead of carrying it. */
+  related_object?: { id?: string; type?: string; url?: string } | null;
 }
 
 function idOf(
@@ -42,6 +48,10 @@ function idOf(
  * event. Returns the number of automations fired (0 for ignored event types).
  */
 export async function handleStripeEvent(event: StripeEvent): Promise<number> {
+  if (event.type?.startsWith(APPROVAL_EVENT_PREFIX)) {
+    await handleApprovalEvent(event);
+    return 0;
+  }
   if (event.type !== "charge.dispute.created") {
     console.log(`[stripe] Ignoring event ${event.type}`);
     return 0;

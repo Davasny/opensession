@@ -5,7 +5,8 @@ import {
   resolveSessionRunInputs,
   type SessionRunInputs,
 } from "./session-run-inputs";
-import { filterMcpServers, stripeConfirmToolsFor } from "./runner-shared";
+import { filterMcpServers, STRIPE_CONFIRM_TOOLS } from "./runner-shared";
+import { stripeApprovalsEnforced } from "./stripe-approvals";
 import {
   hasValidRequiredAllowedUsers,
   readMcpConfig,
@@ -23,6 +24,7 @@ import {
   runToolPolicy,
   readLocalInstructions,
   type RunToolPolicy,
+  withoutStripeApprovalTools,
 } from "./run-policy";
 import {
   DIAL_ORACLE_AGENTS,
@@ -236,7 +238,7 @@ export function describeStrippedTools(
     rows.push({
       tool,
       ids: deniedToolIds(tool, { broad: true }),
-      source: "runner-shared.ts STRIPE_CONFIRM_TOOLS (stripeConfirmToolsFor)",
+      source: "runner-shared.ts STRIPE_CONFIRM_TOOLS (every run)",
       reason: `${label} — no per-call approval bridge on this engine, so the tool is never in the model's list`,
     });
   }
@@ -420,18 +422,21 @@ export async function buildSessionEffectiveConfig(
     },
   };
 
-  const confirmTools = stripeConfirmToolsFor({
-    interactive: !inputs.isAutomationSession && !session.plainDiscussionId,
-  });
+  const stripeApprovals = stripeApprovalsEnforced();
   const policy = runToolPolicy({
     deniedTools: inputs.deniedTools,
-    confirmTools,
+    confirmTools: STRIPE_CONFIRM_TOOLS,
+    stripeApprovals,
     journalKind,
   });
   const tools: Record<string, ConfigRow> = {
     unattended: row(policy.unattended, "run-policy.ts runToolPolicy"),
     stripped: row(
-      describeStrippedTools(policy, inputs.deniedTools, confirmTools),
+      describeStrippedTools(
+        policy,
+        withoutStripeApprovalTools(inputs.deniedTools, stripeApprovals),
+        withoutStripeApprovalTools(STRIPE_CONFIRM_TOOLS, stripeApprovals)!,
+      ),
       "run-policy.ts runToolPolicy",
     ),
     disabledIds: row(

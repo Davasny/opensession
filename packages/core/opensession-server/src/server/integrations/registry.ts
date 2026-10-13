@@ -81,7 +81,8 @@ export const INTEGRATIONS: IntegrationSpec[] = [
       },
       {
         name: "PLAIN_WEBHOOK_SECRET",
-        description: "verifies inbound webhook signatures",
+        description:
+          "verifies inbound webhook signatures; comma-separate the classic endpoint's and the approvals event destination's secrets",
       },
       {
         name: "PLAIN_AGENT_API_KEY",
