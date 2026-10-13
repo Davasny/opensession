@@ -50,6 +50,12 @@ import {
   closePrPreviewApi,
   markPrPreviewReadyApi,
 } from "../lib/api";
+import type { MergeOptions } from "../lib/api/prs";
+import {
+  MERGE_CHOICE_LABEL,
+  mergeChoices,
+  type MergeChoice,
+} from "../lib/merge-choices";
 import { Button } from "../ui/button";
 import { toast } from "../ui/toast";
 import type { FileDiffMetadata } from "@pierre/diffs";
@@ -82,6 +88,8 @@ import {
   IconSliders,
   IconUndo,
   IconX,
+  IconClock,
+  IconWarningTriangle,
 } from "./icons";
 import { Menu, MENU_ICON } from "../ui/menu";
 import { Tooltip } from "../ui/tooltip";
@@ -331,6 +339,7 @@ export function PrPanel({
   const [confirmClose, setConfirmClose] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
   const [markingReady, setMarkingReady] = useState(false);
+  const [autoMergeBusy, setAutoMergeBusy] = useState(false);
   // The branch has no PR yet and the bar's Create PR action has been asked for.
   // The agent does the work, so this only confirms the ask briefly while the PR
   // itself is still being created.
@@ -645,20 +654,7 @@ export function PrPanel({
         const prNumber = pr.number;
         scheduleDeferredMerge(mergeKey, async () => {
           try {
-            if (previewTarget) {
-              await mergePrPreviewApi(
-                previewTarget.repo,
-                previewTarget.branch,
-                "squash",
-              );
-            } else {
-              await mergePrApi(
-                sessionId,
-                "squash",
-                active?.repo,
-                active?.branch,
-              );
-            }
+            await callMerge({});
             if (actionTargetKey === activeLoadTargetRef.current)
               await load(true);
           } catch (error) {
@@ -672,6 +668,93 @@ export function PrPanel({
             );
             if (actionTargetKey === activeLoadTargetRef.current)
               setMergeError(errorMessage(error, "Merge failed"));
+          }
+        });
+      },
+    });
+  }
+
+  /** Squash-merge this PR, or change its auto-merge, on the host. */
+  function callMerge(options: MergeOptions) {
+    return previewTarget
+      ? mergePrPreviewApi(
+          previewTarget.repo,
+          previewTarget.branch,
+          "squash",
+          options,
+        )
+      : mergePrApi(sessionId, "squash", active?.repo, active?.branch, options);
+  }
+
+  // Auto-merge is a setting on the host's side, not a merge we hold: it
+  // takes effect at once and the person can turn it off again, so there is
+  // no confirm and no undo window.
+  async function handleAutoMerge(enable: boolean) {
+    if (autoMergeBusy || !pr) return;
+    const actionTargetKey = loadTargetKey;
+    const prNumber = pr.number;
+    setAutoMergeBusy(true);
+    setMergeError(null);
+    try {
+      const result = await callMerge({
+        mode: enable ? "auto" : "disable-auto",
+      });
+      toast(
+        !enable
+          ? `Auto-merge off for #${prNumber}`
+          : result.merged
+            ? `Merged #${prNumber}`
+            : `#${prNumber} will merge when ready`,
+      );
+      if (actionTargetKey === activeLoadTargetRef.current) await load(true);
+    } catch (error) {
+      if (actionTargetKey === activeLoadTargetRef.current)
+        setMergeError(
+          errorMessage(
+            error,
+            enable
+              ? "Couldn’t turn on auto-merge"
+              : "Couldn’t cancel auto-merge",
+          ),
+        );
+    }
+    setAutoMergeBusy(false);
+  }
+
+  // Force merge goes around branch protection with the viewer's own rights,
+  // so it names what it bypasses, pins the head the person looked at, and
+  // keeps the same undo window as a plain merge.
+  function handleForceMerge(bypasses: string[]) {
+    if (!mergeKey || mergePhase !== "idle" || !pr) return;
+    const actionTargetKey = loadTargetKey;
+    const prNumber = pr.number;
+    const headSha = pr.headRefOid;
+    const bypassing = bypasses.length
+      ? ` Bypasses ${bypasses.join(", ")}.`
+      : "";
+    confirmMerge({
+      title: `Force merge #${pr.number}?`,
+      description: `Squash “${pr.title}” into ${pr.baseRefName} now.${bypassing} Uses your own ${provider.name} permissions, so it only works if you may bypass branch protection.`,
+      confirmLabel: "Force merge",
+      destructive: true,
+      onConfirm: () => {
+        if (actionTargetKey !== activeLoadTargetRef.current) return;
+        setMergeError(null);
+        scheduleDeferredMerge(mergeKey, async () => {
+          try {
+            await callMerge({ mode: "admin", headSha });
+            if (actionTargetKey === activeLoadTargetRef.current)
+              await load(true);
+          } catch (error) {
+            toast(
+              mergeFailedMessage(
+                prNumber,
+                errorMessage(error, "unknown error"),
+              ),
+              { variant: "error" },
+            );
+            if (actionTargetKey === activeLoadTargetRef.current)
+              setMergeError(errorMessage(error, "Force merge failed"));
           }
         });
       },
@@ -1404,6 +1487,13 @@ export function PrPanel({
     !pr.isDraft &&
     pr.mergeable !== "CONFLICTING" &&
     checkSummary.failed === 0;
+  const choices = mergeChoices(pr, checkSummary, caps);
+  const chooseMerge = (choice: MergeChoice) => {
+    if (choice === "merge") handleMerge();
+    else if (choice === "auto") void handleAutoMerge(true);
+    else if (choice === "cancel-auto") void handleAutoMerge(false);
+    else handleForceMerge(choices.bypasses);
+  };
   const phoneMergeAction =
     pr.state === "OPEN" && pr.isDraft ? (
       <Button
@@ -1414,6 +1504,16 @@ export function PrPanel({
         title="Mark this pull request ready for review"
       >
         {markingReady ? "Marking ready…" : "Ready for review"}
+      </Button>
+    ) : pr.state === "OPEN" && choices.primary === "auto" && !mergeScheduled ? (
+      <Button
+        variant="soft"
+        className="min-h-11 shrink-0"
+        disabled={autoMergeBusy || merging}
+        onClick={() => chooseMerge("auto")}
+        title="Squash and merge automatically once checks and reviews pass"
+      >
+        {autoMergeBusy ? "Turning on…" : "Auto-merge"}
       </Button>
     ) : pr.state === "OPEN" ? (
       <Button
@@ -1456,6 +1556,12 @@ export function PrPanel({
       mergeError={mergeError}
       onMarkReady={handleMarkReady}
       markingReady={markingReady}
+      merge={{
+        primary: choices.primary,
+        all: choices.all,
+        onChoose: chooseMerge,
+        busy: autoMergeBusy,
+      }}
       onOpenFile={scrollToFile}
       onOpenFiles={() => setPage("files")}
       onStartSession={onStartSession}
@@ -1692,7 +1798,7 @@ export function PrPanel({
                 {markingReady ? "Marking ready…" : "Ready for review"}
               </Menu.Item>
             )}
-            {canMergeAfterReview && (
+            {(choices.all.includes("merge") || mergeScheduled) && (
               <Menu.Item onClick={handleMerge} disabled={merging}>
                 {mergeScheduled ? (
                   <IconUndo size={18} className={MENU_ICON} />
@@ -1704,6 +1810,34 @@ export function PrPanel({
                   : mergeScheduled
                     ? "Undo"
                     : "Squash and merge"}
+              </Menu.Item>
+            )}
+            {!mergeScheduled && choices.all.includes("auto") && (
+              <Menu.Item
+                onClick={() => chooseMerge("auto")}
+                disabled={autoMergeBusy || merging}
+              >
+                <IconClock size={18} className={MENU_ICON} />
+                {MERGE_CHOICE_LABEL.auto}
+              </Menu.Item>
+            )}
+            {choices.all.includes("cancel-auto") && (
+              <Menu.Item
+                onClick={() => chooseMerge("cancel-auto")}
+                disabled={autoMergeBusy}
+              >
+                <IconX size={18} className={MENU_ICON} />
+                {MERGE_CHOICE_LABEL["cancel-auto"]}
+              </Menu.Item>
+            )}
+            {!mergeScheduled && choices.all.includes("force") && (
+              <Menu.Item
+                className="text-red data-[highlighted]:bg-red-soft"
+                onClick={() => chooseMerge("force")}
+                disabled={merging}
+              >
+                <IconWarningTriangle size={18} className="text-red" />
+                {MERGE_CHOICE_LABEL.force}
               </Menu.Item>
             )}
             <Menu.Item

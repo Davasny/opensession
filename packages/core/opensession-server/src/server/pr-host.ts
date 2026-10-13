@@ -39,7 +39,8 @@ import {
   updatePrBody,
 } from "./pr-info";
 import type {
-  MergeMethod,
+  MergePrOptions,
+  MergePrResult,
   MutationPrMeta,
   PrCommentInput,
   PrDetails,
@@ -126,10 +127,10 @@ export interface PrHost {
   ): Promise<{ ok: true; url?: string } | { error: string }>;
   mergePr(
     branch: string,
-    opts: { method?: MergeMethod; deleteBranch?: boolean; force?: boolean },
+    opts: MergePrOptions,
     repo: string,
     credential?: GithubCredential,
-  ): Promise<{ ok: true; url?: string } | { error: string }>;
+  ): Promise<MergePrResult>;
   closePr(
     branch: string,
     repo: string,
@@ -344,6 +345,8 @@ export const githubPrHost: PrHost = {
     prCreate: true,
     images: true,
     commitNotes: false,
+    autoMerge: true,
+    forceMerge: true,
   },
 
   getPrDetails: (branch, repo) => getPrDetails(branch, repo),
@@ -475,6 +478,8 @@ export const CODESTORAGE_CAPABILITIES: PrHostCapabilities = {
   prCreate: true,
   images: false,
   commitNotes: true,
+  autoMerge: false,
+  forceMerge: false,
 };
 
 // The code.storage host loads lazily: GitHub-only instances never import it,

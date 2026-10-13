@@ -837,6 +837,11 @@ export const csPrHost: PrHost = {
         return { error: "That's the default branch — nothing to merge" };
       const head = await findBranch(repo, branch);
       if (!head) return { error: "No PR found for this branch" };
+      if (opts.mode && opts.mode !== "now")
+        return {
+          error:
+            "Auto-merge and force merge aren't supported on code.storage — merge directly",
+        };
       if (opts.method === "rebase")
         return {
           error:
@@ -879,7 +884,7 @@ export const csPrHost: PrHost = {
           // fully-merged branches, so a failed delete can't reopen the row.
           await deleteBranch(repo, branch).catch(() => {});
           invalidate(repo, branch);
-          return { ok: true, url: csUrl(repo) } as const;
+          return { ok: true, url: csUrl(repo), merged: true } as const;
         },
       );
     } catch (e) {

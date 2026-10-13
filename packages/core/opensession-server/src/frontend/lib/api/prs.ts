@@ -32,6 +32,29 @@ interface PrTargetRequest {
 
 interface MergePrRequest extends PrTargetRequest {
   method: "squash" | "merge" | "rebase";
+  mode?: MergeMode;
+  headSha?: string;
+}
+
+/**
+ * `now` merges, `auto` merges once checks and reviews pass, `admin` merges
+ * past branch protection with the viewer's own rights, `disable-auto` turns
+ * auto-merge off again.
+ */
+export type MergeMode = "now" | "auto" | "admin" | "disable-auto";
+
+export interface MergeOptions {
+  mode?: MergeMode;
+  /** Refuse the merge if the PR head moved past this commit. */
+  headSha?: string;
+}
+
+export interface MergeResult {
+  ok: true;
+  url?: string;
+  /** False when the call only turned auto-merge on or off. */
+  merged?: boolean;
+  autoMerge?: boolean;
 }
 
 interface PrActionRequest {
@@ -574,11 +597,12 @@ export async function mergePrApi(
   method: "squash" | "merge" | "rebase" = "squash",
   repo?: string,
   branch?: string,
+  options: MergeOptions = {},
 ) {
-  const body: MergePrRequest = { method };
+  const body: MergePrRequest = { method, ...options };
   if (repo) body.repo = repo;
   if (branch) body.branch = branch;
-  return request<{ ok: true; url?: string }>(
+  return request<MergeResult>(
     `/sessions/${encodeURIComponent(sessionId)}/pr-merge`,
     {
       method: "POST",
@@ -625,10 +649,11 @@ export async function mergePrPreviewApi(
   repo: string,
   branch: string,
   method: "squash" | "merge" | "rebase" = "squash",
+  options: MergeOptions = {},
 ) {
-  return request<{ ok: true; url?: string }>("/pr-preview-merge", {
+  return request<MergeResult>("/pr-preview-merge", {
     method: "POST",
-    body: { repo, branch, method },
+    body: { repo, branch, method, ...options },
   });
 }
 

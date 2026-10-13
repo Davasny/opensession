@@ -33,7 +33,10 @@ import { noteGithubGraphqlCall } from "./github-budget";
 import { getPrStack, unmergedLayersBelow } from "./pr-stack";
 import type {
   MergeMethod,
+  MergePrOptions,
+  MergePrResult,
   MutationPrMeta,
+  PrAutoMerge,
   PrCheck,
   PrCommentInput,
   PrDetails,
@@ -46,6 +49,9 @@ import type {
 import type { UnifiedSession } from "./types";
 export type {
   MergeMethod,
+  MergeMode,
+  MergePrOptions,
+  MergePrResult,
   MutationPrMeta,
   PrCheck,
   PrComment,
@@ -1245,19 +1251,26 @@ export async function markPrReady(
  * Merge a branch's PR via the gh CLI — human-triggered from the Reviews view
  * (the agent never merges on its own; this is a UI affordance for the operator).
  * Defaults to squash. Audited as `reviews/pr_merge` since it mutates the repo.
+ *
+ * `mode` picks the GitHub operation: `now` merges, `auto` turns on auto-merge
+ * so GitHub lands the PR once its requirements pass, `admin` merges past
+ * branch protection (GitHub decides whether the caller's own credential may),
+ * and `disable-auto` turns auto-merge back off. `headSha` pins the merge to
+ * the commit the person looked at.
  */
 export async function mergePr(
   branch: string,
-  opts: { method?: MergeMethod; deleteBranch?: boolean; force?: boolean } = {},
+  opts: MergePrOptions = {},
   repo: string = DEFAULT_REPO(),
   credential: GithubCredential = serviceGithubCredential,
-): Promise<{ ok: true; url?: string } | { error: string }> {
+): Promise<MergePrResult> {
   credential = await resolveGithubCredential(credential, { write: true, repo });
+  const mode = opts.mode || "now";
   const pr = await getMutationPrMeta(branch, repo, credential);
   if (!pr) return { error: "No PR found for this branch" };
   if (pr.state !== "OPEN")
     return { error: `PR #${pr.number} is ${pr.state.toLowerCase()}, not open` };
-  if (pr.isDraft)
+  if (pr.isDraft && mode !== "disable-auto")
     return { error: `PR #${pr.number} is a draft — mark it ready first` };
 
   // Stack order: a layer merges into the one below it, so it can't land while
@@ -1269,7 +1282,7 @@ export async function mergePr(
   // refuses, so there is no way to merge a stack out of order from here.
   // Taking several layers at once is a different operation — mergePrStack()
   // (GitHub's atomic stack merge), which the "Merge stack" action calls.
-  if (!opts.force) {
+  if (!opts.force && mode !== "disable-auto") {
     const stack = await getPrStack(repo, pr.number, credential);
     const below = stack ? unmergedLayersBelow(stack) : [];
     if (below.length)
@@ -1283,12 +1296,16 @@ export async function mergePr(
   }
 
   const method = opts.method || "squash";
-  const flag =
-    method === "merge"
-      ? "--merge"
-      : method === "rebase"
-        ? "--rebase"
-        : "--squash";
+  const headSha =
+    opts.headSha && /^[0-9a-f]{7,40}$/i.test(opts.headSha)
+      ? opts.headSha
+      : undefined;
+  const args = mergePrArgs(pr.number, repo, {
+    ...opts,
+    method,
+    mode,
+    headSha,
+  });
 
   return audited(
     {
@@ -1298,27 +1315,91 @@ export async function mergePr(
         branch,
         number: pr.number,
         method,
+        mode,
+        headSha,
         deleteBranch: !!opts.deleteBranch,
         credential: credential.principal,
       },
     },
-    async () => {
-      const args = ["pr", "merge", String(pr.number), "--repo", repo, flag];
-      if (opts.deleteBranch) args.push("--delete-branch");
-      const proc = spawnGh(args, credential);
-      const [, err, code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-      if (code !== 0)
-        return { error: (err || "gh pr merge failed").slice(0, 300) } as const;
-      // Drop cached PR/diff so the UI reflects the merge on the next poll.
+    async (): Promise<MergePrResult> => {
+      let result = await runGhMerge(args, credential);
+      // GitHub only queues auto-merge on a PR that is still waiting on
+      // something. If it became mergeable since the page loaded, "merge when
+      // ready" means merge now.
+      if (
+        "error" in result &&
+        mode === "auto" &&
+        /clean status/i.test(result.error)
+      )
+        result = await runGhMerge(
+          mergePrArgs(pr.number, repo, {
+            ...opts,
+            method,
+            mode: "now",
+            headSha,
+          }),
+          credential,
+        ).then((r) => ("error" in r ? r : { ...r, landed: true }));
+      // Drop cached PR/diff so the UI reflects the change on the next poll.
       cache.delete(cacheKey(repo, branch));
-      diffCache.delete(cacheKey(repo, branch));
-      return { ok: true, url: pr.url } as const;
+      if ("error" in result) return result;
+      const merged = mode === "now" || mode === "admin" || !!result.landed;
+      if (merged) diffCache.delete(cacheKey(repo, branch));
+      return {
+        ok: true,
+        url: pr.url,
+        merged,
+        ...(mode === "auto" && !merged ? { autoMerge: true } : {}),
+      };
     },
   );
+}
+
+/** `autoMergeRequest` from `gh pr view --json`, or null when it is off. */
+export function parseAutoMerge(raw: any): PrAutoMerge | null {
+  if (!raw || typeof raw !== "object") return null;
+  const method = String(raw.mergeMethod || "").toLowerCase();
+  return {
+    method: method === "merge" || method === "rebase" ? method : "squash",
+    enabledBy: raw.enabledBy?.login || "",
+    enabledAt: raw.enabledAt || undefined,
+  };
+}
+
+/** The `gh pr merge` argv for one merge request. */
+export function mergePrArgs(
+  number: number,
+  repo: string,
+  opts: MergePrOptions & { method: MergeMethod },
+): string[] {
+  const args = ["pr", "merge", String(number), "--repo", repo];
+  if (opts.mode === "disable-auto") return [...args, "--disable-auto"];
+  args.push(
+    opts.method === "merge"
+      ? "--merge"
+      : opts.method === "rebase"
+        ? "--rebase"
+        : "--squash",
+  );
+  if (opts.mode === "auto") args.push("--auto");
+  if (opts.mode === "admin") args.push("--admin");
+  if (opts.headSha) args.push("--match-head-commit", opts.headSha);
+  if (opts.deleteBranch) args.push("--delete-branch");
+  return args;
+}
+
+async function runGhMerge(
+  args: string[],
+  credential: GithubCredential,
+): Promise<{ ok: true; landed?: boolean } | { error: string }> {
+  const proc = spawnGh(args, credential);
+  const [, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) return { error: (err || "gh pr merge failed").slice(0, 300) };
+  return { ok: true };
 }
 
 /**
@@ -1639,7 +1720,7 @@ async function fetchPrDetails(
     let trustCached = true;
     for (let attempt = 1; ; attempt++) {
       const baseFields =
-        "number,title,url,state,isDraft,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles,reviewDecision,author,body,mergeable,mergeStateStatus,comments,commits,files,latestReviews,reviewRequests";
+        "number,title,url,state,isDraft,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles,reviewDecision,author,body,mergeable,mergeStateStatus,autoMergeRequest,comments,commits,files,latestReviews,reviewRequests";
       const fields = `${baseFields},statusCheckRollup`;
       const queryStarted = Date.now();
       try {
@@ -1738,6 +1819,7 @@ async function fetchPrDetails(
       reviewers: buildReviewers(pr.latestReviews, pr.reviewRequests),
       mergeable: pr.mergeable || "UNKNOWN",
       mergeStateStatus: pr.mergeStateStatus || "",
+      autoMerge: parseAutoMerge(pr.autoMergeRequest),
       staging: parseStaging(pr.comments),
     };
     // Stacks live in GraphQL only (no `gh pr view --json stack`), so this is a

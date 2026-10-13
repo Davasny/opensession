@@ -5,7 +5,9 @@ import {
   isNoPrError,
   knownPrNumberForBranch,
   latestWorkflowChecks,
+  mergePrArgs,
   notePrNumberForBranch,
+  parseAutoMerge,
   parsePrFileLines,
   prApiErrorMessage,
   reconcilePrDetails,
@@ -252,5 +254,55 @@ describe("parsePrFileLines", () => {
       { path: "a.rs", additions: 3, deletions: 1 },
       { path: "b/c.rs", additions: 0, deletions: 9 },
     ]);
+  });
+});
+
+describe("mergePrArgs", () => {
+  const base = ["pr", "merge", "7", "--repo", "acme/app"];
+  test("squash merges now by default", () => {
+    expect(mergePrArgs(7, "acme/app", { method: "squash" })).toEqual([
+      ...base,
+      "--squash",
+    ]);
+  });
+  test("auto-merge queues the squash, pinned to the head", () => {
+    expect(
+      mergePrArgs(7, "acme/app", {
+        method: "squash",
+        mode: "auto",
+        headSha: "abc1234",
+      }),
+    ).toEqual([
+      ...base,
+      "--squash",
+      "--auto",
+      "--match-head-commit",
+      "abc1234",
+    ]);
+  });
+  test("force merge uses admin rights", () => {
+    expect(
+      mergePrArgs(7, "acme/app", { method: "squash", mode: "admin" }),
+    ).toEqual([...base, "--squash", "--admin"]);
+  });
+  test("disabling auto-merge takes no method", () => {
+    expect(
+      mergePrArgs(7, "acme/app", { method: "squash", mode: "disable-auto" }),
+    ).toEqual([...base, "--disable-auto"]);
+  });
+});
+
+test("parseAutoMerge reads gh's autoMergeRequest", () => {
+  expect(parseAutoMerge(null)).toBeNull();
+  expect(
+    parseAutoMerge({
+      mergeMethod: "SQUASH",
+      enabledBy: { login: "acme" },
+      enabledAt: "2026-10-13T00:00:00Z",
+    }),
+  ).toEqual({
+    method: "squash",
+    enabledBy: "acme",
+    enabledAt: "2026-10-13T00:00:00Z",
   });
 });

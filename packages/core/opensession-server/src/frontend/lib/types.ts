@@ -866,6 +866,10 @@ export interface PrHostCapabilities {
   images: boolean;
   /** Git notes shown under commits in the commits tab (code.storage only). */
   commitNotes: boolean;
+  /** "Merge when ready": the host merges once requirements pass. */
+  autoMerge?: boolean;
+  /** Merge past branch protection with the viewer's own rights. */
+  forceMerge?: boolean;
 }
 
 export interface PrDiffResponse {
@@ -917,6 +921,12 @@ export interface PrDetails {
   mergeable?: string;
   /** CLEAN | BEHIND | BLOCKED | DIRTY | UNSTABLE | … — merge-box state. */
   mergeStateStatus?: string;
+  /** Set while the host will merge this PR itself once it is ready. */
+  autoMerge?: {
+    method: "squash" | "merge" | "rebase";
+    enabledBy: string;
+    enabledAt?: string;
+  } | null;
   /** The PR's webapp preview environment (Vercel preview), when one exists.
    * `embeddable` is true once the deploy's CSP lets this app frame it;
    * `live` is true once the URL serves a deploy, even mid-rebuild. */

@@ -43,6 +43,27 @@ import {
   githubMutationCredential,
 } from "./github-credential";
 import { conditionalJsonResponse } from "../http-json";
+import type { MergeMethod, MergeMode, MergePrOptions } from "../pr-contract";
+
+/** The merge request fields a client may set; anything else is ignored. */
+export function mergeOptionsFromBody(
+  body: any,
+  method: MergeMethod,
+): MergePrOptions {
+  const mode: MergeMode =
+    body?.mode === "auto" ||
+    body?.mode === "admin" ||
+    body?.mode === "disable-auto"
+      ? body.mode
+      : "now";
+  return {
+    method,
+    mode,
+    deleteBranch: !!body?.deleteBranch,
+    force: !!body?.force,
+    headSha: typeof body?.headSha === "string" ? body.headSha : undefined,
+  };
+}
 
 async function prApiResponse(
   load: () => Promise<unknown>,
@@ -612,12 +633,12 @@ export async function handlePrRoutes(
     try {
       const result = await prHostFor(repo).mergePr(
         branch,
-        { method, deleteBranch: !!body.deleteBranch, force: !!body.force },
+        mergeOptionsFromBody(body, method),
         hostRepoId(repo),
         credential,
       );
       if ("error" in result) return Response.json(result, { status: 502 });
-      markCachedPrMerged(hostRepoId(repo), branch);
+      if (result.merged) markCachedPrMerged(hostRepoId(repo), branch);
       publishSessionRowsForBranch(branch);
       return Response.json(result);
     } catch (e: any) {
@@ -796,7 +817,7 @@ export async function handlePrRoutes(
     try {
       const result = await prHostFor(getRepo(target.repoId)).mergePr(
         target.branch,
-        { method, deleteBranch: !!body.deleteBranch, force: !!body.force },
+        mergeOptionsFromBody(body, method),
         target.ghRepo,
         credential,
       );
@@ -804,7 +825,7 @@ export async function handlePrRoutes(
       // Patch the bulk PR cache before dropping the sessions cache: the
       // rebuild reads that cache stale-while-revalidate, so without this the
       // row stays green/open until the throttled sweep or a webhook lands.
-      markCachedPrMerged(target.ghRepo, target.branch);
+      if (result.merged) markCachedPrMerged(target.ghRepo, target.branch);
       publishSessionRowsForBranch(target.branch); // refresh prState in the sessions list
       return Response.json(result);
     } catch (e: any) {

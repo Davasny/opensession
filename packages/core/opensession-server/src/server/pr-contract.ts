@@ -11,6 +11,10 @@ export interface PrHostCapabilities {
   images: boolean;
   /** Git notes on commits (surfaced in the commits tab). */
   commitNotes: boolean;
+  /** Queue a merge that lands once requirements pass ("Merge when ready"). */
+  autoMerge?: boolean;
+  /** Merge past branch protection with the viewer's own admin rights. */
+  forceMerge?: boolean;
 }
 
 /** One PR in a stack, ordered from the trunk upward. */
@@ -126,6 +130,8 @@ export interface PrDetails {
   reviewers: PrReviewer[];
   mergeable: string;
   mergeStateStatus: string;
+  /** Set while the host will merge this PR on its own once it is ready. */
+  autoMerge?: PrAutoMerge | null;
   staging: PrStaging | null;
   stack?: PrStack | null;
   osReview?: OsReviewSummary;
@@ -177,3 +183,30 @@ export interface PrReviewInput {
 }
 
 export type MergeMethod = "squash" | "merge" | "rebase";
+
+/**
+ * How a merge request lands: `now` merges immediately, `auto` asks the host to
+ * merge once checks and reviews pass, `admin` merges past branch protection
+ * with the caller's own rights, `disable-auto` withdraws an `auto` request.
+ */
+export type MergeMode = "now" | "auto" | "admin" | "disable-auto";
+
+export interface PrAutoMerge {
+  method: MergeMethod;
+  enabledBy: string;
+  enabledAt?: string;
+}
+
+export interface MergePrOptions {
+  method?: MergeMethod;
+  deleteBranch?: boolean;
+  /** Skip our own stack-order gate. The host still enforces its rules. */
+  force?: boolean;
+  mode?: MergeMode;
+  /** Refuse the merge if the head moved past this commit. */
+  headSha?: string;
+}
+
+export type MergePrResult =
+  | { ok: true; url?: string; merged: boolean; autoMerge?: boolean }
+  | { error: string };

@@ -24,6 +24,20 @@ import { Button } from "../../ui/button";
 import { MergeUndoControl } from "./MergeUndoControl";
 import { deferredMergeKey } from "../../lib/deferred-merge";
 import { useDeferredMergeDeadline } from "../../hooks/useDeferredMerge";
+import {
+  MERGE_CHOICE_LABEL,
+  MERGE_CHOICE_SHORT,
+  MERGE_CHOICE_TITLE,
+  type MergeChoice,
+} from "../../lib/merge-choices";
+import { Menu, MENU_ICON } from "../../ui/menu";
+import {
+  IconChevronDown,
+  IconClock,
+  IconGitMerge,
+  IconWarningTriangle,
+  IconX,
+} from "../icons";
 
 /**
  * Local/remote discrepancy rows for the Status card: each gets a line with one
@@ -43,6 +57,7 @@ export function GitStatusRows({
   mergeScheduled,
   onMarkReady,
   markingReady,
+  merge,
 }: {
   git: GitStatusInfo | null;
   pr: PrDetails | null;
@@ -55,6 +70,15 @@ export function GitStatusRows({
   mergeScheduled?: boolean;
   onMarkReady?: () => void;
   markingReady?: boolean;
+  /** Squash, auto-merge and force merge, from mergeChoices(). When set, it
+   *  replaces the plain `onMerge` button with the button plus a menu. */
+  merge?: {
+    primary: MergeChoice | null;
+    all: MergeChoice[];
+    onChoose: (choice: MergeChoice) => void;
+    /** An auto-merge toggle is in flight. */
+    busy?: boolean;
+  };
 }) {
   const runner = useGitTaskRunner({ sessionId, repo, send, onRefresh });
   const { prompted, error } = runner;
@@ -98,7 +122,22 @@ export function GitStatusRows({
       action:
         resolveAction ||
         readyAction ||
-        (pr.state === "OPEN" && !pr.isDraft && onMerge ? (
+        (pr.state === "OPEN" && !pr.isDraft && merge ? (
+          <MergeControl
+            merge={merge}
+            merging={merging}
+            mergeScheduled={mergeScheduled}
+            undo={
+              mergeScheduled && onMerge ? (
+                <MergeUndoControl
+                  compact
+                  deadline={mergeDeadline}
+                  onUndo={onMerge}
+                />
+              ) : null
+            }
+          />
+        ) : pr.state === "OPEN" && !pr.isDraft && onMerge ? (
           <span className="inline-flex shrink-0 items-center gap-1">
             {mergeScheduled && (
               <MergeUndoControl
@@ -117,6 +156,25 @@ export function GitStatusRows({
             </button>
           </span>
         ) : undefined),
+    });
+  }
+
+  if (pr?.state === "OPEN" && pr.autoMerge) {
+    rows.push({
+      key: "auto-merge",
+      label: `Auto-merge on${pr.autoMerge.enabledBy ? ` by ${pr.autoMerge.enabledBy}` : ""}`,
+      tone: "blue",
+      action: merge?.all.includes("cancel-auto") ? (
+        <Button
+          variant="soft"
+          className={GIT_ACTION}
+          onClick={() => merge.onChoose("cancel-auto")}
+          disabled={merge.busy}
+          title={MERGE_CHOICE_TITLE["cancel-auto"]}
+        >
+          {merge.busy ? "Cancelling…" : MERGE_CHOICE_SHORT["cancel-auto"]}
+        </Button>
+      ) : undefined,
     });
   }
 
@@ -195,5 +253,98 @@ export function GitStatusRows({
       )}
       {error && <div className={`${GIT_NOTE} text-red`}>{error}</div>}
     </>
+  );
+}
+
+const MERGE_CHOICE_ICON: Record<MergeChoice, React.ReactNode> = {
+  merge: <IconGitMerge size={18} className={MENU_ICON} />,
+  auto: <IconClock size={18} className={MENU_ICON} />,
+  "cancel-auto": <IconX size={18} className={MENU_ICON} />,
+  force: <IconWarningTriangle size={18} className="text-red" />,
+};
+
+/**
+ * The status row's merge action: the primary choice as a button, and the
+ * rest (auto-merge, force merge) behind a chevron beside it. Cancelling
+ * auto-merge has its own row, so the menu leaves it out.
+ */
+function MergeControl({
+  merge,
+  merging,
+  mergeScheduled,
+  undo,
+}: {
+  merge: NonNullable<Parameters<typeof GitStatusRows>[0]["merge"]>;
+  merging?: boolean;
+  mergeScheduled?: boolean;
+  undo: React.ReactNode;
+}) {
+  const menu = merge.all.filter((c) => c !== "cancel-auto");
+  const busy = merging || mergeScheduled;
+  if (!merge.primary && !menu.length) return null;
+  const primary = merge.primary;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1">
+      {undo}
+      {primary && (
+        <Button
+          variant="soft"
+          className={GIT_ACTION}
+          onClick={() => merge.onChoose(primary)}
+          disabled={busy || (primary === "auto" && merge.busy)}
+          title={MERGE_CHOICE_TITLE[primary]}
+        >
+          {busy
+            ? "Merging…"
+            : primary === "auto" && merge.busy
+              ? "Turning on…"
+              : MERGE_CHOICE_SHORT[primary]}
+        </Button>
+      )}
+      {menu.length > (primary ? 1 : 0) && (
+        <Menu.Root>
+          <Menu.Trigger
+            className={
+              primary
+                ? "-ml-0.5 grid size-6 shrink-0 place-items-center rounded-md text-faint transition-[color,background-color] hover:bg-hover hover:text-fg disabled:opacity-60 phone:size-9"
+                : GIT_ACTION
+            }
+            aria-label="Merge options"
+            title="Merge options"
+            disabled={busy}
+          >
+            {primary ? (
+              <IconChevronDown size={14} />
+            ) : (
+              <>
+                Merge
+                <IconChevronDown
+                  size={14}
+                  className="ml-1 shrink-0 opacity-55"
+                />
+              </>
+            )}
+          </Menu.Trigger>
+          <Menu.Popup align="end" sideOffset={6} className="min-w-[200px]">
+            {menu.map((choice) => (
+              <Menu.Item
+                key={choice}
+                onClick={() => merge.onChoose(choice)}
+                className={
+                  choice === "force"
+                    ? "text-red data-[highlighted]:bg-red-soft"
+                    : undefined
+                }
+              >
+                {MERGE_CHOICE_ICON[choice]}
+                <span className="min-w-0 flex-1 truncate">
+                  {MERGE_CHOICE_LABEL[choice]}
+                </span>
+              </Menu.Item>
+            ))}
+          </Menu.Popup>
+        </Menu.Root>
+      )}
+    </span>
   );
 }

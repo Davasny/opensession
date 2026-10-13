@@ -53,6 +53,7 @@ export function ReviewRail({
   mergeError,
   onMarkReady,
   markingReady,
+  merge,
   onOpenFile,
   onOpenFiles,
   onStartSession,
@@ -82,6 +83,7 @@ export function ReviewRail({
   mergeError?: string | null;
   onMarkReady?: () => void;
   markingReady?: boolean;
+  merge?: Parameters<typeof GitStatusRows>[0]["merge"];
   /** Reveal one file in the Files changed page. */
   onOpenFile: (path: string) => void;
   /** Go to the Files changed page. */
@@ -133,6 +135,7 @@ export function ReviewRail({
           mergeScheduled={mergeScheduled}
           onMarkReady={onMarkReady}
           markingReady={markingReady}
+          merge={merge}
         />
         {mergeError && (
           <p className="m-0 px-2 pt-1 text-supporting text-red">{mergeError}</p>

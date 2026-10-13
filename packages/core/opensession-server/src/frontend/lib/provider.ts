@@ -101,6 +101,8 @@ const ALL_CAPABILITIES: PrHostCapabilities = {
   // commit-notes concept — only a payload that explicitly says "yes"
   // (code.storage) turns the annotation block on.
   commitNotes: false,
+  autoMerge: true,
+  forceMerge: true,
 };
 
 /**
@@ -111,5 +113,7 @@ const ALL_CAPABILITIES: PrHostCapabilities = {
 export function prCapabilities(
   caps?: PrHostCapabilities | null,
 ): PrHostCapabilities {
-  return caps ?? ALL_CAPABILITIES;
+  // Spread so a payload written before a capability existed keeps the GitHub
+  // default for it.
+  return caps ? { ...ALL_CAPABILITIES, ...caps } : ALL_CAPABILITIES;
 }
