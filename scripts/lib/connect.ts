@@ -39,6 +39,10 @@ import {
 
 const IDENTITY_PATH = join(OPENSESSION_HOME, "runner.json");
 const HEARTBEAT_MS = 60_000;
+/** A channel whose server stopped acknowledging heartbeats for this long is
+ * dead even when the socket never closed (a server restart can leave it
+ * half-open), so the Runner closes it and redials. */
+const HEARTBEAT_ACK_TIMEOUT_MS = 3 * HEARTBEAT_MS + 15_000;
 const RUNNER_HOST_ENTRY = resolve(
   import.meta.dir,
   "../../packages/core/opensession-server/src/runner-host/host.ts",
@@ -807,6 +811,18 @@ export async function runnerRun(): Promise<number> {
       const portalSockets = new Map<string, WebSocket>();
       const terminals = new Map<string, RunnerTerminalProcess>();
       const displays = new Map<string, VmDisplaySocket>();
+      let lastHeartbeatAck: number | undefined;
+      let settled = false;
+      // close() on a half-open socket waits for a closing handshake that
+      // never comes, so the reconnect cannot depend on its close event.
+      const closeDeadChannel = () => {
+        try {
+          socket.close(4000, "heartbeat timeout");
+        } catch {}
+        setTimeout(() => {
+          if (!settled) socket.dispatchEvent(new Event("close"));
+        }, 5_000);
+      };
 
       socket.addEventListener("open", async () => {
         attempt = 0;
@@ -828,6 +844,17 @@ export async function runnerRun(): Promise<number> {
           JSON.stringify({ t: "hello", version: 1, execAws: true, ...initial }),
         );
         const heartbeat = setInterval(() => {
+          // Servers older than heartbeat_ack never send one; only a server
+          // that has acknowledged before can be judged by its silence.
+          if (
+            lastHeartbeatAck !== undefined &&
+            Date.now() - lastHeartbeatAck > HEARTBEAT_ACK_TIMEOUT_MS
+          ) {
+            warn("server stopped acknowledging heartbeats — reconnecting");
+            clearInterval(heartbeat);
+            closeDeadChannel();
+            return;
+          }
           void report()
             .then((next) =>
               socket.send(JSON.stringify({ t: "heartbeat", ...next })),
@@ -844,6 +871,10 @@ export async function runnerRun(): Promise<number> {
         try {
           msg = JSON.parse(String(event.data));
         } catch {
+          return;
+        }
+        if (msg?.t === "heartbeat_ack") {
+          lastHeartbeatAck = Date.now();
           return;
         }
         if (msg?.t === "cancel") {
@@ -1008,6 +1039,8 @@ export async function runnerRun(): Promise<number> {
       });
 
       socket.addEventListener("close", (event: any) => {
+        if (settled) return;
+        settled = true;
         // 1008/4401 mean the server rejected us outright — retrying is pointless.
         if (event?.code === 1008 || event?.code === 4401) {
           fail(

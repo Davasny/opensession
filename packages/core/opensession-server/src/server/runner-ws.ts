@@ -797,6 +797,10 @@ export function runnerWsMessage(ws: any, raw: string | Buffer): boolean {
             ? message.softwareVersion
             : undefined,
       });
+      // The Runner treats a channel that stops acknowledging heartbeats as
+      // dead and redials. Without this, a socket left half-open by a server
+      // restart looks alive to the Runner forever.
+      ws.send(JSON.stringify({ t: "heartbeat_ack" }));
       return true;
     case "out": {
       const pending = connection.pending.get(String(message.id));

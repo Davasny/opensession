@@ -36,6 +36,32 @@ afterAll(() => {
 });
 
 describe("Runner WebSocket policy", () => {
+  test("heartbeats are acknowledged so the Runner can detect a dead channel", () => {
+    const { code } = createRunnerPairing("tester");
+    const registered = registerRunner({
+      code,
+      name: "heartbeat-runner",
+      platform: "darwin",
+      arch: "arm64",
+      address: "100.101.102.105",
+    });
+    if (!registered.ok) throw new Error(registered.error);
+    const sent: string[] = [];
+    const ws = {
+      data: { kind: "runner", runnerId: registered.runner.id },
+      send: (frame: string) => sent.push(frame),
+      close: () => {},
+    };
+    runnerWsOpen(ws);
+    runnerWsMessage(ws, JSON.stringify({ t: "hello", version: 1 }));
+    sent.length = 0;
+    runnerWsMessage(ws, JSON.stringify({ t: "heartbeat" }));
+    expect(sent.map((frame) => JSON.parse(frame))).toEqual([
+      { t: "heartbeat_ack" },
+    ]);
+    runnerWsClose(ws);
+  });
+
   test("automation create provenance reaches workspace preparation and host launch", async () => {
     const { code } = createRunnerPairing("tester");
     const registered = registerRunner({
