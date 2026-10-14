@@ -118,6 +118,13 @@ export async function handleGithubWebhook(req: Request): Promise<Response> {
           console.error("[github] workflow run wait dispatch failed:", e),
         );
 
+    // Job progress of a run a session's builds card already shows; the run's
+    // own workflow_run decided whether it is shown at all.
+    if (event === "workflow_job")
+      import("../../server/session-builds")
+        .then((m) => m.observeWorkflowJob(payload))
+        .catch((e) => console.error("[github] session builds job failed:", e));
+
     // Sync PR caches for every delivery; the cache handler filters events itself.
     import("../../server/pr-webhook")
       .then((m) => m.handlePrWebhookEvent(event, payload))

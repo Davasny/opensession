@@ -20,6 +20,7 @@ import { handleLocalFilesRoutes } from "./local-files";
 import { handleLocalFolderRoutes } from "./local-folders";
 import { handleForceMergeRoutes } from "./force-merge";
 import { handleScriptRoutes } from "./scripts";
+import { handleBuildRoutes } from "./builds";
 import { handleSessionAssetsRoutes } from "./session-assets";
 import { handleCommentThreadRoutes } from "./comment-threads";
 import { handleSessionContextRoutes } from "./session-context";
@@ -90,6 +91,7 @@ export const routeHandlers: RouteHandler[] = [
   handleLocalFolderRoutes,
   handleForceMergeRoutes,
   handleScriptRoutes,
+  handleBuildRoutes,
   handleOs1UpdateRoutes,
   handleLiveActivityRoutes,
   handleIngressRoutes,

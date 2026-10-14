@@ -53,6 +53,7 @@ import { ForceMergeCard } from "../ForceMergeCard";
 import { CredentialRegistrationCard } from "../CredentialRegistrationCard";
 import { KeychainAskCard } from "../KeychainAskCard";
 import { ScriptRunsCard } from "../ScriptRunsCard";
+import { BuildsCard } from "../BuildsCard";
 import {
   ShippedChangeComposer,
   SlackSentNotice,
@@ -1137,6 +1138,8 @@ export function SessionViewerMainRegion({
               <ForceMergeCard sessionId={session.id} />
 
               <ScriptRunsCard sessionId={session.id} />
+
+              <BuildsCard sessionId={session.id} />
 
               {slackComposer && (
                 <ShippedChangeComposer

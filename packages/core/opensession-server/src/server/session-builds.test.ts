@@ -1,0 +1,177 @@
+import { beforeEach, describe, expect, test } from "bun:test";
+import {
+  __flushSessionBuildsForTest,
+  __resetSessionBuildsForTest,
+  listSessionBuilds,
+  observeCommitStatus,
+  observeWorkflowJob,
+  observeWorkflowRun,
+  parseRolloutContext,
+  recordMergedPr,
+  type SessionBuild,
+} from "./session-builds";
+
+const repo = { id: "acme", ghRepo: "acme/app", defaultBranch: "main" };
+let owners: Record<string, string[]>;
+let frames: Array<{ sessionId: string; builds: SessionBuild[] }>;
+let lookups: number;
+let clock: number;
+
+beforeEach(() => {
+  owners = { "feature-x": ["s1"] };
+  frames = [];
+  lookups = 0;
+  clock = Date.parse("2026-10-14T10:00:00Z");
+  __resetSessionBuildsForTest({
+    sessionsForBranch: async (_repo, branch) => {
+      lookups++;
+      return owners[branch] ?? [];
+    },
+    broadcast: (sessionId, builds) => frames.push({ sessionId, builds }),
+    load: async () => null,
+    save: async () => {},
+    now: () => clock,
+    setTimer: () => 1,
+  });
+});
+
+function run(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "in_progress",
+    workflow_run: {
+      id: 7,
+      name: "CI",
+      status: "in_progress",
+      conclusion: null,
+      html_url: "https://github.com/acme/app/actions/runs/7",
+      head_branch: "feature-x",
+      head_sha: "a".repeat(40),
+      run_attempt: 1,
+      head_repository: { full_name: "acme/app" },
+      ...overrides,
+    },
+  };
+}
+
+describe("session builds", () => {
+  test("a run on the session's branch shows, then ends", async () => {
+    await observeWorkflowRun(repo, run());
+    expect((await listSessionBuilds("s1"))[0]).toMatchObject({
+      kind: "workflow",
+      title: "CI",
+      state: "running",
+      branch: "feature-x",
+    });
+    await observeWorkflowJob({
+      repository: { full_name: "acme/app" },
+      workflow_job: {
+        id: 1,
+        run_id: 7,
+        run_attempt: 1,
+        name: "test",
+        status: "completed",
+        conclusion: "failure",
+        steps: [
+          { name: "Install", conclusion: "success" },
+          { name: "Run tests", conclusion: "failure" },
+        ],
+      },
+    });
+    await observeWorkflowRun(
+      repo,
+      run({ status: "completed", conclusion: "failure" }),
+    );
+    const [row] = await listSessionBuilds("s1");
+    expect(row).toMatchObject({
+      state: "failure",
+      detail: "test: Run tests",
+      jobs: { total: 1, done: 1, failed: 1 },
+    });
+    expect(row!.endedAt).toBeDefined();
+    __flushSessionBuildsForTest();
+    expect(frames.map((f) => f.sessionId)).toEqual(["s1"]);
+  });
+
+  test("default branch, fork, and unowned runs show nowhere", async () => {
+    await observeWorkflowRun(repo, run({ head_branch: "main" }));
+    await observeWorkflowRun(
+      repo,
+      run({ head_repository: { full_name: "someone/app" } }),
+    );
+    await observeWorkflowRun(repo, run({ head_branch: "nobody" }));
+    expect(await listSessionBuilds("s1")).toEqual([]);
+  });
+
+  test("skipped runs are dropped and the branch lookup is cached", async () => {
+    await observeWorkflowRun(repo, run());
+    await observeWorkflowRun(
+      repo,
+      run({ status: "completed", conclusion: "skipped" }),
+    );
+    expect(await listSessionBuilds("s1")).toEqual([]);
+    expect(lookups).toBe(1);
+  });
+
+  test("a merge carries its deploy run and rollouts into the session", async () => {
+    const merge = "b".repeat(40);
+    await recordMergedPr(repo, {
+      number: 12,
+      merge_commit_sha: merge,
+      head: { ref: "feature-x" },
+    });
+    await observeWorkflowRun(
+      repo,
+      run({ id: 9, name: "Deploy", head_branch: "main", head_sha: merge }),
+    );
+    await observeCommitStatus(repo, {
+      sha: merge,
+      context: "cd/prod/web",
+      state: "pending",
+      description: "web is deploying to prod",
+      target_url: "https://cd.example.test/applications/web",
+    });
+    clock += 60_000;
+    await observeCommitStatus(repo, {
+      sha: merge,
+      context: "cd/prod/web",
+      state: "success",
+      description: "web deployed to prod",
+      target_url: "https://cd.example.test/applications/web",
+    });
+    // Not a rollout context, and not a tracked commit.
+    await observeCommitStatus(repo, {
+      sha: merge,
+      context: "lint",
+      state: "success",
+    });
+    await observeCommitStatus(repo, {
+      sha: "c".repeat(40),
+      context: "cd/prod/web",
+      state: "success",
+    });
+    const rows = await listSessionBuilds("s1");
+    expect(rows).toHaveLength(2);
+    const rollout = rows.find((r) => r.kind === "rollout")!;
+    expect(rollout).toMatchObject({
+      title: "web",
+      target: "prod",
+      state: "success",
+      prNumber: 12,
+      detail: "web deployed to prod",
+    });
+    expect(rollout.startedAt < rollout.updatedAt).toBe(true);
+    expect(rows.find((r) => r.kind === "workflow")).toMatchObject({
+      title: "Deploy",
+      prNumber: 12,
+    });
+  });
+
+  test("parses rollout contexts", () => {
+    expect(parseRolloutContext("cd/prod-1/api")).toEqual({
+      target: "prod-1",
+      app: "api",
+    });
+    expect(parseRolloutContext("cd/prod")).toBeNull();
+    expect(parseRolloutContext("ci/prod/api")).toBeNull();
+  });
+});

@@ -124,6 +124,15 @@ async function routeCiEvent(
   }
 }
 
+/** Feed the session's builds and rollouts card (server/session-builds.ts). */
+function routeSessionBuilds(
+  run: (m: typeof import("../../server/session-builds")) => Promise<void>,
+): void {
+  import("../../server/session-builds")
+    .then(run)
+    .catch((e) => console.error("[github] session builds update failed:", e));
+}
+
 /** Resolve review config from the seeded automation (its enabled flag + prompt/model). */
 export async function resolveReviewConfig(): Promise<{
   autoEnabled: boolean;
@@ -199,7 +208,10 @@ export async function handleGithubPrEvent(
       void handleDeployWorkflowRun(payload).catch((e) =>
         console.error("[github] handleDeployWorkflowRun failed:", e),
       );
-      if (eventRepo) await routeCiEvent(event, payload, eventRepo);
+      if (eventRepo) {
+        routeSessionBuilds((m) => m.observeWorkflowRun(eventRepo, payload));
+        await routeCiEvent(event, payload, eventRepo);
+      }
       return;
     }
 
@@ -224,8 +236,17 @@ export async function handleGithubPrEvent(
         return;
       }
       const senderIsApp = payload?.sender?.type === "Bot";
-      if (eventRepo && (senderIsApp || senderIsBot || senderIsTrusted))
+      if (eventRepo && (senderIsApp || senderIsBot || senderIsTrusted)) {
+        if (event === "status") {
+          const { mayBeRolloutStatus } =
+            await import("../../server/session-builds");
+          if (mayBeRolloutStatus(payload))
+            routeSessionBuilds((m) =>
+              m.observeCommitStatus(eventRepo, payload),
+            );
+        }
         await routeCiEvent(event, payload, eventRepo);
+      }
       return;
     }
 
@@ -343,6 +364,7 @@ export async function handleGithubPrEvent(
         );
         return;
       }
+      if (eventRepo) routeSessionBuilds((m) => m.recordMergedPr(eventRepo, pr));
       // Feedback learning on every configured repo: final outcome sweep for our
       // review comments (open+current at merge = the author ignored them), and
       // — for PRs that look like bug fixes — blame the fixed lines to find

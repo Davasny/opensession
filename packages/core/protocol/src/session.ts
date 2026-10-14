@@ -494,6 +494,35 @@ export type ProtocolClientMessage =
  * identical shape, so a client can unwrap a feed frame straight into its
  * ordinary handler, and a new field can never reach one route only.
  */
+/** One build or rollout the session follows (session_builds): a GitHub
+ * Actions run on the session's branch or on a commit its PR merged as, or a
+ * `cd/<target>/<app>` commit status a continuous delivery tool (Argo CD, for
+ * one) posts while it rolls that commit out. */
+export interface SessionBuildWire {
+  /** Stable per row: a run id, or the commit and status context. */
+  id: string;
+  kind: "workflow" | "rollout";
+  /** GitHub owner/name. */
+  repo: string;
+  /** Workflow name, or the rolled out app. */
+  title: string;
+  /** Where a rollout goes: the middle of its `cd/<target>/<app>` context. */
+  target?: string;
+  state: "queued" | "running" | "success" | "failure" | "cancelled";
+  /** Failed job and step, or the status description. */
+  detail?: string;
+  url?: string;
+  sha: string;
+  branch?: string;
+  /** Set when the commit is the merge of this PR: a deploy, not a check. */
+  prNumber?: number;
+  /** Job progress of a workflow run, once a job has reported. */
+  jobs?: { total: number; done: number; failed: number };
+  startedAt: string;
+  updatedAt: string;
+  endedAt?: string;
+}
+
 /** One script run as viewers see it (script_runs). */
 export interface ScriptRunWire {
   id: string;
@@ -898,6 +927,13 @@ export type ProtocolServerMessage =
       type: "script_runs";
       sessionId: string;
       runs: ScriptRunWire[];
+    }
+  | {
+      /** Every build and rollout the session follows, newest first, sent
+       *  whenever one of them changes. Also served by GET /api/builds. */
+      type: "session_builds";
+      sessionId: string;
+      builds: SessionBuildWire[];
     }
   | { type: "command_ack_result"; sessionId: string; requestId: string }
   | {
