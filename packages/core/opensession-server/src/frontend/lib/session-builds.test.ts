@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionBuildWire } from "@tellahq/opensession-protocol/session";
-import { hideKey, visibleBuildGroups } from "./session-builds";
+import { buildGroupUrl, hideKey, visibleBuildGroups } from "./session-builds";
 
 const NOW = Date.parse("2026-10-14T12:00:00Z");
 const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
@@ -114,5 +114,20 @@ describe("visibleBuildGroups", () => {
     );
     // Not live, not failed, ended long ago: nothing left to show.
     expect(group).toBeUndefined();
+  });
+});
+
+describe("buildGroupUrl", () => {
+  test("links a deploy to its PR and a branch build to its commit", () => {
+    const [deploy] = visibleBuildGroups(
+      [row({ sha: "m1", prNumber: 4 })],
+      new Set(),
+      NOW,
+    );
+    const [branch] = visibleBuildGroups([row({ sha: "b2" })], new Set(), NOW);
+    expect(buildGroupUrl(deploy!)).toBe("https://github.com/acme/app/pull/4");
+    expect(buildGroupUrl(branch!)).toBe(
+      "https://github.com/acme/app/commit/b2",
+    );
   });
 });

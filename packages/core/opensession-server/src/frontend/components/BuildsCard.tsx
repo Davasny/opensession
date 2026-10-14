@@ -3,6 +3,7 @@ import type { SessionBuildWire } from "@tellahq/opensession-protocol/session";
 import { BASE_PATH } from "../lib/base";
 import { checkToneClass } from "../lib/pr-checks";
 import {
+  buildGroupUrl,
   buildVisual,
   hiddenBuildGroupKeys,
   isBuildLive,
@@ -178,9 +179,14 @@ function BuildGroupCard({
         <span className={cn("shrink-0", checkToneClass(visual))}>
           <CheckStatusIcon kind={visual} />
         </span>
-        <span className="min-w-0 flex-1 truncate text-label font-semibold text-fg">
+        <a
+          href={buildGroupUrl(group)}
+          target="_blank"
+          rel="noreferrer"
+          className="min-w-0 flex-1 truncate text-label font-semibold text-fg no-underline hover:underline"
+        >
           {title}
-        </span>
+        </a>
         <span className="shrink-0 text-meta text-dim tabular-nums phone:hidden">
           {groupSummary(group)}
         </span>

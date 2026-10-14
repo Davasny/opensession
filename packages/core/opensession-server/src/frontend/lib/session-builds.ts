@@ -35,6 +35,14 @@ export interface BuildGroup {
   endedAt?: string;
 }
 
+/** The PR a deploy group shipped, else the commit a branch build ran on. */
+export function buildGroupUrl(group: BuildGroup): string {
+  const base = `https://github.com/${group.repo}`;
+  return group.prNumber != null
+    ? `${base}/pull/${group.prNumber}`
+    : `${base}/commit/${group.sha}`;
+}
+
 export function buildVisual(state: SessionBuildWire["state"]): CheckVisual {
   switch (state) {
     case "queued":
