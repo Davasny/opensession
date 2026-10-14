@@ -318,18 +318,6 @@ export function prChipClass(tone: PrTone, size: ChipSize): string {
   return `${CHIP_BASE} ${CHIP_SIZE[size]} ${flat ? CHIP_TONE_FLAT[tone] : CHIP_TONE[tone]}${shadow ? " smooth-shadow-sm" : ""}${hover}`;
 }
 
-/** The phone top bar's PR chip.
- *
- *  Phones get no workspace panel and no status strip, so this is the only
- *  place a session's PR state is shown: the number in the PR's own colour,
- *  in the bar's right slot. Same toned pill as a sibling chip in the header,
- *  resized to the 44px touch height and given the same shadow as every other
- *  control in that bar. Both ends are its own because it is one target rather
- *  than half of a split button. */
-export function prPhoneChipClass(tone: PrTone): string {
-  return `${CHIP_BASE} ${CHIP_TONE[tone]} min-h-11 shrink-0 cursor-pointer rounded-full px-2.5 text-label shadow-[var(--mobile-header-control-shadow)]`;
-}
-
 /** The outbound half of the split button: same tone, square inner corner, and
  *  it presses rather than washes. */
 export function prChipExternalClass(

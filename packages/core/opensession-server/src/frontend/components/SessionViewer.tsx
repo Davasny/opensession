@@ -68,7 +68,6 @@ import {
 } from "../lib/api";
 import { sessionPrPresentation } from "../lib/session-prs";
 import { refChipText, refLabel, refTone, worstPrRef } from "../lib/pr-refs";
-import { prPhoneChipClass } from "../lib/pr-tone-classes";
 import type { PrFocus } from "../lib/pr-focus";
 import { reviewLoopResult } from "../lib/review-loop";
 import { CONTINUE_AFTER_FAILURE_PROMPT } from "../lib/continue-run";
@@ -1623,7 +1622,6 @@ export function SessionViewer({
           effectiveReview,
           onReviewChange,
           liveOverviewMedia,
-          phonePr,
           setReviewSessionActionTarget,
         }}
         conversation={{ others, entries }}

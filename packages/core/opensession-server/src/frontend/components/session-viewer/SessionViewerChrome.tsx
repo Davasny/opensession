@@ -8,7 +8,6 @@ import type {
   GitStatusInfo,
   ReportMeta,
   DatabaseMeta,
-  SessionPrRef,
   SessionUsage,
   TranscriptEntry,
   UnifiedSession,
@@ -87,8 +86,6 @@ import { copySessionTranscript } from "../../lib/transcript-copy";
 import { dedupeViewers, facepileAvatarStyle } from "../../lib/presence";
 import { personKey } from "../../lib/review-queue";
 import { metadataModelLabel } from "./model-labels";
-import { prPhoneChipClass } from "../../lib/pr-tone-classes";
-import { refChipText, refLabel, refTone } from "../../lib/pr-refs";
 import {
   HEADER_SESSIONBAR,
   HEADER_SESSIONBAR_MODEL,
@@ -290,7 +287,6 @@ interface ChromeInfoActions {
       ) => void)
     | undefined;
   liveOverviewMedia: WorkspaceMediaItem[];
-  phonePr: SessionPrRef | undefined;
   setReviewSessionActionTarget: Dispatch<SetStateAction<HTMLDivElement | null>>;
 }
 interface ChromeConversation {
@@ -459,7 +455,6 @@ export function SessionViewerChrome({
     effectiveReview,
     onReviewChange,
     liveOverviewMedia,
-    phonePr,
     setReviewSessionActionTarget,
   } = infoActions;
   const { others, entries } = conversation;
@@ -1192,28 +1187,6 @@ export function SessionViewerChrome({
                       // until someone asks for it from the same button.
                       hasRoom={summaryHasRoom}
                     />
-                  )}
-                  {/* Phones have no workspace panel and no status strip, so the PR
-					    state had nowhere to show: you had to open the info page to
-					    learn whether checks were red. One toned chip in the bar's
-					    right slot says the number and the state in its colour, and
-					    tapping it opens Review on that PR. Only when the session
-					    actually has one: a chip that says "no PR" is chrome. */}
-                  {isPhone && phonePr && (
-                    <button
-                      type="button"
-                      className={prPhoneChipClass(refTone(phonePr))}
-                      title={refLabel(phonePr)}
-                      aria-label={refLabel(phonePr)}
-                      onClick={() =>
-                        focusPrInReview({
-                          repo: phonePr.repo,
-                          branch: phonePr.branch,
-                        })
-                      }
-                    >
-                      {refChipText(phonePr, session.repo || undefined)}
-                    </button>
                   )}
                   {!isPhone && panelAvailable && (
                     <Tooltip label="Toggle workspace panel">
