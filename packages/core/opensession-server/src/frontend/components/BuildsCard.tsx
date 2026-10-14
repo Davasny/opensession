@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SessionBuildWire } from "@tellahq/opensession-protocol/session";
 import { BASE_PATH } from "../lib/base";
 import { checkToneClass } from "../lib/pr-checks";
@@ -21,39 +21,85 @@ import { Tooltip } from "../ui/tooltip";
 import { CheckStatusIcon } from "./CheckStatusIcon";
 import { IconX } from "./icons";
 
+const RESYNC_WHILE_LIVE_MS = 60_000;
+
 /**
  * GitHub Actions runs and rollouts the session follows (server/
  * session-builds.ts): the CI of its branch and, once its PR merged, the
  * deploy of the merge commit. Fed from webhooks by the server, so the card
  * loads the list on mount and follows `session_builds` frames.
+ *
+ * Frames are not replayed: one sent while the socket was down, or while the
+ * tab slept, is gone. So the card loads the list again on every reconnect,
+ * when the tab comes back into view, and now and then while a build runs.
  */
-export function BuildsCard({ sessionId }: { sessionId: string }) {
+export function BuildsCard({
+  sessionId,
+  connected,
+}: {
+  sessionId: string;
+  connected: boolean;
+}) {
   const { addHandler } = useSessionSocket();
   const [builds, setBuilds] = useState<SessionBuildWire[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const [hidden, setHidden] = useState(() => hiddenBuildGroupKeys());
+  const [reloads, setReloads] = useState(0);
+  // Bumped by every frame: a load that started before a frame arrived is
+  // older than what the card shows and must not replace it.
+  const frameSeq = useRef(0);
 
   useEffect(() => {
-    let live = true;
     setBuilds([]);
+    const off = addHandler((message) => {
+      if (
+        message.type === "session_builds" &&
+        message.sessionId === sessionId
+      ) {
+        frameSeq.current++;
+        setBuilds(message.builds);
+      }
+    });
+    return off;
+  }, [sessionId, addHandler]);
+
+  useEffect(() => {
+    if (!connected) return;
+    let live = true;
+    const seq = frameSeq.current;
     fetch(`${BASE_PATH}/api/builds?sessionId=${encodeURIComponent(sessionId)}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((body) => {
-        if (live && body?.builds) setBuilds(body.builds);
+        if (live && body?.builds && seq === frameSeq.current)
+          setBuilds(body.builds);
       })
       .catch(() => {});
-    const off = addHandler((message) => {
-      if (message.type === "session_builds" && message.sessionId === sessionId)
-        setBuilds(message.builds);
-    });
     return () => {
       live = false;
-      off();
     };
-  }, [sessionId, addHandler]);
+  }, [sessionId, connected, reloads]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") setReloads((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   const groups = visibleBuildGroups(builds, hidden, now);
   const anyLive = groups.some((g) => g.live);
+
+  // A missed final frame would leave a build running forever: while one
+  // runs, check the list once a minute.
+  useEffect(() => {
+    if (!anyLive || !connected) return;
+    const timer = setInterval(
+      () => setReloads((n) => n + 1),
+      RESYNC_WHILE_LIVE_MS,
+    );
+    return () => clearInterval(timer);
+  }, [anyLive, connected]);
 
   // One clock for every row: elapsed time while running, and ended groups
   // leaving after their window.

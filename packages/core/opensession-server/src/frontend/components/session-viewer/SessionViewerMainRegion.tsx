@@ -1139,7 +1139,7 @@ export function SessionViewerMainRegion({
 
               <ScriptRunsCard sessionId={session.id} />
 
-              <BuildsCard sessionId={session.id} />
+              <BuildsCard sessionId={session.id} connected={connected} />
 
               {slackComposer && (
                 <ShippedChangeComposer
