@@ -51,6 +51,25 @@ describe("last-word anchor", () => {
     );
     expect(sanitizeCompletion("merge it and ", "deploy")).toBe("deploy");
   });
+
+  it("strips a restart from earlier in the draft", () => {
+    expect(
+      sanitizeCompletion(
+        "Can we rethink this",
+        "rethink this so we keep the frame",
+      ),
+    ).toBe(" so we keep the frame");
+    expect(sanitizeCompletion("ok, merge it and", "Merge it and deploy")).toBe(
+      " deploy",
+    );
+    expect(sanitizeCompletion("a test for the doub", "the doubling case")).toBe(
+      "ling case",
+    );
+    expect(sanitizeCompletion("fix both ", "fix both and push")).toBe(
+      "and push",
+    );
+    expect(sanitizeCompletion("add a ", "address check")).toBe("address check");
+  });
 });
 
 describe("restraint", () => {
