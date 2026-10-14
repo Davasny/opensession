@@ -1397,7 +1397,14 @@ function buildAppMenu() {
             click: () =>
               createWindow(null, accountForWindow(activeWindow())?.id || null),
           },
-          { role: "close" },
+          // ⌘W belongs to the web app's "Close session" shortcut. The stock
+          // close role also claimed it, so one press archived the session and
+          // closed the window. Browsers with tabs use ⌘⇧W for the window too.
+          {
+            role: "close",
+            label: "Close Window",
+            accelerator: "CommandOrControl+Shift+W",
+          },
         ],
       },
       { role: "editMenu" },
