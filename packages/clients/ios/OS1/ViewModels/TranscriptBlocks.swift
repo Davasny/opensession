@@ -532,9 +532,10 @@ enum TranscriptGrouping {
     ) -> [TranscriptBlock] {
         var blocks: [TranscriptBlock] = []
         var turn: [TurnItem] = []
+        // The current turn began at a message sent while the agent was working.
+        var turnAnswersSteer = false
 
-        func flush(isTrailing: Bool) {
-            defer { turn = [] }
+        func emit(_ turn: [TurnItem], isTrailing: Bool, start: Date?) {
             guard !turn.isEmpty else { return }
 
             // A plain final assistant row is the only answer candidate. Before
@@ -599,7 +600,6 @@ enum TranscriptGrouping {
             // A running turn's footer would show a duration that is still
             // ticking; wait for it to settle.
             guard !isLive else { return }
-            let start = normalized.first.flatMap(startTimestamp)
             let end = final.timestampDate
             let footer = TurnFooter(
                 id: "\(final.id):footer",
@@ -612,6 +612,31 @@ enum TranscriptGrouping {
                 assets: writtenAssets(tools)
             )
             if !footer.isEmpty { blocks.append(.footer(footer)) }
+        }
+
+        func flush(isTrailing: Bool) {
+            defer { turn = [] }
+            let answersSteer = turnAnswersSteer
+            turnAnswersSteer = false
+            guard !turn.isEmpty else { return }
+            let start = turn.first.flatMap(startTimestamp)
+            // A message sent mid-turn reaches the model between steps, so its
+            // answer is followed by more work and would otherwise fold away as
+            // narration. Keep that first reply beside the message it answers.
+            if answersSteer,
+               let reply = turn.firstIndex(where: { item in
+                   guard case .message(let entry) = item else { return false }
+                   return entry.isReasoning != true
+                       && !ReasoningSummaryDisplay.isLegacyHeading(entry.text)
+               }),
+               reply < turn.count - 1,
+               case .message(let replyEntry) = turn[reply] {
+                emit(Array(turn[..<reply]), isTrailing: false, start: start)
+                blocks.append(.message(replyEntry))
+                emit(Array(turn[(reply + 1)...]), isTrailing: isTrailing, start: start)
+            } else {
+                emit(turn, isTrailing: isTrailing, start: start)
+            }
         }
 
         for (index, item) in items.enumerated() {
@@ -654,7 +679,9 @@ enum TranscriptGrouping {
                     )
                 )))
             case .entry(let entry):
+                let steer = entry.type == "user" && sentMidTurn(turn)
                 flush(isTrailing: false)
+                turnAnswersSteer = steer
                 blocks.append(.message(entry))
             }
             if isLast { flush(isTrailing: true) }
@@ -668,6 +695,17 @@ enum TranscriptGrouping {
             live: live
         )
         return thinkingMessages.visibleBlocks(grouped)
+    }
+
+    /// Whether a user message was sent while the agent was still working. A
+    /// message admitted mid-turn is written before the step it waited behind,
+    /// so it follows a tool call or reasoning rather than a final answer.
+    static func sentMidTurn(_ previousTurn: [TurnItem]) -> Bool {
+        switch previousTurn.last {
+        case nil: false
+        case .tool: true
+        case .message(let entry): entry.isReasoning == true
+        }
     }
 
     private enum ReviewBlockRole {

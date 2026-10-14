@@ -78,6 +78,55 @@ final class TranscriptGroupingTests: XCTestCase {
         XCTAssertEqual(answer.id, "a2")
     }
 
+    func testReplyToAMessageSentMidTurnEscapesTheFold() {
+        append([
+            TranscriptEntry(id: "u1", type: "user", content: "fix it"),
+            toolUse("t1", name: "Bash", input: ["command": .string("cargo build")]),
+            TranscriptEntry(id: "u2", type: "user", content: "how long is left?"),
+            toolResult("t1", text: "ok"),
+            TranscriptEntry(id: "a1", type: "assistant", content: "About a minute."),
+            toolUse("t2", name: "Bash", input: ["command": .string("bun test")]),
+            toolResult("t2", text: "ok"),
+            TranscriptEntry(id: "a2", type: "assistant", content: "Running the tests."),
+            toolUse("t3", name: "Bash", input: ["command": .string("bun run check")]),
+            toolResult("t3", text: "ok"),
+            TranscriptEntry(id: "a3", type: "assistant", content: "Fixed."),
+        ])
+
+        let ids: [String] = viewModel.displayBlocks.compactMap { block in
+            switch block {
+            case .message(let entry): entry.id
+            case .work: "work"
+            default: nil
+            }
+        }
+        // Only the first reply leaves the fold; later narration is still work.
+        XCTAssertEqual(ids, ["u1", "work", "u2", "a1", "work", "a3"])
+    }
+
+    func testNarrationAfterAMessageSentBetweenTurnsStaysFolded() {
+        append([
+            TranscriptEntry(id: "u1", type: "user", content: "fix it"),
+            toolUse("t1", name: "Bash", input: ["command": .string("bun test")]),
+            toolResult("t1", text: "ok"),
+            TranscriptEntry(id: "a1", type: "assistant", content: "Fixed."),
+            TranscriptEntry(id: "u2", type: "user", content: "now the docs"),
+            TranscriptEntry(id: "a2", type: "assistant", content: "Opening the docs."),
+            toolUse("t2", name: "Bash", input: ["command": .string("ls docs")]),
+            toolResult("t2", text: "ok"),
+            TranscriptEntry(id: "a3", type: "assistant", content: "Updated."),
+        ])
+
+        let ids: [String] = viewModel.displayBlocks.compactMap { block in
+            switch block {
+            case .message(let entry): entry.id
+            case .work: "work"
+            default: nil
+            }
+        }
+        XCTAssertEqual(ids, ["u1", "work", "a1", "u2", "work", "a3"])
+    }
+
     func testBackgroundWakeKeepsEarlierOutputVisible() {
         append([
             TranscriptEntry(id: "u1", type: "user", content: "ship it"),

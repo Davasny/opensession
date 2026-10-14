@@ -100,6 +100,13 @@ export function buildRunInstructions(input: {
       "relevant links. Make every question self-contained, even a repeated one: say " +
       "what it is about and what each option means. Never point back to an earlier turn.",
   );
+  // A message sent mid-turn reaches the model between tool calls. Models
+  // tended to fold it into terse progress narration, or skip it and call the
+  // next tool, so the sender saw only more work and read it as ignored.
+  parts.push(
+    "## Messages during a turn\nWhen a person messages you mid-turn, answer them in " +
+      "plain text before your next tool call, then continue unless the message changes the task.",
+  );
   parts.push(
     "## References\nFor PRs outside the current primary repository, write " +
       "`<repo>#<number>`, never bare `#<number>`. A bare `#<number>` reads as a " +

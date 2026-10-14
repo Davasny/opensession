@@ -142,6 +142,7 @@ describe("buildRunInstructions", () => {
     expect(prompt.match(/^## .+$/gm)).toEqual([
       "## Data handling",
       "## Finish your turns",
+      "## Messages during a turn",
       "## References",
       "## Working directory",
       "## Pull requests",
@@ -196,8 +197,9 @@ describe("buildRunInstructions", () => {
     // paragraphs that a table scans faster.
     // The workflow_run clause in Waiting adds ~70: a release run started by a
     // tag has no PR, and without it agents polled `gh run view` or guessed a
-    // timer.
-    expect(prompt.length).toBeLessThan(3_950);
+    // timer. "Messages during a turn" adds ~170: without it, a reply to a
+    // mid-turn message read as progress narration, or never came.
+    expect(prompt.length).toBeLessThan(4_150);
   });
 
   test("asks for visual proof by default only where walkthroughs are mounted", () => {

@@ -527,10 +527,49 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
   // entry is work; keeping it in one block prevents narration from splitting a
   // run into a ladder of one-step disclosures.
   let turn: TranscriptEntry[] = [];
+  // The current turn began at a message sent while the agent was working.
+  let turnAnswersSteer = false;
 
   const flushTurn = (trailing = false) => {
     if (turn.length === 0) return;
-    const last = turn[turn.length - 1];
+    // A message sent mid-turn reaches the model between steps, so its answer
+    // is followed by more work and would otherwise fold away as narration.
+    // Keep that first reply beside the message it answers.
+    const reply = turnAnswersSteer
+      ? turn.findIndex(
+          (entry) => entry.type === "assistant" && !entry.isReasoning,
+        )
+      : -1;
+    turnAnswersSteer = false;
+    if (reply >= 0 && reply < turn.length - 1) {
+      const before = arrangeThinkingMessages(
+        turn.slice(0, reply),
+        thinkingMessages,
+        false,
+      );
+      if (before.length > 0) {
+        blocks.push({
+          kind: "turn",
+          items: before,
+          expandWhileRunning: before.some(
+            (entry) => entry.type === "assistant",
+          ),
+        });
+      }
+      blocks.push({ kind: "entry", entry: turn[reply]! });
+      flushWork(turn.slice(reply + 1), turn[0]!, trailing);
+    } else {
+      flushWork(turn, turn[0]!, trailing);
+    }
+    turn = [];
+  };
+
+  const flushWork = (
+    turn: TranscriptEntry[],
+    start: TranscriptEntry,
+    trailing: boolean,
+  ) => {
+    const last = turn[turn.length - 1]!;
     // Provider-tagged reasoning is work even when it is the last persisted
     // entry. An ordinary last assistant entry is the only safe final-output
     // candidate, so it always remains outside the fold. As a live turn grows,
@@ -560,15 +599,14 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
         entry: final,
         durationMs:
           new Date(final.timestamp).getTime() -
-          new Date(turn[0].timestamp).getTime(),
+          new Date(start.timestamp).getTime(),
         files: turnTouchedFiles(turn),
         assets: collectWrittenAssets(turn),
       });
     }
-    turn = [];
   };
 
-  for (const entry of renderedEntries) {
+  for (const [index, entry] of renderedEntries.entries()) {
     if (entry.type === "tool_result") {
       continue; // rendered inside turn blocks via toolResults
     } else if (
@@ -578,7 +616,12 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
     ) {
       turn.push(entry);
     } else {
+      const steer =
+        entry.type === "user" &&
+        !entry.turnBoundary &&
+        sentMidTurn(turn, renderedEntries[index + 1]);
       flushTurn();
+      turnAnswersSteer = steer;
       // Hidden system-triggered turns keep the completed output before them
       // out of later work and start a check-back fold. They are structural,
       // never a blank row: groupCheckBacks absorbs or drops every one.
@@ -1186,6 +1229,23 @@ function IndexedTranscriptBlocks(props: Props) {
       }}
     />
   );
+}
+
+/**
+ * Whether a user message was sent while the agent was still working. A
+ * message admitted mid-turn is written before the step it waited behind: it
+ * follows a tool call or reasoning rather than a final answer, or the result
+ * of the tool that was running lands right after it. The second test is the
+ * one an indexed range can make, since the range starts at the message.
+ */
+export function sentMidTurn(
+  previousTurn: readonly TranscriptEntry[],
+  next: TranscriptEntry | undefined,
+): boolean {
+  if (next?.type === "tool_result") return true;
+  const last = previousTurn[previousTurn.length - 1];
+  if (!last) return false;
+  return last.type !== "assistant" || Boolean(last.isReasoning);
 }
 
 function isTurnContinuationEntry(entry: TranscriptEntry): boolean {

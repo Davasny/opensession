@@ -351,6 +351,92 @@ describe("TranscriptBlocks compact tool runs", () => {
     expect(html).toContain("The repository is clean.");
   });
 
+  test("shows the reply to a message sent mid-turn outside the work fold", () => {
+    setTurnPrefs(null);
+    const html = renderToStaticMarkup(
+      <TranscriptBlocks
+        entries={[
+          toolEntries[0]!,
+          toolEntries[1]!,
+          {
+            id: "steer",
+            type: "user",
+            content: "How long is left?",
+            timestamp: "2026-08-13T06:00:01.500Z",
+          },
+          toolEntries[2]!,
+          {
+            id: "steer-reply",
+            type: "assistant",
+            content: "About a minute: one more file to read.",
+            timestamp: "2026-08-13T06:00:02.500Z",
+          },
+          ...toolEntries.slice(3),
+          {
+            id: "progress",
+            type: "assistant",
+            content: "Reading the lockfile next.",
+            timestamp: "2026-08-13T06:00:04.500Z",
+          },
+          ...bashCall(2, "cat bun.lock"),
+          {
+            id: "answer",
+            type: "assistant",
+            content: "Finished both checks.",
+            timestamp: "2026-08-13T06:00:09Z",
+          },
+        ]}
+      />,
+    );
+
+    const steer = html.indexOf("How long is left?");
+    const reply = html.indexOf("About a minute: one more file to read.");
+    expect(steer).toBeGreaterThan(-1);
+    expect(reply).toBeGreaterThan(steer);
+    expect(html.indexOf("Finished both checks.")).toBeGreaterThan(reply);
+    // Only the first reply leaves the fold; later narration is still work.
+    expect(html).not.toContain("Reading the lockfile next.");
+  });
+
+  test("keeps narration folded after a message sent between turns", () => {
+    setTurnPrefs(null);
+    const html = renderToStaticMarkup(
+      <TranscriptBlocks
+        entries={[
+          ...toolEntries.slice(0, 3),
+          {
+            id: "first-answer",
+            type: "assistant",
+            content: "The repository is clean.",
+            timestamp: "2026-08-13T06:00:02.500Z",
+          },
+          {
+            id: "next",
+            type: "user",
+            content: "Now check the manifest",
+            timestamp: "2026-08-13T06:00:02.700Z",
+          },
+          {
+            id: "narration",
+            type: "assistant",
+            content: "Opening package.json.",
+            timestamp: "2026-08-13T06:00:02.800Z",
+          },
+          ...toolEntries.slice(3),
+          {
+            id: "answer",
+            type: "assistant",
+            content: "The manifest is empty.",
+            timestamp: "2026-08-13T06:00:05Z",
+          },
+        ]}
+      />,
+    );
+
+    expect(html).not.toContain("Opening package.json.");
+    expect(html).toContain("The manifest is empty.");
+  });
+
   test("keeps a worker report inside the same collapsed work block", () => {
     setTurnPrefs(null);
     const html = renderToStaticMarkup(
