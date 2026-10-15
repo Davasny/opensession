@@ -41,6 +41,7 @@ function run(overrides: Record<string, unknown> = {}) {
     workflow_run: {
       id: 7,
       name: "CI",
+      event: "push",
       status: "in_progress",
       conclusion: null,
       html_url: "https://github.com/acme/app/actions/runs/7",
@@ -110,6 +111,45 @@ describe("session builds", () => {
     );
     expect(await listSessionBuilds("s1")).toEqual([]);
     expect(lookups).toBe(1);
+  });
+
+  test("a start delivered after the end does not revive the run", async () => {
+    await observeWorkflowRun(
+      repo,
+      run({ status: "completed", conclusion: "skipped" }),
+    );
+    await observeWorkflowRun(repo, run());
+    expect(await listSessionBuilds("s1")).toEqual([]);
+
+    await observeWorkflowRun(
+      repo,
+      run({ id: 8, status: "completed", conclusion: "success" }),
+    );
+    await observeWorkflowRun(repo, run({ id: 8 }));
+    expect(await listSessionBuilds("s1")).toMatchObject([{ state: "success" }]);
+
+    // A rerun is a new attempt and runs again.
+    await observeWorkflowRun(repo, run({ id: 8, run_attempt: 2 }));
+    expect(await listSessionBuilds("s1")).toMatchObject([{ state: "running" }]);
+  });
+
+  test("only the merge's own push runs join its deploy", async () => {
+    const merge = "b".repeat(40);
+    await recordMergedPr(repo, {
+      number: 12,
+      merge_commit_sha: merge,
+      head: { ref: "feature-x" },
+    });
+    for (const [id, event] of [
+      [20, "workflow_run"],
+      [21, "issue_comment"],
+      [22, "schedule"],
+    ] as const)
+      await observeWorkflowRun(
+        repo,
+        run({ id, event, head_branch: "main", head_sha: merge }),
+      );
+    expect(await listSessionBuilds("s1")).toEqual([]);
   });
 
   test("a merge carries its deploy run and rollouts into the session", async () => {

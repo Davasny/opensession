@@ -4,8 +4,8 @@
  * Fed by GitHub webhooks the App already receives, so nothing here polls:
  *  - `workflow_run` on the session's branch: its CI.
  *  - `pull_request` merged: remembers the merge commit for the sessions that
- *    own the branch, so the runs GitHub starts on that commit (a deploy
- *    workflow, for one) show in those sessions too.
+ *    own the branch, so the runs its push starts (a deploy workflow, for
+ *    one) show in those sessions too.
  *  - `workflow_job`: job progress and the failed step of a run shown here.
  *  - `status` with a `cd/<target>/<app>` context on a remembered merge
  *    commit: a rollout as a continuous delivery tool reports it (Argo CD's
@@ -53,6 +53,9 @@ interface TrackedRun {
   attempt: number;
   jobs: Record<string, TrackedJob>;
   at: number;
+  /** The attempt reported its end. GitHub can deliver a fast run's
+   * `in_progress` after its `completed`, and that must not revive it. */
+  ended?: boolean;
 }
 
 const RETAIN_MS = 24 * 60 * 60_000;
@@ -370,7 +373,13 @@ export async function observeWorkflowRun(
   if (!sha) return;
   await ensureLoaded();
 
-  const merge = state.merges.get(mergeKey(repo.ghRepo, sha));
+  // Runs started by another event (`workflow_run`, `issue_comment`,
+  // `schedule`, ...) report the default branch's head as their commit, so
+  // on a merge commit they are other work, not this merge's deploy.
+  const merge =
+    run.event === "push"
+      ? state.merges.get(mergeKey(repo.ghRepo, sha))
+      : undefined;
   let sessionIds: string[] = [];
   if (merge) sessionIds = merge.sessionIds;
   else if (
@@ -395,6 +404,9 @@ export async function observeWorkflowRun(
   tracked.at = deps.now();
 
   const status = runState(run);
+  const ended = status !== "queued" && status !== "running";
+  if (tracked.ended && !ended) return;
+  if (ended) tracked.ended = true;
   if (status === "skipped") {
     removeRow(sessionIds, id);
     return;
@@ -414,9 +426,7 @@ export async function observeWorkflowRun(
     ...(branch ? { branch } : {}),
     ...(merge ? { prNumber: merge.prNumber } : {}),
     ...(jobs ? { jobs } : {}),
-    ...(status !== "queued" && status !== "running"
-      ? { endedAt: new Date(deps.now()).toISOString() }
-      : {}),
+    ...(ended ? { endedAt: new Date(deps.now()).toISOString() } : {}),
   });
 }
 
