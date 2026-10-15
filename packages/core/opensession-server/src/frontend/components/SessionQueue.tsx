@@ -137,10 +137,7 @@ export function SessionQueue({
   onDiscardOutbox,
 }: Props) {
   return (
-    <div
-      className={cn(composerQueue, "[&:not(:first-child)]:rounded-t-none")}
-      aria-label="Queued messages"
-    >
+    <div className={composerQueue} aria-label="Queued messages">
       <div className={composerQueueTitle}>{queueTitle}</div>
       <Reorder.Group
         as="div"

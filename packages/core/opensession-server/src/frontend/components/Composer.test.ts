@@ -36,14 +36,12 @@ test("composer groups configuration and actions behind a bounded prop API", asyn
 
 test("full-width flaps have their own stack outside the compact action", async () => {
   const component = await source("./Composer.tsx");
-  const queue = await source("./SessionQueue.tsx");
 
-  // The queue squares its top only below another full-width flap. A next-chat
-  // action must not count as that preceding sibling.
+  // Every flap below another one squares its top, so a stack reads as one
+  // panel. A next-chat action must not count as that preceding sibling.
   expect(component).toContain(
-    '{attached && <div className="flex flex-col">{attached}</div>}',
+    '<div className="flex flex-col [&>*:not(:first-child)]:rounded-t-none">\n          {attached}',
   );
-  expect(queue).toContain("[&:not(:first-child)]:rounded-t-none");
 });
 
 test("a consumed draft clears persistence before clearing React state", async () => {

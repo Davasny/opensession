@@ -1444,7 +1444,13 @@ export function Composer({
       )}
       {/* Keep the compact action outside the full-width stack so the first
           flap retains its top corners, even when the action is present. */}
-      {attached && <div className="flex flex-col">{attached}</div>}
+      {/* Stacked flaps read as one panel: only the top one keeps its rounded
+          corners, and each later one meets it with a straight seam. */}
+      {attached && (
+        <div className="flex flex-col [&>*:not(:first-child)]:rounded-t-none">
+          {attached}
+        </div>
+      )}
       <motion.div
         layout
         // `layout` here is for ONE move: the phone pill morphing to and from the
