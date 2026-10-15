@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   shouldHandleAppMention,
   shouldHandleDirectMessage,
+  isExternalSlackSender,
+  slackEventSenderTeam,
 } from "./event-routing";
 
 describe("shouldHandleAppMention", () => {
@@ -82,5 +84,64 @@ describe("shouldHandleDirectMessage", () => {
         bot_id: "B123",
       }),
     ).toBe(false);
+  });
+});
+
+describe("isExternalSlackSender", () => {
+  const roster = new Set(["UTEAM"]);
+  const isRosterMember = (id: string) => roster.has(id);
+
+  test("allows senders from our own workspace", () => {
+    expect(
+      isExternalSlackSender({
+        userId: "U1",
+        senderTeamId: "THOME",
+        homeTeamId: "THOME",
+        isRosterMember,
+      }),
+    ).toBe(false);
+  });
+
+  test("blocks senders from another workspace", () => {
+    expect(
+      isExternalSlackSender({
+        userId: "U2",
+        senderTeamId: "TOTHER",
+        homeTeamId: "THOME",
+        sharedChannel: true,
+        isRosterMember,
+      }),
+    ).toBe(true);
+  });
+
+  test("allows teammates with an account whatever workspace they are in", () => {
+    expect(
+      isExternalSlackSender({
+        userId: "UTEAM",
+        senderTeamId: "TOTHER",
+        homeTeamId: "THOME",
+        sharedChannel: true,
+        isRosterMember,
+      }),
+    ).toBe(false);
+  });
+
+  test("blocks an unknown team only in a shared channel", () => {
+    const base = { userId: "U3", homeTeamId: "THOME", isRosterMember };
+    expect(isExternalSlackSender({ ...base, sharedChannel: true })).toBe(true);
+    expect(isExternalSlackSender({ ...base, sharedChannel: false })).toBe(
+      false,
+    );
+  });
+});
+
+describe("slackEventSenderTeam", () => {
+  test("prefers user_team, then the profile team, then team", () => {
+    expect(slackEventSenderTeam({ user_team: "TA", team: "TB" })).toBe("TA");
+    expect(
+      slackEventSenderTeam({ user_profile: { team: "TC" }, team: "TB" }),
+    ).toBe("TC");
+    expect(slackEventSenderTeam({ team: "TB" })).toBe("TB");
+    expect(slackEventSenderTeam({})).toBeNull();
   });
 });

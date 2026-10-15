@@ -257,6 +257,16 @@ export function githubLoginForTrustedSlackId(
 }
 
 /**
+ * True when `slackId` belongs to a configured teammate, someone with an Open
+ * Session account, including one whose Slack account lives in another
+ * workspace. Display-only `slackNames` entries do not count.
+ */
+export function isTeamSlackId(slackId?: string | null): boolean {
+  if (!slackId) return false;
+  return identity.team.some((member) => member.slackId === slackId);
+}
+
+/**
  * Ground-truth git identities — the exact (name, email) each teammate's
  * commits already use, so GitHub attributes commits we author on their behalf
  * to the right account (`noreply` addresses where the person commits with
