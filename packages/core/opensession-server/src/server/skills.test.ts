@@ -237,6 +237,7 @@ describe("searchSkills", () => {
       "workflow-authoring",
       "poteto-mode",
       "show-me",
+      "receipts",
       "vercel-react-best-practices",
       "vercel-composition-patterns",
     ]) {
