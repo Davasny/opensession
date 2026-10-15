@@ -28,8 +28,11 @@ import { SlackSocketMode, slackSocketModeEnabled } from "./socket-mode";
 import {
   shouldHandleAppMention,
   shouldHandleDirectMessage,
+  isExternalSlackSender,
+  slackEventSenderTeam,
 } from "./event-routing";
 import { handleLinkShared } from "./unfurl";
+import { isTeamSlackId } from "../../server/shared/user-mappings";
 import { inviteRelevantUsersToChannel } from "./github-reviews";
 import {
   githubWebhookCompatibilityFallbackEnabled,
@@ -138,6 +141,11 @@ function verifyWorktreeSecret(req: Request): boolean {
   }
 }
 
+/** Our own workspace: auth.test at startup, else the app's installation. */
+function homeSlackTeamId(payload: any): string | null {
+  return slackTeamId || payload?.authorizations?.[0]?.team_id || null;
+}
+
 /**
  * Dispatch a parsed Slack Events API callback. The HTTP `/slack/events`
  * route and Socket Mode feed `event_callback` JSON here so routing lives in one place,
@@ -154,6 +162,21 @@ export async function dispatchSlackEvent(payload: any): Promise<void> {
   }
 
   if (event.bot_id || event.subtype === "bot_message") {
+    return;
+  }
+
+  if (
+    isExternalSlackSender({
+      userId: event.user,
+      senderTeamId: slackEventSenderTeam(event),
+      homeTeamId: homeSlackTeamId(payload),
+      sharedChannel: payload.is_ext_shared_channel === true,
+      isRosterMember: isTeamSlackId,
+    })
+  ) {
+    console.log(
+      `[slack] Ignoring ${event.type} from external user ${event.user || "unknown"} in ${event.channel || "unknown channel"}`,
+    );
     return;
   }
 
@@ -258,6 +281,20 @@ export async function dispatchSlackEvent(payload: any): Promise<void> {
  * submits) from the HTTP `/slack/actions` route or Socket Mode.
  */
 export async function dispatchSlackInteractive(payload: any): Promise<void> {
+  if (
+    isExternalSlackSender({
+      userId: payload.user?.id,
+      senderTeamId: payload.user?.team_id || payload.team?.id,
+      homeTeamId: homeSlackTeamId(payload),
+      isRosterMember: isTeamSlackId,
+    })
+  ) {
+    console.log(
+      `[slack] Ignoring ${payload.type} from external user ${payload.user?.id || "unknown"}`,
+    );
+    return;
+  }
+
   // Handle block_actions (button clicks)
   if (payload.type === "block_actions") {
     const action = payload.actions?.[0];
