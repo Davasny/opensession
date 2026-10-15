@@ -1,8 +1,6 @@
 import { useAgentName } from "../hooks/useAgentName";
 import { Tooltip } from "../ui/tooltip";
-import { IconHome } from "./icons";
 import { BASE_PATH } from "../lib/base";
-import { AgentAvatar } from "../ui/agent-avatar";
 import { cn } from "../ui/cn";
 
 /** Session titles identify agents without changing their ownership or link targets. */
@@ -11,13 +9,11 @@ export function AgentIdentity({
   linked = false,
   current = false,
   className,
-  variant = "full",
 }: {
   sessionId?: string;
   linked?: boolean;
   current?: boolean;
   className?: string;
-  variant?: "full" | "name" | "avatar";
 }) {
   const name = useAgentName(sessionId);
   const tooltip = (
@@ -26,25 +22,9 @@ export function AgentIdentity({
       sessionTitle={current ? "Current agent" : "Agent"}
     />
   );
-  const content = (
-    <>
-      {sessionId && variant !== "name" && (
-        <span className="relative inline-flex shrink-0">
-          <AgentAvatar sessionId={sessionId} className="size-4.5" />
-          {current && (
-            <IconHome
-              size={14}
-              className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-surface text-dim"
-            />
-          )}
-        </span>
-      )}
-      {variant !== "avatar" && <span className="truncate">{name}</span>}
-    </>
-  );
+  const content = <span className="truncate">{name}</span>;
   const classes = cn(
     "inline-flex min-w-0 max-w-[min(20rem,calc((100%-2rem)/2))] items-center gap-2 text-label font-medium text-dim",
-    variant === "avatar" && "max-w-none shrink-0 justify-center phone:min-w-11",
     className,
   );
   if (current)
@@ -89,7 +69,7 @@ export function AgentName({ sessionId }: { sessionId: string }) {
   return useAgentName(sessionId);
 }
 
-/** Shared hover hierarchy for message identities and the avatar-only top bar. */
+/** Shared hover hierarchy for message identities. */
 export function AgentTooltipLabel({
   name,
   sessionTitle,

@@ -3,6 +3,5 @@
 exports[`identities are deterministic across historical and current session IDs 1`] = `
 {
   "name": "Fensan Emberfall",
-  "seed": 4166381113,
 }
 `;

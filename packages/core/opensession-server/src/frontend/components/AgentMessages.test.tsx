@@ -177,7 +177,7 @@ test("ordinary replies stay uncluttered while system notices and humans stay sep
   expect(human).not.toContain(sessionAgentName("os-self"));
 });
 
-test("agent headers use one corner avatar and explicit direction", () => {
+test("agent headers name the other agent and show direction without avatars", () => {
   for (const entry of [incoming, outgoing]) {
     const html = renderToStaticMarkup(
       <MessageBubble entry={entry} sessionId="os-self" />,
@@ -185,25 +185,19 @@ test("agent headers use one corner avatar and explicit direction", () => {
     const header = html
       .split('data-agent-message-header=""')[1]!
       .split("</div>")[0]!;
-    expect(header.match(/viewBox="0 0 80 80"/g)).toHaveLength(1);
+    expect(header).not.toContain('viewBox="0 0 80 80"');
     expect(header).toContain(sessionAgentName("os-peer"));
     expect(header).toContain('data-session-id="os-peer"');
     expect(header).toContain(
       entry === outgoing ? "To agent</span>" : "From agent</span>",
     );
-    if (entry === outgoing) {
-      expect(header).toContain("order-last");
-      expect(header).toContain(
-        `aria-label="Current session: ${sessionAgentName("os-self")}"`,
-      );
-    } else {
-      expect(header).toContain("rotate-180");
-    }
+    expect(header).not.toContain("Current session");
+    if (entry === incoming) expect(header).toContain("rotate-180");
     expect(html).not.toContain("Delivery details");
   }
 });
 
-test("the top bar keeps only an accessible avatar, with its name in the tooltip", async () => {
+test("the top bar shows the session title without an agent avatar", async () => {
   const { SessionHeader } = await import("./session/SessionHeader");
   const html = renderToStaticMarkup(
     <SessionHeader
@@ -234,13 +228,8 @@ test("the top bar keeps only an accessible avatar, with its name in the tooltip"
       headerActionsRef={null}
     />,
   );
-  expect(html).toContain(
-    `aria-label="Current session: ${sessionAgentName("os-self")}"`,
-  );
-  expect(html).toContain('tabindex="0"');
-  expect(html).toContain("<svg");
-  expect(html).not.toContain(`>${sessionAgentName("os-self")}</span>`);
-  expect(html).not.toContain(">Current session</span>");
+  expect(html).not.toContain("Current session");
+  expect(html).not.toContain('viewBox="0 0 80 80"');
   expect(html).toContain("Check the retry loop");
 });
 
@@ -353,7 +342,6 @@ test("agent chat bubbles share user-message sizing but keep their provenance cle
   for (const html of [received, sent]) {
     expect(html).toContain("w-fit");
     expect(html).toContain("max-w-[min(600px,90%)]");
-    expect(html).toContain("size-4.5");
   }
 });
 

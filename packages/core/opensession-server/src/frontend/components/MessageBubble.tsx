@@ -909,12 +909,6 @@ export const MessageBubble = function MessageBubble({
           )}
           data-agent-message-header=""
         >
-          <AgentIdentity
-            sessionId={senderId}
-            variant="avatar"
-            current={!!senderId && senderId === sessionId}
-            className={outgoing ? "order-last justify-end" : "justify-start"}
-          />
           <span className="inline-flex shrink-0 items-center gap-0.5">
             <IconArrowUpRight
               className={cn("size-3.5", !outgoing && "rotate-180")}
@@ -923,7 +917,6 @@ export const MessageBubble = function MessageBubble({
           </span>
           <AgentIdentity
             sessionId={outgoing?.to ?? senderId}
-            variant="name"
             linked
             current={(outgoing?.to ?? senderId) === sessionId}
             className="max-w-96 flex-1"

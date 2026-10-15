@@ -18,7 +18,6 @@ import { cn } from "../../ui/cn";
 import { Menu } from "../../ui/menu";
 import { TextShimmer } from "../../ui/text-shimmer";
 import { toast } from "../../ui/toast";
-import { AgentIdentity } from "../AgentIdentity";
 import {
   IconArrowUpRight,
   IconCheck,
@@ -143,11 +142,7 @@ function CommentItem({
       data-comment-id={comment.id}
     >
       <div className="flex min-h-7 items-center gap-2">
-        {comment.agent ? (
-          <AgentIdentity sessionId={sessionId} variant="avatar" current />
-        ) : (
-          <UserAvatar name={comment.user} size={20} />
-        )}
+        {!comment.agent && <UserAvatar name={comment.user} size={20} />}
         <span className="min-w-0 truncate text-supporting font-semibold text-fg">
           {comment.user}
         </span>
@@ -491,7 +486,6 @@ export function CommentThreadView({
           className="flex items-center gap-2 text-supporting text-dim"
           role="status"
         >
-          <AgentIdentity sessionId={sessionId} variant="avatar" current />
           <TextShimmer>{`${AGENT_NAME} is reading the session`}</TextShimmer>
         </div>
       )}

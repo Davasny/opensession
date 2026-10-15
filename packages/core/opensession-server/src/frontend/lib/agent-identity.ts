@@ -19,7 +19,7 @@ const tails =
     " ",
   );
 
-/** FNV-1a with independent domains for names and artwork. */
+/** FNV-1a over a versioned name domain. */
 function hash(seed: string): number {
   let value = 2166136261;
   for (let i = 0; i < seed.length; i++) {
@@ -40,27 +40,5 @@ export function agentIdentity(sessionId: string, familyId = sessionId) {
   // change names. Only workers borrow their root agent's surname seed.
   nameBits = Math.floor(hash(`agent-name-v1:${familyId}`) / (32 * 16 * 16));
   const name = `${given} ${take(roots)}${take(tails)}`;
-  const art = hash(`agent-avatar-v1:${sessionId}`);
-  return { name, seed: art };
-}
-
-/** Boring Avatars marble transforms. Adapted from boringdesigners/boring-avatars
- * (MIT), copyright 2021 boringdesigners. License in ui/boring-avatar.LICENSE. */
-export function agentMarble(seed: number) {
-  const unit = (value: number, range: number, digit?: number) => {
-    const magnitude = value % range;
-    return digit && Math.floor(value / 10 ** digit) % 2 === 0
-      ? -magnitude
-      : magnitude;
-  };
-  return Array.from({ length: 3 }, (_, i) => {
-    const value = seed * (i + 1);
-    return {
-      color: `var(--chart-${((seed + i * 3) % 8) + 1})`,
-      x: unit(value, 8, 1),
-      y: unit(value, 8, 2),
-      scale: 1.2 + unit(value, 4) / 10,
-      rotate: unit(value, 360, 1),
-    };
-  });
+  return { name };
 }

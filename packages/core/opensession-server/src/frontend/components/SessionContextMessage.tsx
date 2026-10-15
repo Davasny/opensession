@@ -4,7 +4,6 @@ import { BASE_PATH } from "../lib/base";
 import { msgSystemInline, msgSystemRow } from "../lib/msg-classes";
 import { Button } from "../ui/button";
 import { Skeleton, SkeletonBar } from "../ui/state";
-import { AgentIdentity } from "./AgentIdentity";
 import { TranscriptLoadingStatus } from "./TranscriptLoadingStatus";
 
 const sessionContextMetadataSchema = z.object({
@@ -120,11 +119,6 @@ export function SessionContextMessage({
 
   return (
     <div ref={rowRef} className={msgSystemRow} data-session-context>
-      <AgentIdentity
-        sessionId={sessionId}
-        current
-        className="mb-2 self-start desktop:hidden"
-      />
       {historyLoading && !open ? (
         <TranscriptLoadingStatus />
       ) : metadata === null ? (
