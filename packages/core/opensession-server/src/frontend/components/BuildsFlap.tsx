@@ -139,7 +139,9 @@ function BuildsFlap({
 }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   return (
-    <div className={cn(composerQueue, "gap-2.5")}>
+    // The run status flap's metrics (ComposerAgents), so the two read as one
+    // family when they stack: same row height and bottom inset.
+    <div className={cn(composerQueue, "gap-2.5 pb-[22px]")}>
       {groups.map((group, i) => (
         <BuildGroupFlap
           key={group.key}
@@ -256,7 +258,7 @@ function BuildGroupFlap({
         </a>
         <button
           type="button"
-          className="flex min-h-6 min-w-0 flex-1 items-center justify-end gap-1.5 text-meta text-dim tabular-nums hover:text-fg disabled:cursor-default phone:min-h-11"
+          className="flex min-w-0 flex-1 items-center justify-end gap-1.5 text-meta text-dim tabular-nums hover:text-fg disabled:cursor-default phone:-my-3 phone:min-h-11"
           aria-expanded={open}
           aria-label={open ? `Hide runs of ${title}` : `Show runs of ${title}`}
           disabled={!hasDetail}
@@ -277,7 +279,8 @@ function BuildGroupFlap({
           <Button
             variant="ghost"
             size="sm"
-            className="-my-1.5 -mr-1.5 shrink-0 phone:min-h-11 phone:min-w-11"
+            // Negative margins keep the touch target from growing the row.
+            className="-my-1.5 -mr-1 shrink-0 phone:-my-3 phone:-mr-[13px] phone:min-h-11 phone:min-w-11"
             icon={<IconX size={16} />}
             aria-label="Close"
             onClick={onHide}
