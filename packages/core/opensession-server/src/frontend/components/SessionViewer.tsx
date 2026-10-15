@@ -1,5 +1,6 @@
 import { BASE_PATH } from "../lib/base";
 import { useLocalFoldersFlap } from "./LocalFoldersFlap";
+import { useBuildsFlap } from "./BuildsFlap";
 import React, {
   useCallback,
   useEffect,
@@ -1338,11 +1339,12 @@ export function SessionViewer({
   // Folders on someone's own computer (null when none, so the phone
   // composer still rests as a pill).
   const foldersFlap = useLocalFoldersFlap(session.id);
-  // The composer takes a single `attached` node; stack the folders and agents
-  // flaps above the queue flap when they are live.
+  const buildsFlap = useBuildsFlap(session.id, connected);
+  // The composer takes one `attached` node: stack the live flaps above the queue.
   const attachedComposer =
-    foldersFlap || agentBubble || attachedQueue ? (
+    buildsFlap || foldersFlap || agentBubble || attachedQueue ? (
       <>
+        {buildsFlap}
         {foldersFlap}
         {agentBubble}
         {attachedQueue}

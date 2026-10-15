@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { SessionBuildWire } from "@tellahq/opensession-protocol/session";
 import { BASE_PATH } from "../lib/base";
 import { checkToneClass } from "../lib/pr-checks";
@@ -13,34 +13,36 @@ import {
   type BuildGroup,
   type RolloutApp,
 } from "../lib/session-builds";
-import { SCRIPT_CARD_SHELL } from "../lib/script-card-classes";
+import { composerQueue } from "../lib/composer-classes";
 import { elapsedSince, formatDuration } from "../lib/time";
 import { useSessionSocket } from "../hooks/useSessionSocket";
 import { Button } from "../ui/button";
 import { cn } from "../ui/cn";
 import { Tooltip } from "../ui/tooltip";
 import { CheckStatusIcon } from "./CheckStatusIcon";
-import { IconX } from "./icons";
+import { IconChevronDown, IconX } from "./icons";
 
 const RESYNC_WHILE_LIVE_MS = 60_000;
 
 /**
  * GitHub Actions runs and rollouts the session follows (server/
  * session-builds.ts): the CI of its branch and, once its PR merged, the
- * deploy of the merge commit. Fed from webhooks by the server, so the card
+ * deploy of the merge commit. Fed from webhooks by the server, so the hook
  * loads the list on mount and follows `session_builds` frames.
  *
  * Frames are not replayed: one sent while the socket was down, or while the
- * tab slept, is gone. So the card loads the list again on every reconnect,
+ * tab slept, is gone. So the hook loads the list again on every reconnect,
  * when the tab comes back into view, and now and then while a build runs.
+ *
+ * Shown as a flap tucked behind the composer, one summary row per commit,
+ * rather than as a card in the transcript: a build is status, like the run
+ * status flap, and its runs unfold only on request. Returns null when there
+ * is nothing to show, so the phone composer can still rest as a pill.
  */
-export function BuildsCard({
-  sessionId,
-  connected,
-}: {
-  sessionId: string;
-  connected: boolean;
-}) {
+export function useBuildsFlap(
+  sessionId: string,
+  connected: boolean,
+): ReactNode {
   const { addHandler } = useSessionSocket();
   const [builds, setBuilds] = useState<SessionBuildWire[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -115,16 +117,44 @@ export function BuildsCard({
 
   if (!groups.length) return null;
   return (
-    <div className="flex flex-col">
-      {groups.map((group) => (
-        <BuildGroupCard
+    <BuildsFlap
+      groups={groups}
+      now={now}
+      onHide={(group) => {
+        hideBuildGroup(group);
+        setHidden((prev) => new Set(prev).add(hideKey(group)));
+      }}
+    />
+  );
+}
+
+function BuildsFlap({
+  groups,
+  now,
+  onHide,
+}: {
+  groups: BuildGroup[];
+  now: number;
+  onHide: (group: BuildGroup) => void;
+}) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  return (
+    <div className={cn(composerQueue, "gap-2.5")}>
+      {groups.map((group, i) => (
+        <BuildGroupFlap
           key={group.key}
           group={group}
           now={now}
-          onHide={() => {
-            hideBuildGroup(group);
-            setHidden((prev) => new Set(prev).add(hideKey(group)));
-          }}
+          separated={i > 0}
+          open={open.has(group.key)}
+          onToggle={() =>
+            setOpen((prev) => {
+              const next = new Set(prev);
+              if (!next.delete(group.key)) next.add(group.key);
+              return next;
+            })
+          }
+          onHide={() => onHide(group)}
         />
       ))}
     </div>
@@ -162,20 +192,57 @@ function groupSummary(group: BuildGroup): string {
     .join(" · ");
 }
 
-function BuildGroupCard({
+function BuildGroupFlap({
   group,
   now,
+  separated,
+  open,
+  onToggle,
   onHide,
 }: {
   group: BuildGroup;
   now: number;
+  separated: boolean;
+  open: boolean;
+  onToggle: () => void;
   onHide: () => void;
 }) {
   const title = groupTitle(group);
   const visual = group.live ? "pending" : group.failed ? "failure" : "success";
+  const hasDetail = group.workflows.length > 0 || group.rollouts.length > 0;
   return (
-    <section className={SCRIPT_CARD_SHELL} aria-label={title}>
-      <div className="flex min-w-0 items-center gap-2.5">
+    // The summary row comes last so the runs unfold above it: the flap's
+    // bottom is pinned to the composer, so the toggle stays where it was
+    // clicked (same reasoning as ComposerAgents).
+    <section
+      className={cn(
+        "flex min-w-0 flex-col gap-2.5",
+        separated && "border-t border-line pt-2.5",
+      )}
+      aria-label={title}
+    >
+      {open && hasDetail && (
+        <div className="flex max-h-[240px] flex-col gap-2.5 overflow-y-auto">
+          {group.workflows.length > 0 && (
+            <ul className="m-0 flex list-none flex-col gap-2 p-0">
+              {group.workflows.map((run) => (
+                <WorkflowRow key={run.id} run={run} now={now} />
+              ))}
+            </ul>
+          )}
+          {group.rollouts.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <span className="text-meta font-medium text-dim">Rollouts</span>
+              <ul className="m-0 flex list-none flex-col gap-2 p-0">
+                {group.rollouts.map((app) => (
+                  <RolloutRow key={app.app} app={app} now={now} />
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="flex min-w-0 items-center gap-2">
         <span className={cn("shrink-0", checkToneClass(visual))}>
           <CheckStatusIcon kind={visual} />
         </span>
@@ -183,43 +250,40 @@ function BuildGroupCard({
           href={buildGroupUrl(group)}
           target="_blank"
           rel="noreferrer"
-          className="min-w-0 flex-1 truncate text-label font-semibold text-fg no-underline hover:underline"
+          className="min-w-0 truncate text-label font-semibold text-fg no-underline hover:underline"
         >
           {title}
         </a>
-        <span className="shrink-0 text-meta text-dim tabular-nums phone:hidden">
-          {groupSummary(group)}
-        </span>
+        <button
+          type="button"
+          className="flex min-h-6 min-w-0 flex-1 items-center justify-end gap-1.5 text-meta text-dim tabular-nums hover:text-fg disabled:cursor-default phone:min-h-11"
+          aria-expanded={open}
+          aria-label={open ? `Hide runs of ${title}` : `Show runs of ${title}`}
+          disabled={!hasDetail}
+          onClick={onToggle}
+        >
+          <span className="truncate phone:hidden">{groupSummary(group)}</span>
+          {hasDetail && (
+            <IconChevronDown
+              size={16}
+              className={cn(
+                "flex-none text-faint transition-transform duration-[var(--dur)]",
+                !open && "rotate-180",
+              )}
+            />
+          )}
+        </button>
         <Tooltip label="Close" side="top">
           <Button
             variant="ghost"
             size="sm"
-            className="-my-1 -mr-1.5 shrink-0 phone:min-h-11 phone:min-w-11"
+            className="-my-1.5 -mr-1.5 shrink-0 phone:min-h-11 phone:min-w-11"
             icon={<IconX size={16} />}
             aria-label="Close"
             onClick={onHide}
           />
         </Tooltip>
       </div>
-
-      {group.workflows.length > 0 && (
-        <ul className="m-0 flex list-none flex-col gap-2 p-0">
-          {group.workflows.map((run) => (
-            <WorkflowRow key={run.id} run={run} now={now} />
-          ))}
-        </ul>
-      )}
-
-      {group.rollouts.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <span className="text-meta font-medium text-dim">Rollouts</span>
-          <ul className="m-0 flex list-none flex-col gap-2 p-0">
-            {group.rollouts.map((app) => (
-              <RolloutRow key={app.app} app={app} now={now} />
-            ))}
-          </ul>
-        </div>
-      )}
     </section>
   );
 }
