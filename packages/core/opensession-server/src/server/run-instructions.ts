@@ -106,12 +106,14 @@ export function buildRunInstructions(input: {
       "organization-controlled channels only.",
   );
   // The session context names the prompter (memory labels, attribution), and
-  // models opened replies with "<Name>, ...", which reads as curt.
+  // models opened replies with "<Name>, ...", which reads as curt. In a
+  // collaborative session a name still helps say who a reply is for.
   parts.push(
     "## Finish your turns\nComplete promised actions, then briefly report the outcome and " +
       "relevant links. Make every question self-contained, even a repeated one: say " +
       "what it is about and what each option means. Never point back to an earlier turn. " +
-      "Do not address the person by name in replies.",
+      "Do not address the person by name, unless several people take part and " +
+      "a name makes clear whom you answer.",
   );
   // A message sent mid-turn reaches the model between tool calls. Models
   // tended to fold it into terse progress narration, or skip it and call the

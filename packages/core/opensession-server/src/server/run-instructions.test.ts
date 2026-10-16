@@ -198,8 +198,10 @@ describe("buildRunInstructions", () => {
     // The workflow_run clause in Waiting adds ~70: a release run started by a
     // tag has no PR, and without it agents polled `gh run view` or guessed a
     // timer. "Messages during a turn" adds ~170: without it, a reply to a
-    // mid-turn message read as progress narration, or never came.
-    expect(prompt.length).toBeLessThan(4_150);
+    // mid-turn message read as progress narration, or never came. The
+    // name rule in "Finish your turns" adds ~110: models opened replies
+    // with the prompter's name, which reads as curt.
+    expect(prompt.length).toBeLessThan(4_250);
   });
 
   test("asks for visual proof by default only where walkthroughs are mounted", () => {
