@@ -13,7 +13,7 @@ describe("buildRunInstructions", () => {
       "End each PR body with the attribution footer from the session context and follow its assignee rule.",
     );
     expect(prompt).toContain(
-      "Add the `Co-authored-by` trailer from the session context to every commit.",
+      "Add the commit trailers from the session context to every commit, each on its own line at the end of the message.",
     );
     expect(prompt).not.toContain(
       "Never merge, approve, or push the default branch.",
@@ -317,7 +317,7 @@ describe("buildRunInstructions", () => {
       "anything from memory, Slack, Linear, local instructions, or the session context",
     );
     expect(prompt).toContain(
-      "The attribution footer and commit trailer from the session context are the only exception.",
+      "The attribution footer and commit trailers from the session context are the only exception.",
     );
     expect(prompt.indexOf("## Public repository")).toBeGreaterThan(
       prompt.indexOf("## Pull requests"),
@@ -364,9 +364,19 @@ describe("buildSessionContext", () => {
     expect(ctx).toContain(
       "PRs use @jfrolich's account through gh; do not add an assignee.",
     );
-    expect(ctx).toContain(
-      "Commit trailer: Co-authored-by: Jaap Frolich <jaap@example.com>",
+    expect(ctx).toMatch(
+      /Commit trailers: Co-authored-by: Jaap Frolich <jaap@example\.com> \| Session: .*\/session\/os-test$/m,
     );
+  });
+
+  test("links commits to the session even without a co-author", () => {
+    const ctx = buildSessionContext({
+      osSessionId: "os-test",
+      cwd: "/w",
+      isAsk: false,
+    });
+    expect(ctx).toMatch(/^Commit trailers: Session: .*\/session\/os-test$/m);
+    expect(ctx).not.toContain("Co-authored-by");
   });
 
   test("skips PR attribution for ask, scratch and code storage runs", () => {

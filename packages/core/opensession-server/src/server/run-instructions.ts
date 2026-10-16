@@ -188,8 +188,8 @@ export function buildRunInstructions(input: {
   } else if (!input.isAsk && !input.isScratch && input.hasSession) {
     parts.push(
       "## Pull requests\nEnd each PR body with the attribution footer from the session " +
-        "context and follow its assignee rule. Add the `Co-authored-by` trailer from the " +
-        "session context to every commit. Follow repository branching and publication rules.",
+        "context and follow its assignee rule. Add the commit trailers from the session " +
+        "context to every commit, each on its own line at the end of the message. Follow repository branching and publication rules.",
     );
     if (input.prReviewer) {
       parts.push(
@@ -208,7 +208,7 @@ export function buildRunInstructions(input: {
         "information there: internal hostnames, URLs, or paths, private repositories' names or " +
         "code, teammate or customer details, secrets, internal plans, or anything from memory, " +
         "Slack, Linear, local instructions, or the session context. Describe what the change " +
-        "does in terms of this repository alone. The attribution footer and commit trailer from " +
+        "does in terms of this repository alone. The attribution footer and commit trailers from " +
         "the session context are the only exception. Apply the same rule before writing to any " +
         "other public repository.",
     );
@@ -374,7 +374,7 @@ export function buildSessionContext(input: {
   /** A connected person's code turn holds their token in the shell
    * (pi-runner runGithubEnv), so PRs need no bot-attribution assignee. */
   githubUserLogin?: string | null;
-  /** `Name <email>` for the commit trailer (pi-runner GIT_COAUTHOR_ENV). */
+  /** `Name <email>` for the Co-authored-by trailer (pi-runner GIT_COAUTHOR_ENV). */
   coAuthor?: string;
 }): string {
   const lines: string[] = [];
@@ -401,8 +401,13 @@ export function buildSessionContext(input: {
         ? `When possible, assign @${login}.`
         : "";
     if (rule) lines.push(rule);
-    if (input.coAuthor)
-      lines.push(`Commit trailer: Co-authored-by: ${input.coAuthor}`);
+    // The Session trailer links each commit to the session that wrote it, so
+    // a direct push to main keeps the same record a PR footer gives.
+    const trailers = [
+      ...(input.coAuthor ? [`Co-authored-by: ${input.coAuthor}`] : []),
+      `Session: ${link}`,
+    ];
+    lines.push(`Commit trailers: ${trailers.join(" | ")}`);
   }
   return lines.join("\n");
 }

@@ -330,8 +330,10 @@ Adding one is a security review, not a convenience.
   names. `gitIdentityEnv` sets the bot identity and the
   trailer; no run carries a human `GIT_AUTHOR_*` or `GIT_COMMITTER_*`
   identity, so nothing an agent commits can be mistaken for something the
-  human typed. Where a repository requires signed commits, the bot's signing
-  key is the only key on the host.
+  human typed. Every commit also carries a `Session:` trailer with the link
+  to the session that wrote it, so a commit pushed straight to the default
+  branch keeps the same record a PR's attribution footer gives, and squash
+  merges keep it in the squashed message.
 - Delegate PRs are authored by the owner through the gateway tool and carry
   the attribution footer from the session context, no assignee. Automation
   PRs are authored by the bot, carry the footer, and assign the human the
