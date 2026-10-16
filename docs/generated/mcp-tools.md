@@ -1242,9 +1242,9 @@ Schedule a prompt for this session at a future time.
 
 ### `schedule_prompt`
 
-`mcp__opensession-schedule__schedule_prompt` · input: `in_minutes` (number), `at` (string), `prompt` (string, required)
+`mcp__opensession-schedule__schedule_prompt` · input: `in_minutes` (number), `at` (string), `every_minutes` (integer), `for_minutes` (integer), `prompt` (string, required)
 
-Schedule a prompt to be sent to THIS session later, then end your turn. Use it instead of `sleep` for any wait longer than a few minutes: a benchmark or job you started, a release workflow, a deploy. Also use it when asked to keep monitoring something with regular updates: give the update as your final answer, schedule the next check, and end the turn, because text written mid-turn is hidden and notifies no one. For PR checks, use `wait_for` kind `pr_checks` where it is available: it wakes on the first failure. For a GitHub Actions run with no PR (a release workflow after a tag push), use `wait_for` kind `workflow_run`. Give `in_minutes` (simplest) or an absolute `at`. The prompt arrives in this conversation marked as a scheduled check-back, so write it to your future self with everything needed to pick the work up: what to run, what "done" looks like, what to do on failure. Fires once; survives restarts. Do not use harness built-ins like CronCreate or ScheduleWakeup here; they do not exist in this session.
+Schedule a prompt to be sent to THIS session later, then end your turn. Use it instead of `sleep` for any wait longer than a few minutes: a benchmark or job you started, a release workflow, a deploy. To keep monitoring something with regular updates, pass `every_minutes` and `for_minutes` instead of `in_minutes`/`at`: the prompt then comes back on that interval until the time runs out or you cancel id `loop`, and the final answer of each check is the update (text written mid-turn is hidden and notifies no one, so never poll inside one turn). For PR checks, use `wait_for` kind `pr_checks` where it is available: it wakes on the first failure. For a GitHub Actions run with no PR (a release workflow after a tag push), use `wait_for` kind `workflow_run`. Give `in_minutes` (simplest) or an absolute `at`. The prompt arrives in this conversation marked as a scheduled check-back, so write it to your future self with everything needed to pick the work up: what to run, what "done" looks like, what to do on failure. Without `every_minutes` it fires once. Survives restarts. Do not use harness built-ins like CronCreate or ScheduleWakeup here; they do not exist in this session.
 
 ### `list_scheduled_prompts`
 
@@ -1256,7 +1256,7 @@ List prompts scheduled for this session, soonest first.
 
 `mcp__opensession-schedule__cancel_scheduled_prompt` · input: `id` (string, required)
 
-Cancel a prompt scheduled for this session by id.
+Cancel a prompt scheduled for this session by id. Id `loop` stops this session's repeating loop.
 
 ## opensession-papercuts
 

@@ -25,6 +25,7 @@ import { touchNativeSession } from "./session-cache";
 import { broadcastToSession } from "./ws-hub";
 import { resolveWorkspaceModelPreset } from "./workspace-model-presets";
 import type { UnifiedSession } from "./types";
+import { describeLoop, parseLoopCommand } from "./session-loop";
 
 /**
  * Open Session-native slash commands. Returns a notice string when the message
@@ -73,7 +74,7 @@ export async function handleSlashCommand(
       "/pstack off or /poteto-mode off — disable the mode",
       "/goal <text> — pin a goal, appended to every prompt until cleared",
       "/goal clear — remove the goal",
-      "/loop <interval> <prompt> — re-run a prompt on an interval (e.g. /loop 30m check CI and fix failures)",
+      "/loop <interval> [for <duration>] <prompt> — re-run a prompt on an interval, optionally for a limited time (e.g. /loop 15m for 2h check CI and fix failures)",
       "/loop stop — stop the loop",
       "/model — show the session's model and what's available",
       "/model <name> — switch model (e.g. /model opus, /model sol)",
@@ -355,31 +356,32 @@ export async function handleSlashCommand(
 
   if (text === "/loop" || text === "/loop status") {
     return session.loop
-      ? `Loop active: every ${session.loop.intervalMinutes}m — "${session.loop.prompt}"`
-      : "No loop set. Use /loop <interval> <prompt> (e.g. /loop 30m check CI).";
+      ? `Loop active: ${describeLoop(session.loop)} — "${session.loop.prompt}"`
+      : "No loop set. Use /loop <interval> [for <duration>] <prompt> (e.g. /loop 15m for 2h check CI).";
   }
   if (text === "/loop stop" || text === "/loop off" || text === "/loop clear") {
     touchNativeSession(session.id, { loop: undefined });
     return "Loop stopped.";
   }
   if (text.startsWith("/loop ")) {
-    const rest = text.slice("/loop ".length).trim();
-    const match = rest.match(/^(\d+)\s*(m|min|h|hr)?\s+([\s\S]+)$/);
-    if (!match)
-      return "Usage: /loop <interval> <prompt> — e.g. /loop 30m check CI and fix failures";
-    let minutes = parseInt(match[1]);
-    if (match[2] === "h" || match[2] === "hr") minutes *= 60;
-    minutes = Math.max(5, minutes);
-    const prompt = match[3].trim();
-    touchNativeSession(session.id, {
-      loop: {
-        prompt,
-        intervalMinutes: minutes,
-        lastRunAt: new Date().toISOString(),
-        setBy: user,
-      },
-    });
-    return `Loop set: every ${minutes}m — "${prompt}". First run in ${minutes}m; /loop stop to end it.`;
+    const parsed = parseLoopCommand(text.slice("/loop ".length));
+    if (!parsed)
+      return "Usage: /loop <interval> [for <duration>] <prompt> — e.g. /loop 15m for 2h check CI and fix failures";
+    const loop = {
+      prompt: parsed.prompt,
+      intervalMinutes: parsed.intervalMinutes,
+      ...(parsed.forMinutes
+        ? {
+            until: new Date(
+              Date.now() + parsed.forMinutes * 60_000,
+            ).toISOString(),
+          }
+        : {}),
+      lastRunAt: new Date().toISOString(),
+      setBy: user,
+    };
+    touchNativeSession(session.id, { loop });
+    return `Loop set: ${describeLoop(loop)} — "${parsed.prompt}". First run in ${parsed.intervalMinutes}m; /loop stop to end it.`;
   }
 
   return null;

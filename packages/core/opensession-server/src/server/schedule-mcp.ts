@@ -22,6 +22,8 @@ import {
   listScheduledPrompts,
   type ScheduledPrompt,
 } from "./scheduled-prompts";
+import { getSessionControl } from "./session-control";
+import { MAX_LOOP_FOR_MINUTES, MIN_LOOP_MINUTES } from "./session-loop";
 
 export interface ScheduleToolContext {
   sessionId: string;
@@ -63,12 +65,74 @@ export function resolveDeliveryTime(
   return { at: new Date(now + minutes * 60_000).toISOString() };
 }
 
+/** Loops live on the session record and already have one front door, the
+ *  `/loop` slash command; going through session control keeps a single
+ *  writer and publishes the change to every client. */
+async function loopCommand(
+  ctx: ScheduleToolContext,
+  command: string,
+): Promise<string> {
+  try {
+    const result = await getSessionControl().deliverToSession(
+      ctx.sessionId,
+      command,
+      ctx.user,
+    );
+    return result.message;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+export function loopCommandFor(args: {
+  in_minutes?: number;
+  at?: string;
+  every_minutes?: number;
+  for_minutes?: number;
+  prompt: string;
+}): { command: string } | { error: string } {
+  if (args.in_minutes !== undefined || args.at?.trim())
+    return {
+      error:
+        "Give `every_minutes` and `for_minutes` for a loop, or `in_minutes`/`at` for one check-back, not both.",
+    };
+  if (args.every_minutes === undefined || args.for_minutes === undefined)
+    return { error: "A loop needs both `every_minutes` and `for_minutes`." };
+  const every = Math.round(args.every_minutes);
+  const duration = Math.round(args.for_minutes);
+  if (!Number.isFinite(every) || every < MIN_LOOP_MINUTES)
+    return { error: `\`every_minutes\` must be at least ${MIN_LOOP_MINUTES}.` };
+  if (
+    !Number.isFinite(duration) ||
+    duration <= 0 ||
+    duration > MAX_LOOP_FOR_MINUTES
+  )
+    return {
+      error: `\`for_minutes\` must be between 1 and ${MAX_LOOP_FOR_MINUTES}.`,
+    };
+  const prompt = args.prompt.trim();
+  if (!prompt) return { error: "Prompt is required." };
+  return { command: `/loop ${every}m for ${duration}m ${prompt}` };
+}
+
+async function startLoop(
+  ctx: ScheduleToolContext,
+  args: Parameters<typeof loopCommandFor>[0],
+): Promise<string> {
+  const loop = loopCommandFor(args);
+  if ("error" in loop) return `Couldn't start the loop: ${loop.error}`;
+  const notice = await loopCommand(ctx, loop.command);
+  if (!notice.startsWith("Loop set"))
+    return `Couldn't start the loop: ${notice}`;
+  return `${notice} Give your update as this turn's final answer and end your turn now. Stop early with cancel_scheduled_prompt id \`loop\`.`;
+}
+
 export function createScheduleMcpServer(ctx: ScheduleToolContext) {
   const tz = timezoneForUser(ctx.user);
   const tools = [
     tool(
       "schedule_prompt",
-      'Schedule a prompt to be sent to THIS session later, then end your turn. Use it instead of `sleep` for any wait longer than a few minutes: a benchmark or job you started, a release workflow, a deploy. Also use it when asked to keep monitoring something with regular updates: give the update as your final answer, schedule the next check, and end the turn, because text written mid-turn is hidden and notifies no one. For PR checks, use `wait_for` kind `pr_checks` where it is available: it wakes on the first failure. For a GitHub Actions run with no PR (a release workflow after a tag push), use `wait_for` kind `workflow_run`. Give `in_minutes` (simplest) or an absolute `at`. The prompt arrives in this conversation marked as a scheduled check-back, so write it to your future self with everything needed to pick the work up: what to run, what "done" looks like, what to do on failure. Fires once; survives restarts. Do not use harness built-ins like CronCreate or ScheduleWakeup here; they do not exist in this session.',
+      'Schedule a prompt to be sent to THIS session later, then end your turn. Use it instead of `sleep` for any wait longer than a few minutes: a benchmark or job you started, a release workflow, a deploy. To keep monitoring something with regular updates, pass `every_minutes` and `for_minutes` instead of `in_minutes`/`at`: the prompt then comes back on that interval until the time runs out or you cancel id `loop`, and the final answer of each check is the update (text written mid-turn is hidden and notifies no one, so never poll inside one turn). For PR checks, use `wait_for` kind `pr_checks` where it is available: it wakes on the first failure. For a GitHub Actions run with no PR (a release workflow after a tag push), use `wait_for` kind `workflow_run`. Give `in_minutes` (simplest) or an absolute `at`. The prompt arrives in this conversation marked as a scheduled check-back, so write it to your future self with everything needed to pick the work up: what to run, what "done" looks like, what to do on failure. Without `every_minutes` it fires once. Survives restarts. Do not use harness built-ins like CronCreate or ScheduleWakeup here; they do not exist in this session.',
       {
         in_minutes: z
           .number()
@@ -84,13 +148,38 @@ export function createScheduleMcpServer(ctx: ScheduleToolContext) {
           .describe(
             `Deliver at this ISO 8601 UTC datetime (e.g. 2026-09-01T19:49:00Z), for a wall-clock time. The user's timezone is ${tz}. Use this or \`in_minutes\`.`,
           ),
+        every_minutes: z
+          .number()
+          .int()
+          .min(MIN_LOOP_MINUTES)
+          .optional()
+          .describe(
+            `Repeat the prompt every this many minutes (at least ${MIN_LOOP_MINUTES}), for monitoring with regular updates. Replaces any loop already set on this session. Needs \`for_minutes\`.`,
+          ),
+        for_minutes: z
+          .number()
+          .int()
+          .positive()
+          .max(MAX_LOOP_FOR_MINUTES)
+          .optional()
+          .describe(
+            "With `every_minutes`: stop repeating after this many minutes (e.g. 120). Pick what the person asked for, or a sensible bound.",
+          ),
         prompt: z
           .string()
           .describe(
             "The message to deliver to this session, addressed to yourself.",
           ),
       },
-      async (args: { in_minutes?: number; at?: string; prompt: string }) => {
+      async (args: {
+        in_minutes?: number;
+        at?: string;
+        every_minutes?: number;
+        for_minutes?: number;
+        prompt: string;
+      }) => {
+        if (args.every_minutes !== undefined || args.for_minutes !== undefined)
+          return text(await startLoop(ctx, args));
         const at = resolveDeliveryTime(args);
         if ("error" in at) return text(`Couldn't schedule it: ${at.error}`);
         const result = createScheduledPrompt({
@@ -111,21 +200,27 @@ export function createScheduleMcpServer(ctx: ScheduleToolContext) {
       "List prompts scheduled for this session, soonest first.",
       {},
       async () => {
-        const prompts = listScheduledPrompts(ctx.sessionId);
-        if (!prompts.length)
+        const lines = listScheduledPrompts(ctx.sessionId).map(fmt);
+        const loop = await loopCommand(ctx, "/loop status");
+        if (loop.startsWith("Loop active")) lines.push(`- [loop] ${loop}`);
+        if (!lines.length)
           return text("Nothing is scheduled for this session.");
-        return text(prompts.map(fmt).join("\n"));
+        return text(lines.join("\n"));
       },
     ),
     tool(
       "cancel_scheduled_prompt",
-      "Cancel a prompt scheduled for this session by id.",
+      "Cancel a prompt scheduled for this session by id. Id `loop` stops this session's repeating loop.",
       {
         id: z
           .string()
-          .describe("The id from schedule_prompt or list_scheduled_prompts."),
+          .describe(
+            "The id from schedule_prompt or list_scheduled_prompts, or `loop`.",
+          ),
       },
       async (args: { id: string }) => {
+        if (args.id.trim() === "loop")
+          return text(await loopCommand(ctx, "/loop stop"));
         const own = listScheduledPrompts(ctx.sessionId).some(
           (p) => p.id === args.id,
         );

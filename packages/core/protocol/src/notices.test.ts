@@ -7,6 +7,8 @@ import {
   parseReviewHandoff,
   parseScheduledPrompt,
   scheduledPromptMessage,
+  loopTickMessage,
+  parseLoopTick,
   parseReviewSettled,
   parseSessionNotice,
   parseWorkerReport,
@@ -717,5 +719,32 @@ describe("classifyEntry", () => {
       entry({ id: "e2", type: "assistant", content: "hello" }),
     ];
     expect(classifyEntries(batch)).toBe(batch);
+  });
+});
+
+describe("loop tick detection", () => {
+  const prompt = "Check the upload queue depth and report it.";
+  const note =
+    "This is a loop check (every 5m). Give the update as your final answer.";
+
+  it("shows the prompt and hides the model-only note", () => {
+    expect(
+      parseLoopTick(`[Michiel (loop)] ${loopTickMessage(prompt, note)}`),
+    ).toEqual({ body: prompt });
+  });
+
+  it("classifies the turn as a loop tick, not a folding check-back", () => {
+    const classified = classifyEntry({
+      id: "e1",
+      type: "user",
+      content: `[Michiel (loop)] ${loopTickMessage(prompt, note)}`,
+      timestamp: "2026-10-16T06:00:00.000Z",
+    });
+    expect(classified.content).toBe(prompt);
+    expect(classified.notice?.kind).toBe("loop-tick");
+  });
+
+  it("leaves ticks from before the sentinel as the person's turn", () => {
+    expect(parseLoopTick(`[Michiel (loop)] ${prompt}`)).toBeNull();
   });
 });

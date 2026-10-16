@@ -317,6 +317,8 @@ export interface UnifiedSession {
   loop?: {
     prompt: string;
     intervalMinutes: number;
+    /** ISO time the loop stops by itself. Unset: runs until /loop stop. */
+    until?: string;
     lastRunAt?: string;
     setBy?: string;
   };
@@ -702,6 +704,8 @@ export interface NativeSessionFile {
   loop?: {
     prompt: string;
     intervalMinutes: number;
+    /** ISO time the loop stops by itself. Unset: runs until /loop stop. */
+    until?: string;
     lastRunAt?: string;
     setBy?: string;
   };

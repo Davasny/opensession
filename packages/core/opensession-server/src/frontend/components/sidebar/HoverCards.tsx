@@ -1,3 +1,4 @@
+import { loopScheduleLabel } from "../SessionBanners";
 import type { WorkspaceOverview } from "../../lib/api";
 import { providerFromUrl } from "../../lib/provider";
 import { sessionPrMerged, sessionPrRefs } from "../../lib/session-prs";
@@ -108,7 +109,7 @@ export function SessionCardBody({ session: s }: { session: UnifiedSession }) {
       </span>,
     ]);
   if (s.goal) rows.push(["Goal", "Autonomous goal session"]);
-  if (s.loop) rows.push(["Loop", `Every ${s.loop.intervalMinutes} min`]);
+  if (s.loop) rows.push(["Loop", loopScheduleLabel(s.loop)]);
 
   // The PR facts are worded exactly as the PR row's card words them. The
   // state itself is already the card's status line, so it isn't repeated.

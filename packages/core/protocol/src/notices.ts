@@ -138,6 +138,10 @@ export type NoticeKind =
    *  delivered. Sent in the name of the person whose session it is, so
    *  without this it reads as words they typed. */
   | "scheduled-prompt"
+  /** One tick of a recurring loop (/loop, or schedule_prompt with
+   *  every_minutes). Unlike a check-back it does not fold earlier answers
+   *  away: each tick's answer is an update the person wants to keep. */
+  | "loop-tick"
   /** A model-visible payload the harness injected into a prompt (a handoff,
    *  the repos note, an attached session's excerpt). Recorded so the model's
    *  input is reconstructable from the log; NOT conversation, so servers drop
@@ -498,6 +502,34 @@ export function parseScheduledPrompt(
   return {
     id: sentinel[1] || null,
     body: stripLeadingSentinels(text.slice(sentinel[0].length)).trim(),
+  };
+}
+
+/**
+ * One tick of a session loop (run-session's loop ticker). The person who set
+ * the loop is credited as sender, so without the sentinel every tick reads as
+ * words they typed. The note after the prompt is for the model only: it says
+ * how often the loop runs, when it ends and how to stop it.
+ */
+const LOOP_TICK_SENTINEL_RE = /^<!--os:loop-tick-->\s*/;
+const LOOP_TICK_NOTE = "<!--os:loop-tick-note-->";
+
+/** The wire form the loop ticker delivers: sentinel, prompt, model note. */
+export function loopTickMessage(prompt: string, note?: string): string {
+  return `<!--os:loop-tick-->\n${prompt}${note ? `\n\n${LOOP_TICK_NOTE}\n${note}` : ""}`;
+}
+
+export function parseLoopTick(content?: string): { body: string } | null {
+  if (!content) return null;
+  const text = content.replace(/^\[[^\]\n]+\]\s*/, "");
+  const sentinel = text.match(LOOP_TICK_SENTINEL_RE);
+  if (!sentinel) return null;
+  const rest = text.slice(sentinel[0].length);
+  const noteAt = rest.indexOf(LOOP_TICK_NOTE);
+  return {
+    body: stripLeadingSentinels(
+      noteAt === -1 ? rest : rest.slice(0, noteAt),
+    ).trim(),
   };
 }
 
@@ -914,6 +946,20 @@ function classifyDelivery(entry: TranscriptEntry): TranscriptEntry {
       notice: {
         kind: "scheduled-prompt",
         title: "Scheduled check-back",
+        tone: "info",
+        icon: "clock",
+        body: "collapsed",
+      },
+    };
+
+  const loopTick = parseLoopTick(entry.content);
+  if (loopTick)
+    return {
+      ...entry,
+      content: loopTick.body,
+      notice: {
+        kind: "loop-tick",
+        title: "Loop check",
         tone: "info",
         icon: "clock",
         body: "collapsed",

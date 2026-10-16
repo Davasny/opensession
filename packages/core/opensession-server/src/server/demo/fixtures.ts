@@ -27,7 +27,11 @@ import {
 } from "../transcript-persistence";
 import type { NativeSessionFile } from "../types";
 import { MONITOR_FIT_PAGE } from "./monitor-fit-page";
-import { youShouldKnowRecordContent } from "@tellahq/opensession-protocol/notices";
+import {
+  loopTickMessage,
+  youShouldKnowRecordContent,
+} from "@tellahq/opensession-protocol/notices";
+import { describeLoop, loopTickNote } from "../session-loop";
 
 type JsonlLine = Record<string, unknown>;
 
@@ -639,6 +643,93 @@ export function demoSessions(opts: {
           "demo-steered-a2",
           iso(t0 + 10 * min + 40_000),
           MODEL_SONNET,
+        ),
+      ],
+    });
+  }
+
+  // 5b. A monitoring loop: the agent set a bounded loop with schedule_prompt's
+  //     every_minutes, so each check is its own short turn whose answer is the
+  //     update, and the banner shows the loop with a Stop button.
+  {
+    const t0 = now - 16 * min;
+    const loop = {
+      prompt:
+        "Check the import queue depth with `bun scripts/queue-depth.ts`. Report the count and the trend since the last check. Once it is under 1,000, say so and stop the loop.",
+      intervalMinutes: 5,
+      until: iso(now + 104 * min),
+      lastRunAt: iso(now - min),
+      setBy: "Sam",
+    };
+    const tick = (n: number, at: number, depth: string, update: string) => [
+      transcriptLineUser(
+        `[Sam (loop)] ${loopTickMessage(loop.prompt, loopTickNote(loop))}`,
+        `demo-monitor-u${n + 1}`,
+        iso(at),
+      ),
+      ...tool(
+        "monitor",
+        n + 1,
+        "Bash",
+        { command: "bun scripts/queue-depth.ts" },
+        depth,
+        at + 10_000,
+      ),
+      transcriptLineAssistantText(
+        update,
+        `demo-monitor-a${n + 1}`,
+        iso(at + 30_000),
+        MODEL_SONNET,
+      ),
+    ];
+    sessions.push({
+      id: "bks-demo-monitor",
+      engineSessionId: "ses_demo05b",
+      file: base("bks-demo-monitor", "ses_demo05b", 16, 1, {
+        title: "Watch the import queue drain",
+        createdBy: "Sam",
+        worktreeDir: repoDir,
+        model: MODEL_SONNET,
+        loop,
+        usage: usage(0.21, 6_400, 1_100, 3, iso(now - min)),
+      }),
+      lines: [
+        transcriptLineUser(
+          "The import fix is deployed. Keep watching the queue and update me every 5 minutes until it is under 1,000.",
+          "demo-monitor-u1",
+          iso(t0),
+        ),
+        ...tool(
+          "monitor",
+          1,
+          "schedule_prompt",
+          { every_minutes: 5, for_minutes: 120, prompt: loop.prompt },
+          `Loop set: ${describeLoop(loop)}. First run in 5m; /loop stop to end it.`,
+          t0 + 20_000,
+        ),
+        transcriptLineAssistantText(
+          "Watching it. The queue is at **48,210** now. I will check every 5 minutes for up to 2 hours and post each count here.",
+          "demo-monitor-a1",
+          iso(t0 + 40_000),
+          MODEL_SONNET,
+        ),
+        ...tick(
+          1,
+          t0 + 5 * min,
+          "import-queue 31,904",
+          "**31,904**, down 16,306 in 5 minutes. At this rate it clears in about 10 minutes.",
+        ),
+        ...tick(
+          2,
+          t0 + 10 * min,
+          "import-queue 14,377",
+          "**14,377**, down 17,527. Still speeding up, no errors in the worker log.",
+        ),
+        ...tick(
+          3,
+          t0 + 15 * min,
+          "import-queue 2,960",
+          "**2,960**, down 11,417. One more check should put it under 1,000.",
         ),
       ],
     });

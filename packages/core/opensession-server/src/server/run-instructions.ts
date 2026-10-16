@@ -33,9 +33,9 @@ export const GH_CHECKS_CLI_PATH = join(
  * posting its updates to Slack). Each update has to be a turn's answer. */
 export const MONITORING_GUIDANCE =
   "When asked to keep monitoring something and give regular updates, never poll inside one turn: " +
-  "text written mid-turn is folded away and notifies no one. Give each update as your final answer, " +
-  "schedule the next check with `schedule_prompt`, and end your turn. Stop scheduling once the goal " +
-  "is met, something needs the person, or they say stop.";
+  "text written mid-turn is folded away and notifies no one. Call `schedule_prompt` with `every_minutes` " +
+  "and `for_minutes`, give the first update as your final answer, and end your turn; each check after that " +
+  "ends with its update. Cancel id `loop` once the goal is met, something needs the person, or they say stop.";
 
 /**
  * Minimal per-run context appended to the engine system prompt.

@@ -70,7 +70,11 @@ import {
   transcriptLineRunnerNotice,
   transcriptLineUser,
 } from "./transcript-persistence";
-import { cacheMissNotice } from "@tellahq/opensession-protocol/notices";
+import {
+  cacheMissNotice,
+  loopTickMessage,
+} from "@tellahq/opensession-protocol/notices";
+import { loopExpired, loopTickNote } from "./session-loop";
 import { RESTART_QUEUE_NOTICE_MESSAGE } from "@tellahq/opensession-protocol/session";
 import { dropSandboxPreviewRoutes } from "./preview";
 import { activeSandboxFor, restoreSandboxPortals } from "./session-sandbox";
@@ -4124,6 +4128,14 @@ export function startLoopTicker(): void {
       if (!loop || session.archived || session.source !== "opensession")
         continue;
       if (!session.claudeSessionId && !session.codexThreadId) continue;
+      // A loop told to run for a while ends by itself, busy or not.
+      if (loopExpired(loop)) {
+        console.log(`[loop] Loop for ${session.id} reached its end time`);
+        void touchNativeSession(session.id, { loop: undefined }).then(() =>
+          publishSessionChange(session.id),
+        );
+        continue;
+      }
       if (
         isAgentSessionBusy(
           session.claudeSessionId,
@@ -4142,7 +4154,7 @@ export function startLoopTicker(): void {
       );
       void runSessionPromptAndDrain(
         session.id,
-        loop.prompt,
+        loopTickMessage(loop.prompt, loopTickNote(loop)),
         loopActor(loop.setBy),
       ).catch((e) =>
         console.error(`[loop] Loop prompt failed for ${session.id}:`, e),
