@@ -14,16 +14,8 @@ export interface ModelOption {
   label: string;
   aliases: string[];
   efforts: string[];
-  /** Presets fix the lead model's effort instead of offering a ladder. */
-  fixedEffort?: string;
   /** Provider account pool available to this model, if any. */
   accountProvider?: "claude" | "codex" | "xai";
-  /** Picker section override ("dial" = The Dial presets). */
-  group?: string;
-  /** One-line subtitle shown under the label (dial presets). */
-  description?: string;
-  /** Concrete lead and supporting models participating in a preset. */
-  composition?: string[];
   /** This model has subscription-backend priority-tier variants configured. */
   fastModeSupported?: boolean;
   /** GPT-6 Astra: the ChatGPT backend also serves the ultrafast tier. */
@@ -77,10 +69,8 @@ export async function transcribeClip(audio: Blob): Promise<string> {
   return data?.text ?? "";
 }
 
-export async function fetchModels(workspaceId?: string): Promise<ModelCatalog> {
-  const params = new URLSearchParams();
-  if (workspaceId) params.set("workspace", workspaceId);
-  return request<ModelCatalog>(`/models${params.size ? `?${params}` : ""}`, {
+export async function fetchModels(): Promise<ModelCatalog> {
+  return request<ModelCatalog>("/models", {
     label: "Failed to fetch models",
   });
 }

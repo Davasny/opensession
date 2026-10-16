@@ -53,7 +53,10 @@ import {
 } from "../lib/attachments";
 import { useAttachmentUploads } from "../hooks/useAttachmentUploads";
 import { useDefaultModelPreference } from "../hooks/useDefaultModelPreference";
-import { resolveNewSessionModel } from "../lib/default-model-pref";
+import {
+  resolveNewSessionEffort,
+  resolveNewSessionModel,
+} from "../lib/default-model-pref";
 import { projectComposerSessions } from "../lib/composer-session-projection";
 import { baseModelId, modelEngine } from "./ModelEffortSelect";
 import { getSendKeyPref, onSendKeyChanged } from "../lib/send-key-pref";
@@ -188,7 +191,6 @@ type NewSessionCreateMessage = Extract<
   { type: "create_session" }
 > & {
   attachRepos?: string[];
-  modelWorkspaceId?: string;
 };
 
 interface AskSurfaceStyle extends React.CSSProperties {
@@ -206,7 +208,6 @@ export function NewSession({
   initialMcpServers,
   forceMode,
   workspaceId: sourceWorkspaceId,
-  modelWorkspaceId,
   forceRepo,
   forceBranch: sourceBranch,
   workspaces,
@@ -453,14 +454,20 @@ export function NewSession({
   const [models, setModels] = useState<ModelOption[]>([]);
   const [defaultModel, setDefaultModel] = useState("");
   const [model, setModel] = useState(""); // "" = default
-  const { preferredDefaultModel, setPreferredDefaultModel } =
-    useDefaultModelPreference();
+  const {
+    preferredDefaultModel,
+    preferredDefaultEffort,
+    setPreferredDefaultModel,
+  } = useDefaultModelPreference();
   // The shared model settings menu carries the same choices as an existing
   // session's composer. Both values persist on the new session and apply to
   // its opening turn.
   const [effort, setKnownEffort] =
     useState<NonNullable<NewSessionCreateMessage["effort"]>>("high");
-  function setEffort(nextEffort: string) {
+  // Once the person picks an effort here, the preference that preselected
+  // one (Settings → Preferences) no longer applies to this palette.
+  const effortTouchedRef = useRef(false);
+  const applyEffort = (nextEffort: string) => {
     switch (nextEffort) {
       case "none":
       case "low":
@@ -470,7 +477,11 @@ export function NewSession({
       case "max":
         setKnownEffort(nextEffort);
     }
-  }
+  };
+  const setEffort = (nextEffort: string) => {
+    effortTouchedRef.current = true;
+    applyEffort(nextEffort);
+  };
   const [autoFallback, setAutoFallback] = useState(true);
   const [speed, setSpeed] = useState<SessionSpeed>("standard");
   // Pstack mode: the pstack playbooks and skills load for every turn. Off by
@@ -742,14 +753,17 @@ export function NewSession({
   }
 
   useEffect(() => {
-    fetchModels(modelWorkspaceId || sourceWorkspaceId)
+    fetchModels()
       .then(async (m) => {
         setModels(m.models);
         setDefaultModel(m.default);
         // Untouched picker: start on this person's own default model and
-        // engine (Settings → Preferences); "" is no preference, which keeps
-        // the workspace default.
+        // effort (Settings → Preferences); "" is no preference, which keeps
+        // the instance default.
         const preselect = await resolveNewSessionModel(m);
+        const preferredEffort = resolveNewSessionEffort(m, preselect);
+        if (preferredEffort && !effortTouchedRef.current)
+          applyEffort(preferredEffort);
         setModel((current) => {
           if (current) {
             // Pi-routed ids validate against their base entry (the pi/ prefix
@@ -762,7 +776,7 @@ export function NewSession({
         });
       })
       .catch(() => {});
-  }, [modelWorkspaceId, sourceWorkspaceId]);
+  }, []);
 
   // Worktrees are per-repo; refetch and reset the selection when it changes.
   // Inside a workspace, snap back to the shared sibling branch, not "New branch".
@@ -1144,7 +1158,6 @@ export function NewSession({
     // context separately. It must not appear in the optimistic destination.
     if (candidateWorkspaceId && !createWorkspaceId)
       createMessage.workspaceId = candidateWorkspaceId;
-    if (modelWorkspaceId) createMessage.modelWorkspaceId = modelWorkspaceId;
     // This assignment replaces `selectedPullRequest ? { fromPr: true } : {}`.
     if (selectedPullRequest) createMessage.fromPr = true;
     if (model) createMessage.model = model;
@@ -1978,6 +1991,7 @@ export function NewSession({
                   defaultModel,
                   model,
                   preferredDefaultModel,
+                  preferredDefaultEffort,
                   effort,
                   autoFallback,
                   speed,

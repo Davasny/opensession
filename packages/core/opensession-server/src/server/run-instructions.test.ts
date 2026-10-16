@@ -107,28 +107,6 @@ describe("buildRunInstructions", () => {
     );
   });
 
-  test("names the model worker sessions must use", () => {
-    const prompt = buildRunInstructions({
-      isAsk: false,
-      orchestrator: {
-        presetLabel: "Orchestrator · Fable + Sol",
-        mainLabel: "Fable 5.1",
-        workers: [
-          {
-            role: "Implementation worker",
-            model: "pi/openai/gpt-6.1-sol",
-            modelLabel: "GPT-6.1 Sol",
-          },
-        ],
-      },
-    });
-
-    expect(prompt).toContain(
-      "Implementation worker: GPT-6.1 Sol via `pi/openai/gpt-6.1-sol`",
-    );
-    expect(prompt).toContain("opensession-sessions spawn_task");
-  });
-
   test("keeps a standard interactive prompt minimal", () => {
     const prompt = buildRunInstructions({
       isAsk: false,

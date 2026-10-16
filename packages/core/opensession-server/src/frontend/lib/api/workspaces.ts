@@ -58,40 +58,23 @@ export async function fetchSessionOverview(
 
 // ── Workspaces (containers that group sessions) ──
 
-let defaultModelSettings: Workspace["modelSettings"] | undefined;
 let workspaceSnapshot = "";
 let stableWorkspaces: Workspace[] | null = null;
-
-/** The instance-wide default model settings, captured from the last workspaces
- *  fetch. A workspace without its own modelSettings inherits these. */
-export function defaultWorkspaceModelSettings():
-  | Workspace["modelSettings"]
-  | undefined {
-  return defaultModelSettings;
-}
 
 export async function fetchWorkspaces(options?: {
   includeWorkspaceId?: string;
   onError?: (cause: unknown) => void;
 }): Promise<Workspace[]> {
   try {
-    const data = await request<{
-      workspaces?: Workspace[];
-      defaultModelSettings?: Workspace["modelSettings"];
-    }>(
+    const data = await request<{ workspaces?: Workspace[] }>(
       `/workspaces?active=1${options?.includeWorkspaceId ? `&includeWorkspaceId=${encodeURIComponent(options.includeWorkspaceId)}` : ""}`,
     );
-    if (data?.defaultModelSettings)
-      defaultModelSettings = data.defaultModelSettings;
     const next = data?.workspaces ?? [];
     // Workspace invalidations can overlap or repeat (PR attachment, focus,
     // settings broadcasts). Preserve the array identity for an unchanged
     // response so workspace-list state can bail instead of reconciling every
     // route and sidebar row after parsing the same 500+ KB payload again.
-    const snapshot = JSON.stringify({
-      workspaces: next,
-      defaultModelSettings: data?.defaultModelSettings,
-    });
+    const snapshot = JSON.stringify(next);
     if (stableWorkspaces && snapshot === workspaceSnapshot)
       return stableWorkspaces;
     workspaceSnapshot = snapshot;
@@ -125,7 +108,6 @@ export async function updateWorkspaceApi(
     /** null clears the swatch color. */
     color?: string | null;
     order?: number;
-    modelSettings?: Workspace["modelSettings"];
     /** null clears the draft. */
     draft?: Workspace["draft"] | null;
   },

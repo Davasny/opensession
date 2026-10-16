@@ -363,7 +363,6 @@ export async function buildSessionNote(
 ): Promise<string | undefined> {
   return (
     [
-      session.presetNote || "",
       session.pstackMode ? PSTACK_MODE_NOTE : "",
       // The standing Desk session gets its concierge charter first — role
       // discipline for the summonable overlay (see desk.ts) — then the

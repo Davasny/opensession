@@ -61,11 +61,9 @@ import { handleSlashCommand } from "../slash-commands";
 import { sanitizeBranchSlug } from "../suggest-branch";
 import { type NativeSessionFile, type StackedOn } from "../types";
 import {
-  DEFAULT_WORKSPACE_MODEL_SETTINGS,
   WorkspaceRepoConflictError,
   type Workspace,
   type WorkspaceDraft,
-  type WorkspaceModelSettings,
   createWorkspace,
   deleteWorkspace,
   getWorkspace,
@@ -502,9 +500,6 @@ export async function handleWorkspaceRoutes(
   // ── Workspaces (containers that group sessions) ──
   // A workspace is just metadata; membership lives on each session's `workspaceId`.
   if (path === "/api/workspaces" && req.method === "GET") {
-    // The defaults ride once at the top level; a workspace row carries
-    // modelSettings only when someone saved their own copy. Stamping the
-    // defaults on every row multiplied the payload by the workspace count.
     let workspaces = await listWorkspaces();
     const activeOnly = url.searchParams.get("active") === "1";
     // Keep a directly opened empty/archived workspace in the sidebar projection.
@@ -529,10 +524,7 @@ export async function handleWorkspaceRoutes(
     }
     return conditionalJsonResponse(
       req,
-      {
-        workspaces,
-        defaultModelSettings: DEFAULT_WORKSPACE_MODEL_SETTINGS,
-      },
+      { workspaces },
       {
         cache: {
           key: activeOnly ? "workspaces-list-active" : "workspaces-list-all",
@@ -648,7 +640,6 @@ export async function handleWorkspaceRoutes(
       repo?: string;
       color?: string;
       order?: number;
-      modelSettings?: WorkspaceModelSettings;
       draft?: unknown;
     };
     if (body.repo === "auto")
@@ -671,7 +662,6 @@ export async function handleWorkspaceRoutes(
         repo: body.repo,
         color: body.color,
         order: body.order,
-        modelSettings: body.modelSettings,
         ...(rawDraft !== undefined ? { draft } : {}),
       });
     } catch (error) {
