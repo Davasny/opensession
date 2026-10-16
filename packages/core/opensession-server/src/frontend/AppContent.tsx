@@ -395,13 +395,6 @@ export function AppContent({
   // The "new session" ⌘K palette. It's an overlay driven by its own state (not a
   // route), so it can open over any view; the <base>/new route still opens it
   // so old links keep working.
-  const modelWorkspaceId =
-    route.view === "workspace"
-      ? route.id
-      : route.view === "session"
-        ? (sessions.find((session) => session.id === route.id)?.workspaceId ??
-          undefined)
-        : undefined;
   const {
     palette,
     paletteOpenRef,
@@ -412,7 +405,6 @@ export function AppContent({
   } = useNewSessionPalette({
     initiallyOpen: route.view === "new",
     initialPrompt: route.view === "new" ? route.prompt : undefined,
-    modelWorkspaceId,
   });
   const restorePalette = useEffectEvent(restorePaletteState);
   // Bumped by the sidebar's draft row to put the caret back in the empty
@@ -896,7 +888,6 @@ export function AppContent({
     context: {
       activeWorkspaceId,
       sidebarWorkspaceId,
-      settingsWorkspaceId,
       copyLinkPath,
       workspaceSessions,
     },
@@ -1283,13 +1274,6 @@ export function AppContent({
               <Settings
                 onBack={leaveSettings}
                 onOpenOnboarding={openFirstMile}
-                workspace={
-                  settingsWorkspaceId
-                    ? workspaces.find(
-                        (workspace) => workspace.id === settingsWorkspaceId,
-                      )
-                    : undefined
-                }
                 section={
                   route.view === "settings"
                     ? route.section
@@ -1954,7 +1938,6 @@ export function AppContent({
                 connected={connected}
                 prefillPrompt={palette.prompt}
                 workspaceId={palette.workspaceId}
-                modelWorkspaceId={palette.modelWorkspaceId}
                 forceRepo={palette.repo}
                 forceBranch={palette.branch}
                 forceMode={palette.mode}

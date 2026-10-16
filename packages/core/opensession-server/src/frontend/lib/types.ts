@@ -677,7 +677,6 @@ export interface UnifiedSession {
    * Set server-side from the status-override registry; unset = derive as usual.
    */
   manualStatus?: "needsinput" | "inprogress" | "review" | "merged" | "pending";
-  presetNote?: string;
   /**
    * A pending "please review this" pointed at a teammate, set from the info
    * panel's Reviewer picker. Surfaces the session in a "Needs review" band at
@@ -725,16 +724,6 @@ export interface Workspace {
   draft?: { text: string; updatedAt: string; by?: string; autoName?: boolean };
   /** Teammates added besides the creator; each gets it in their sidebar. */
   collaborators?: Array<{ name: string; by: string; at: string }>;
-  modelSettings?: {
-    presets?: Array<{
-      id: string;
-      label: string;
-      group?: string;
-      instructions?: string;
-      lead: { model: string; effort?: string };
-      supporting?: Array<{ model: string; effort?: string; role?: string }>;
-    }>;
-  };
 }
 
 export interface DiffFile {

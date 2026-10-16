@@ -176,7 +176,6 @@ import {
   withUploadsNote,
 } from "./uploads";
 import { resolvePlainWorkspace } from "./workspace-resolve";
-import { resolveWorkspaceModelPreset } from "./workspace-model-presets";
 import {
   type Workspace,
   getWorkspace,
@@ -283,8 +282,6 @@ export interface CreateSessionMessage {
   worktreeMode?: unknown;
   checkoutMode?: unknown;
   workspaceId?: unknown;
-  /** Workspace that supplied a model preset for an otherwise independent create. */
-  modelWorkspaceId?: unknown;
   plainThreadId?: unknown;
   createWorkspace?: { name?: unknown };
 }
@@ -432,8 +429,6 @@ export interface ResolvedCreate {
   /** Undefined only for forks of sessions with no recorded model (historic). */
   model?: string;
   effort?: string;
-  /** Stable preset instructions captured at creation, even if the workspace changes later. */
-  presetNote?: string;
   autoFallback?: boolean;
   fastMode?: boolean;
   speed?: SessionSpeed; // unset falls back to fastMode; "ultrafast" needs GPT-6 Astra and a Pro $500 login
@@ -760,7 +755,6 @@ function createdSessionFileDefaults(spec: ResolvedCreate): NativeSessionFile {
       ? { stackedOn: spec.stackedOn }
       : {}),
     ...(spec.effort ? { effort: spec.effort } : {}),
-    ...(spec.presetNote ? { presetNote: spec.presetNote } : {}),
     ...(specPstackMode(spec) ? { pstackMode: true } : {}),
     ...(spec.autoFallback === false ? { autoFallback: false } : {}),
     ...(spec.fastMode ? { fastMode: true } : {}),
@@ -1985,7 +1979,6 @@ export async function openCreatedSession(
       const openingReposNote = automationChild
         ? undefined
         : [
-            spec.presetNote || "",
             pstackMode ? PSTACK_MODE_NOTE : "",
             // A session that spans repos is handed the persisted map rather
             // than a reconstructed branch note.
@@ -2045,7 +2038,6 @@ export async function openCreatedSession(
               mcpServers: openingTrust.mcpServers,
               proxyMcpServers: Object.keys(openingMcp),
               reposNote: openingReposNote,
-              reposNoteHasPreset: !automationChild && !!spec.presetNote,
               images: spec.images,
               ...(spec.fork
                 ? {
@@ -2564,28 +2556,18 @@ export async function handleCreateSessionMessage(
     : isScratch || (isAsk && requestedRepo === NO_REPO);
   // Optional model pick from the UI; invalid input falls back to default.
   // A fork inherits the source's model. No pick = stamp the interactive
-  // default NOW: leaving it empty would let the init event persist the
-  // engine's resolved model — which for a dial default would silently
-  // disengage the dial (the preset id must be what the session stores).
-  const workspacePreset = forkSource
-    ? undefined
-    : await resolveWorkspaceModelPreset(
-        msg.model,
-        msg.workspaceId ?? msg.modelWorkspaceId,
-      );
+  // default NOW, so the session records what it was created on.
   const model = forkSource
     ? forkSource.model
-    : workspacePreset?.id ||
-      (msg.model ? resolveModel(String(msg.model))?.id : undefined) ||
+    : (msg.model ? resolveModel(String(msg.model))?.id : undefined) ||
       configuredInteractiveDefaultModel();
   // Reasoning effort from the New-session palette (forks inherit).
   const createEffort = forkSource
     ? forkSource.effort
-    : workspacePreset?.effort ||
-      (typeof msg.effort === "string" &&
-      SESSION_EFFORTS.has(msg.effort.trim().toLowerCase())
-        ? msg.effort.trim().toLowerCase()
-        : undefined);
+    : typeof msg.effort === "string" &&
+        SESSION_EFFORTS.has(msg.effort.trim().toLowerCase())
+      ? msg.effort.trim().toLowerCase()
+      : undefined;
   const createAutoFallback = forkSource
     ? forkSource.autoFallback !== false
     : msg.autoFallback !== false;
@@ -2599,11 +2581,7 @@ export async function handleCreateSessionMessage(
   // Pinned provider account from the palette (forks inherit).
   const createAccountId = forkSource
     ? forkSource.accountId
-    : resolvePinnedAccountId(
-        workspacePreset?.model || model,
-        msg.accountId,
-        user,
-      );
+    : resolvePinnedAccountId(model, msg.accountId, user);
   const createMcpServers = Array.isArray(msg.mcpServers)
     ? msg.mcpServers.map(String)
     : undefined;
@@ -3196,7 +3174,6 @@ export async function handleCreateSessionMessage(
       autoNameWorkspace: wsAutoNamed ? workspace : null,
       model,
       effort: createEffort,
-      presetNote: workspacePreset?.note,
       autoFallback: createAutoFallback,
       fastMode: createSpeed !== "standard",
       speed: createSpeed,

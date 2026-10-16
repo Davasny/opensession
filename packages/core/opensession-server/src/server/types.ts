@@ -231,7 +231,8 @@ export interface UnifiedSession {
   externalRefs?: ExternalRef[];
   /** Model id for runs in this session; unset = default (OPENSESSION_MODEL). */
   model?: string;
-  /** Workspace model-preset instructions captured when this session was created. */
+  /** Retired workspace model-preset note. Older session files may still
+   *  carry it; nothing reads it, and list rows strip it. */
   presetNote?: string;
   /** Sticky pstack engineering mode, enabled with /pstack <task>. */
   pstackMode?: boolean;
@@ -669,7 +670,8 @@ export interface NativeSessionFile {
    *  the session inherited the instance default; retried on the first prompt
    *  at least one hour after the latest modelHistory switch. */
   autoFallbackModel?: string | null;
-  /** Workspace model-preset instructions captured when this session was created. */
+  /** Retired workspace model-preset note. Older session files may still
+   *  carry it; nothing reads it, and list rows strip it. */
   presetNote?: string;
   pstackMode?: boolean; // sticky pstack engineering mode, toggled with /pstack or /poteto-mode
   effort?: string; // Pi reasoning variant for this session's runs; unset = model default

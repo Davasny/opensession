@@ -9,6 +9,8 @@ export interface ModelEffortSelection {
   model: string;
   /** This person's preferred model for new sessions. */
   preferredDefaultModel?: string;
+  /** This person's preferred effort for new sessions ("" = none). */
+  preferredDefaultEffort?: string;
   /** Model is set elsewhere (e.g. Slack-owned sessions) — effort stays switchable. */
   modelDisabled?: boolean;
   modelTitle?: string;
@@ -41,8 +43,9 @@ export interface ModelEffortAppearance {
 
 export interface ModelEffortActions {
   changeModel: (model: string) => void;
-  /** Makes the current conversation model this person's default for new sessions. */
-  setAsDefault?: (model: string) => void;
+  /** Makes the current conversation model, and its effort when the model has
+   *  an effort ladder, this person's default for new sessions. */
+  setAsDefault?: (model: string, effort?: string) => void;
   changeEffort?: (effort: string) => void;
   changeAutoFallback?: (enabled: boolean) => void;
   changeSpeed?: (speed: SessionSpeed) => void;
