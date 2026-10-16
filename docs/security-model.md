@@ -206,6 +206,31 @@ is audited with the fields it changed and whether the secret was rotated
 (`keychain_credential_updated`, `keychain_credential_deleted`), never the
 secret itself.
 
+A credential is personal by default. Its owner may instead make it a
+workspace credential, when registering it or later: in Settings → Account
+(Share / Make personal, behind a confirmation and a verified GitHub sign-in)
+or with `update_credential` and `scope`, which shows the owner the same card
+as any other change. Only the owner can share it, make it personal again,
+change it or delete it; there is no separate admin role, and any teammate may
+register a new credential as a workspace credential, which makes them its
+owner. A workspace credential is usable by every session that has the
+keychain tools, without `request_credential` or anyone's approval:
+`call_credential` mints the session's own implicit `workspace` grant (seven
+days, minted again on the next call) on first use, and `run_with_credential`
+starts a run whose credentials are all workspace credentials with the
+caller's stated purpose and call cap (10,000 per credential by default). Everything else
+holds: the keychain tools stay interactive-only, the secret is injected
+server-side, the host, method and path ceiling applies, the secret is scrubbed
+from responses, and grants stay bound to the session. Because no owner
+approved a purpose, every `call_credential` to a workspace credential must
+state one; the audit line (`keychain_broker_call`) records it with the
+session and the person driving it, and the implicit grant's
+`keychain_grant_minted` line is marked `scope: workspace`. Making the
+credential personal again revokes every implicit grant, which also ends a run
+using one, while grants its owner approved keep working. A login can never be
+a workspace credential: its password reaches the agent, so each release stays
+the owner's decision.
+
 A loopback URL that any local process could reuse is exactly what the broker
 route was, so bulk work by a script has its own path instead. The agent asks
 for a scripted run (`request_credential` with `run`): the owner's message says

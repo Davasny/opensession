@@ -863,6 +863,9 @@ export type ProtocolServerMessage =
         allowedMethods?: string[];
         allowedPathPrefixes?: string[];
         statusOnly?: boolean;
+        /** Every session in the workspace may use it without asking.
+         *  Absent: personal. */
+        scope?: "workspace";
         owner: string;
         requestedAt: number;
         expiresAt: number;
@@ -880,6 +883,7 @@ export type ProtocolServerMessage =
           | "allowedMethods"
           | "allowedPathPrefixes"
           | "statusOnly"
+          | "scope"
         )[];
         previous?: {
           host?: string;
@@ -890,6 +894,7 @@ export type ProtocolServerMessage =
           allowedMethods?: string[];
           allowedPathPrefixes?: string[];
           statusOnly?: boolean;
+          scope?: "workspace";
         };
         /** An update must come with a new secret; otherwise one is optional. */
         requireSecret?: boolean;
