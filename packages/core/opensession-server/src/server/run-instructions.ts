@@ -27,6 +27,16 @@ export const GH_CHECKS_CLI_PATH = join(
   "gh-checks.ts",
 );
 
+/** "Keep watching and update me" used to become one long turn polling in a
+ * loop. Text written mid-turn folds into the work rail and notifies nobody,
+ * so the person saw nothing until the run ended (one incident run resorted to
+ * posting its updates to Slack). Each update has to be a turn's answer. */
+export const MONITORING_GUIDANCE =
+  "When asked to keep monitoring something and give regular updates, never poll inside one turn: " +
+  "text written mid-turn is folded away and notifies no one. Give each update as your final answer, " +
+  "schedule the next check with `schedule_prompt`, and end your turn. Stop scheduling once the goal " +
+  "is met, something needs the person, or they say stop.";
+
 /**
  * Minimal per-run context appended to the engine system prompt.
  *
@@ -233,7 +243,8 @@ export function buildRunInstructions(input: {
       "failed under a hard cap, e.g. " +
       "`timeout 300 bash -c 'until grep -q DONE out.log; do sleep 10; done'`. " +
       (inproc["opensession-schedule"]
-        ? "For longer, call `schedule_prompt` with `in_minutes` and end your turn."
+        ? "For longer, call `schedule_prompt` with `in_minutes` and end your turn. " +
+          MONITORING_GUIDANCE
         : "For longer, report where things stand and end your turn."),
   );
   // One guidance line per mounted internal server. MCP tools hide

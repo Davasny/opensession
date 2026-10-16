@@ -237,10 +237,14 @@ describe("buildRunInstructions", () => {
     expect(interactive).toContain(
       "For longer, call `schedule_prompt` with `in_minutes` and end your turn.",
     );
+    // Mid-turn text folds away and notifies no one, so a monitoring request
+    // must become one turn per update.
+    expect(interactive).toContain("never poll inside one turn");
 
     const automation = buildRunInstructions({ isAsk: false });
     expect(automation).toContain("Never wait with a fixed `sleep N`.");
     expect(automation).not.toContain("schedule_prompt");
+    expect(automation).not.toContain("never poll inside one turn");
     expect(automation).not.toContain("`pr_checks`");
   });
 
