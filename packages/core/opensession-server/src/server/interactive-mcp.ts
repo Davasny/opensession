@@ -593,6 +593,9 @@ export function interactiveMcpServers(
  * path resolves through: `interactivePrompter` drops every machine actor and
  * every scheduled /loop tick sent in a person's name (`"Kent (loop)"`), so a
  * caller that only has the persisted account user still fails closed.
+ * The same turn also gets `opensession-keychain` for asking for and using
+ * API credentials (no registration, changes, logins or Mac Keychain): the
+ * person is driving, and an owner still approves each personal one.
  * Descendants (sandboxed children with a publication policy) are excluded.
  *
  * An auto-triage session that reports into a Plain discussion
@@ -630,6 +633,14 @@ export async function automationSessionMcp(
       isAdmin: false,
       humanResume: true,
       currentSessionId: sessionId,
+    });
+    // The person may ask for and use API credentials, as in any session
+    // they drive: workspace ones directly, personal ones once the owner
+    // approves the person's ask. Never registration, changes or logins.
+    servers["opensession-keychain"] = createKeychainMcpServer({
+      sessionId,
+      user: prompter,
+      automationTurn: true,
     });
   }
   if (session.plainDiscussionId && !session.automationDescendantPolicy) {

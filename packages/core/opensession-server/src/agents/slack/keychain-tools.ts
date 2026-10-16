@@ -72,6 +72,7 @@ import {
   runGroupAnswer,
   MAX_RUN_CREDENTIALS,
   DEFAULT_WORKSPACE_RUN_CALLS,
+  findCredential,
 } from "../../server/keychain";
 import {
   writeReleasedLogin,
@@ -106,6 +107,10 @@ export interface KeychainToolContext {
       > &
         Partial<Pick<UnifiedSession, "worktreeDir" | "sandbox" | "runner">>)
     | undefined;
+  /** A person's turn in an automation-owned session: list, ask for and use
+   *  API credentials (workspace ones need no ask), with that person as the
+   *  requester. No registration or changes, no logins, no Mac Keychain. */
+  automationTurn?: boolean;
   /** Test seam: where use_login writes. Defaults to the session's workspace. */
   loginTarget?: () => Promise<LoginReleaseTarget | { error: string }>;
 }
@@ -289,6 +294,20 @@ function kcAsksStillPending(ids: string[]): string[] {
   return ids.filter((id) => pending.has(id));
 }
 
+/** What the keychain server carries in a person's turn of an automation
+ *  session: asking for and using API credentials, nothing that registers,
+ *  changes or deletes one, no logins and no Mac Keychain. */
+const AUTOMATION_TURN_TOOLS = new Set([
+  "list_credentials",
+  "request_credential",
+  "cancel_credential_ask",
+  "list_grants",
+  "call_credential",
+  "run_with_credential",
+  "credential_run_status",
+  "stop_credential_run",
+]);
+
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
@@ -384,7 +403,9 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
       "List the credentials teammates have registered in the keychain: service, owner, target host, any method/path limits, and whether it is a workspace credential. Secrets are never included. A workspace credential can be used right away with call_credential or run_with_credential, no request needed; a personal one needs request_credential and its owner's approval. Use this to find out whether the access you need already exists before asking anyone for a token.",
       {},
       async () => {
-        const creds = listCredentials();
+        const creds = listCredentials().filter(
+          (c) => !ctx.automationTurn || c.kind !== "login",
+        );
         if (!creds.length) {
           return text(
             "The keychain is empty. Credentials are added by their owner in Settings → Account, or with register_credential, where the person driving this session pastes the secret into a card. Never paste a secret into a session.",
@@ -494,6 +515,17 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
           args.credentials ?? (args.credential ? [args.credential] : []);
         if (!refs.length || (args.credential && args.credentials))
           return text("Couldn't ask: give either credential or credentials.");
+        // A login's password would land in a workspace that also reads
+        // untrusted ticket text, and use_login isn't offered here.
+        if (ctx.automationTurn) {
+          const login = refs
+            .map((ref) => findCredential(ref))
+            .find((c) => c?.kind === "login");
+          if (login)
+            return text(
+              `Couldn't ask: ${login.service} is a login, which an automation session can't use.`,
+            );
+        }
         if (refs.length > 1) {
           if (!args.run)
             return text(
@@ -1046,5 +1078,10 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
     ),
   ];
 
-  return createSdkMcpServer({ name: "opensession-keychain", tools });
+  return createSdkMcpServer({
+    name: "opensession-keychain",
+    tools: ctx.automationTurn
+      ? tools.filter((t) => AUTOMATION_TURN_TOOLS.has(t.name))
+      : tools,
+  });
 }

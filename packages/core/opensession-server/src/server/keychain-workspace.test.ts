@@ -357,3 +357,59 @@ describe("scripted runs with workspace credentials", () => {
     });
   });
 });
+
+describe("a person's turn in an automation session", () => {
+  const server = async () => {
+    const { createKeychainMcpServer } =
+      await import("../agents/slack/keychain-tools");
+    return createKeychainMcpServer({
+      sessionId: "s-1",
+      user: "Sam",
+      automationTurn: true,
+    }) as any;
+  };
+
+  test("the keychain server carries the ask and use tools only", async () => {
+    expect(
+      Object.keys((await server()).instance._registeredTools).sort(),
+    ).toEqual([
+      "call_credential",
+      "cancel_credential_ask",
+      "credential_run_status",
+      "list_credentials",
+      "list_grants",
+      "request_credential",
+      "run_with_credential",
+      "stop_credential_run",
+    ]);
+  });
+
+  test("a login can't be asked for", async () => {
+    kc.addCredential({
+      owner: "Alex",
+      service: "staging-login",
+      kind: "login",
+      loginUrl: "https://app.example.test/login",
+      username: "qa@example.test",
+      secret: "hunter2",
+    });
+    const tool = (await server()).instance._registeredTools.request_credential;
+    const result = await tool.handler(
+      { credential: "staging-login", purpose: "sign in" },
+      {},
+    );
+    expect(result.content[0].text).toMatch(/is a login/);
+    expect(kc.listKeychainAsks()).toHaveLength(0);
+  });
+
+  test("a workspace credential is answered without asking anyone", async () => {
+    shared();
+    const tool = (await server()).instance._registeredTools.request_credential;
+    const result = await tool.handler(
+      { credential: "metrics", purpose: "check usage" },
+      {},
+    );
+    expect(result.content[0].text).toContain("workspace credential");
+    expect(kc.listKeychainAsks()).toHaveLength(0);
+  });
+});

@@ -231,6 +231,17 @@ using one, while grants its owner approved keep working. A login can never be
 a workspace credential: its password reaches the agent, so each release stays
 the owner's decision.
 
+Automation-owned sessions never get the full keychain server. A turn a person
+sends into one (resolved by `interactivePrompter`, never the automation's own
+ticks, a machine actor or a descendant) gets `opensession-keychain` limited to
+listing, asking for and using API credentials: `list_credentials`,
+`request_credential`, `cancel_credential_ask`, `list_grants`,
+`call_credential`, `run_with_credential` and its run status tools. Workspace
+credentials work directly; a personal one needs its owner's approval of that
+person's ask, as anywhere else. There is no registration, change or deletion,
+no login (asking for one is refused, and `use_login` is absent) and no Mac
+Keychain. Asks and calls are recorded with that person as the requester.
+
 A loopback URL that any local process could reuse is exactly what the broker
 route was, so bulk work by a script has its own path instead. The agent asks
 for a scripted run (`request_credential` with `run`): the owner's message says
