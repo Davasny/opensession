@@ -76,7 +76,8 @@ enum TailscaleHandoff {
     nonisolated static let sharedShortcutLink: URL? = nil
 
     /// Where Shortcuts sends you when the shortcut finishes. Only the iOS
-    /// target registers it; the Electron shell owns `os1://` on the Mac.
+    /// target registers it; the Electron shell owns `os://` and `os1://`
+    /// on the Mac.
     nonisolated static let returnScheme = "os1-native"
 
     /// The person's shortcut, run through the Shortcuts app with the

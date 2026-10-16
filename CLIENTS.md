@@ -45,7 +45,7 @@ is why it feels like an app rather than a website in a frame.
 
 `packages/clients/mac/` is a macOS-targeted Electron window around the web UI.
 It adds Dock and window integration, native materials and dictation, and deep
-links using `os1://`.
+links using `os://` (`os1://` still works).
 
 It renders the server's frontend, so it does not lag behind the web UI. On first
 launch it asks for the first organization and stores an account list in its

@@ -159,6 +159,10 @@ const windowData = new WeakMap();
 let quitting = false;
 let appReady = false;
 let pendingDeepLink = null;
+// `os://` is the deep-link scheme. `os1://` stays registered because the web
+// UI and links already shared point at it. Keep in sync with
+// CFBundleURLSchemes in electron-builder.yml.
+const DEEP_LINK_SCHEMES = ["os", "os1"];
 
 function activeWindow() {
   const focused = BrowserWindow.getFocusedWindow();
@@ -611,12 +615,14 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", (_e, argv) => {
     showWindow();
-    const url = argv.find((a) => a.startsWith("os1://"));
+    const url = argv.find((a) =>
+      DEEP_LINK_SCHEMES.some((scheme) => a.startsWith(`${scheme}://`)),
+    );
     if (url) openDeepLink(url);
   });
 }
 
-app.setAsDefaultProtocolClient("os1");
+for (const scheme of DEEP_LINK_SCHEMES) app.setAsDefaultProtocolClient(scheme);
 
 const MIN_WIDTH = 700;
 const MIN_HEIGHT = 480;
@@ -818,13 +824,13 @@ async function micAccessAllowed() {
   return false;
 }
 
-// os1://session/abc → <focused instance>/session/abc; app links pass through.
+// os://session/abc → <focused instance>/session/abc; app links pass through.
 function deepLinkToUrl(raw, target = activeWindow()) {
   const accountURL = accountUrlForWindow(target);
   if (!accountURL) return null;
   try {
     const u = new URL(raw);
-    if (u.protocol === "os1:") {
+    if (DEEP_LINK_SCHEMES.includes(u.protocol.slice(0, -1))) {
       const destination = new URL(accountURL);
       destination.pathname = "/" + (u.host || "") + u.pathname;
       destination.search = u.search;

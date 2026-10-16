@@ -84,7 +84,7 @@ mac:
     NSSpeechRecognitionUsageDescription: Transcribe prompts while you speak.
     CFBundleURLTypes:
       - CFBundleURLName: Open Session deep link
-        CFBundleURLSchemes: [os1]
+        CFBundleURLSchemes: [os, os1]
   # Reads APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID from the env in
   # CI; skipped (with a warning) when they're absent, e.g. local unsigned builds.
   notarize: true

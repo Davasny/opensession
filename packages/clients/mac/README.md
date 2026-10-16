@@ -372,11 +372,16 @@ persists in Electron's default session.
 
 ## Deep links
 
-- `os1://…` opens the app and maps to the focused window's server
-  (e.g. `os1://session/abc` → `/session/abc`). Shared session, workspace and
+- `os://…` opens the app and maps to the focused window's server
+  (e.g. `os://session/abc` → `/session/abc`, `os://plain-triage/<thread>` →
+  `/plain-triage/<thread>`, which redirects to the triage session). Use it for
+  "open in the app" buttons in other tools. `os1://…` is the older name and
+  still works. Shared session, workspace and
   PR pages show a dismissible **View in the app** card with an **Open** button
   at the bottom of the sidebar in an eligible Mac browser. The click opens this
   protocol while leaving the web page in place when the app is not installed.
+  That button still uses `os1://`, because copies of the app older than
+  `os://` support only register `os1://`.
 - **Universal links** (plain `https://os.tella.dev/…` links opening the app,
   e.g. from Slack — Tella's host; see the rebrand note under Signing & release):
   Open Session exposes `/.well-known/apple-app-site-association` from the
