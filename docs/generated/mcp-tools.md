@@ -51,7 +51,7 @@ touches an in-process tool:
 | [`opensession-publish`](#opensession-publish) | 4 | interactive | Needs a session id. |
 | [`opensession-repos`](#opensession-repos) | 7 | interactive | Needs a session id. |
 | [`opensession-memory`](#opensession-memory) | 6 | interactive, automation | Needs a session id. |
-| [`opensession-web`](#opensession-web) | 3 | interactive, goal wake | Needs a session id. |
+| [`opensession-web`](#opensession-web) | 3 | interactive, goal wake, automation | Needs a session id. Automations get it only when their MCP allowlist names it. |
 | [`opensession-portals`](#opensession-portals) | 9 | interactive | Needs a session id. |
 | [`opensession-desktop`](#opensession-desktop) | 8 | interactive | Needs a sandboxed session. |
 | [`opensession-walkthrough`](#opensession-walkthrough) | 2 | interactive | Needs a session id. |
@@ -267,13 +267,13 @@ List all of Assistant's automations (routines): scheduled, event- and webhook-tr
 
 ### `create_automation`
 
-`mcp__opensession-admin__create_automation` · input: `name` (string, required), `prompt` (string, required), `schedule` (string), `mode` ("ask" | "code"), `repo` (string), `mcpServers` (string[]), `sandbox` (boolean), `model` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `owner` (string), `workspaceId` (string)
+`mcp__opensession-admin__create_automation` · input: `name` (string, required), `prompt` (string, required), `schedule` (string), `mode` ("ask" | "code" | "scratch"), `repo` (string), `mcpServers` (string[]), `sandbox` (boolean), `model` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `owner` (string), `workspaceId` (string)
 
-Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.
+Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only, 'scratch' for a full shell (curl, scripts, downloads) without a repository checkout, or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.
 
 ### `update_automation`
 
-`mcp__opensession-admin__update_automation` · input: `id` (string, required), `name` (string), `prompt` (string), `schedule` (string), `mode` ("ask" | "code"), `enabled` (boolean), `repo` (string), `mcpServers` (string[]), `sandbox` (boolean), `model` (string), `fallbackModel` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `owner` (string), `workspaceId` (string), `webhookMaxConcurrent` (integer)
+`mcp__opensession-admin__update_automation` · input: `id` (string, required), `name` (string), `prompt` (string), `schedule` (string), `mode` ("ask" | "code" | "scratch"), `enabled` (boolean), `repo` (string), `mcpServers` (string[]), `sandbox` (boolean), `model` (string), `fallbackModel` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `owner` (string), `workspaceId` (string), `webhookMaxConcurrent` (integer)
 
 Update an existing automation by id. Only provided fields change. Use enabled to pause/resume.
 
@@ -297,7 +297,7 @@ Re-run an automation with the exact triggering payload of one of its past runs (
 
 ### `schedule_once`
 
-`mcp__opensession-admin__schedule_once` · input: `when` (string, required), `prompt` (string, required), `name` (string), `mode` ("ask" | "code"), `repo` (string), `mcpServers` (string[]), `replyInThread` (boolean)
+`mcp__opensession-admin__schedule_once` · input: `when` (string, required), `prompt` (string, required), `name` (string), `mode` ("ask" | "code" | "scratch"), `repo` (string), `mcpServers` (string[]), `replyInThread` (boolean)
 
 Schedule a ONE-OFF run at a future time, after which it auto-deletes — use for 'remind me about this next week', 'run this again in a week', or any one-time scheduled task. `when` is a natural time expression ('next Tuesday 9am', 'in a week', 'tomorrow morning', 'in 3 hours') — just pass the user's phrasing through; it's resolved to an exact instant for you. `prompt` is what Assistant should do when it fires, written to yourself — it runs as a normal assistant session, so it can post to a channel, DM someone via the Slack MCP, or carry out a task. By default, when this is invoked from a Slack thread, the run is told to post its reminder back into that thread; set replyInThread:false to suppress (e.g. when the prompt should DM someone else instead). Omit mcpServers to give the run the full toolset; pass it to restrict (least-privilege).
 
@@ -717,9 +717,9 @@ Sync one visible memory repository with its configured upstream and report the r
 Read a URL as text, search what was fetched, clone a GitHub repo. No web search.
 
 - **Source** `packages/core/opensession-server/src/server/web-mcp.ts`
-- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`, `packages/core/opensession-server/src/server/goal-runner.ts`
-- **Runs** interactive, goal wake
-- **Condition** Needs a session id.
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`, `packages/core/opensession-server/src/server/goal-runner.ts`, `packages/core/opensession-server/src/server/automations.ts`
+- **Runs** interactive, goal wake, automation
+- **Condition** Needs a session id. Automations get it only when their MCP allowlist names it.
 
 ### `fetch_url`
 

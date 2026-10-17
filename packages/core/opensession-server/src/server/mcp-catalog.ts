@@ -313,9 +313,11 @@ export const MCP_SERVER_CATALOG: McpServerCatalogEntry[] = [
     wiring: [
       "packages/core/opensession-server/src/server/interactive-mcp.ts",
       "packages/core/opensession-server/src/server/goal-runner.ts",
+      "packages/core/opensession-server/src/server/automations.ts",
     ],
-    runClasses: ["interactive", "goal"],
-    condition: "Needs a session id.",
+    runClasses: ["interactive", "goal", "automation"],
+    condition:
+      "Needs a session id. Automations get it only when their MCP allowlist names it.",
     build: () => createWebMcpServer({ sessionId: SESSION_ID }),
   },
   {

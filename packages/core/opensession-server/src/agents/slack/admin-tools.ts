@@ -181,7 +181,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
       ),
       tool(
         "create_automation",
-        "Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.",
+        "Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only, 'scratch' for a full shell (curl, scripts, downloads) without a repository checkout, or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.",
         {
           name: z.string().describe("Short display name."),
           prompt: z
@@ -194,10 +194,10 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
               "5-field UTC cron, e.g. '0 16 * * 1-5' = 9am PT weekdays. Omit for manual/webhook only. Note: server is UTC.",
             ),
           mode: z
-            .enum(["ask", "code"])
+            .enum(["ask", "code", "scratch"])
             .optional()
             .describe(
-              "'ask' = read-only (default), 'code' = worktree + can open PRs.",
+              "'ask' = read-only (default), 'scratch' = full shell in an empty directory, no checkout, 'code' = worktree + can open PRs.",
             ),
           repo: z.string().optional().describe(repoParamHelp()),
           mcpServers: z
@@ -265,7 +265,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
           name: string;
           prompt: string;
           schedule?: string;
-          mode?: "ask" | "code";
+          mode?: "ask" | "code" | "scratch";
           repo?: string;
           mcpServers?: string[];
           sandbox?: boolean;
@@ -324,7 +324,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
             .string()
             .optional()
             .describe("5-field UTC cron; '' clears it."),
-          mode: z.enum(["ask", "code"]).optional(),
+          mode: z.enum(["ask", "code", "scratch"]).optional(),
           enabled: z.boolean().optional(),
           repo: z
             .string()
@@ -409,7 +409,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
           name?: string;
           prompt?: string;
           schedule?: string;
-          mode?: "ask" | "code";
+          mode?: "ask" | "code" | "scratch";
           enabled?: boolean;
           repo?: string;
           mcpServers?: string[];
@@ -504,10 +504,10 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
             .optional()
             .describe("Short label; defaults to a snippet of the prompt."),
           mode: z
-            .enum(["ask", "code"])
+            .enum(["ask", "code", "scratch"])
             .optional()
             .describe(
-              "'ask' = read-only (default), 'code' = worktree + can open PRs.",
+              "'ask' = read-only (default), 'scratch' = full shell in an empty directory, no checkout, 'code' = worktree + can open PRs.",
             ),
           repo: z.string().optional().describe(repoParamHelp()),
           mcpServers: z
@@ -527,7 +527,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
           when: string;
           prompt: string;
           name?: string;
-          mode?: "ask" | "code";
+          mode?: "ask" | "code" | "scratch";
           repo?: string;
           mcpServers?: string[];
           replyInThread?: boolean;

@@ -201,7 +201,7 @@ export interface Automation {
   name: string;
   prompt: string;
   schedule: string;
-  mode: "ask" | "code";
+  mode: "ask" | "code" | "scratch";
   enabled: boolean;
   createdBy: string;
   createdAt: string;
@@ -496,7 +496,7 @@ export async function createAutomationApi(input: {
   name: string;
   prompt: string;
   schedule: string;
-  mode: "ask" | "code";
+  mode: "ask" | "code" | "scratch";
   createdBy: string;
   eventKey?: string;
   model?: string;
