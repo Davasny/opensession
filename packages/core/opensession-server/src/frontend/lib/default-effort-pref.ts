@@ -7,7 +7,7 @@
 
 import * as userPref from "./user-pref";
 
-export const DEFAULT_EFFORT_CHOICES = [
+const DEFAULT_EFFORT_CHOICES = [
   "none",
   "low",
   "medium",

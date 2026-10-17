@@ -13,11 +13,13 @@ import {
   pushRecentModel,
 } from "../lib/model-recents";
 import { Menu } from "../ui/menu";
+import { selectTriggerClasses } from "../ui/select-classes";
 import { Badge } from "../ui/badge";
 import { cn } from "../ui/cn";
 import {
   IconBolt,
   IconRocket,
+  IconChevronDown,
   IconChevronRight,
   IconPeople,
   IconSparkle,
@@ -348,6 +350,7 @@ export function ModelEffortSelect({
     changeSpeed: onSpeedChange,
     changeAccount: onAccountChange,
     changeOpen: onOpenChange,
+    reset: onReset,
   } = actions;
   const effectiveModel = model || defaultModel;
   const [open, setOpen] = React.useState(false);
@@ -497,6 +500,7 @@ export function ModelEffortSelect({
     (!hasAccount || !accountId) &&
     (!onAutoFallbackChange || autoFallback);
   const resetToDefault = () => {
+    if (onReset) return onReset();
     if (!modelDisabled) onModelChange("");
     if (onEffortChange && defaultEffort) onEffortChange(defaultEffort);
     onAutoFallbackChange?.(true);
@@ -748,6 +752,7 @@ export function ModelEffortSelect({
 
   const menuRowTrigger = triggerVariant === "menu-row";
   const heroTrigger = triggerVariant === "hero";
+  const fieldTrigger = triggerVariant === "field";
 
   return (
     <Menu.Root open={open} onOpenChange={setMenuOpen}>
@@ -763,9 +768,11 @@ export function ModelEffortSelect({
         className={cn(
           menuRowTrigger
             ? "flex w-full cursor-pointer items-center gap-[7px] whitespace-nowrap rounded-control border border-line-strong bg-transparent px-3 py-[7px] text-control-label font-medium text-faint hover:bg-hover hover:text-fg data-[popup-open]:bg-hover data-[popup-open]:text-fg"
-            : heroTrigger
-              ? "inline-flex min-h-11 min-w-0 max-w-full cursor-pointer items-center rounded-md border-0 bg-transparent px-1.5 text-label font-medium text-dim transition-[color,background-color,scale] hover:bg-hover hover:text-fg active:scale-[0.96] data-[popup-open]:bg-hover data-[popup-open]:text-fg"
-              : "border-transparent hover:border-transparent hover:bg-hover",
+            : fieldTrigger
+              ? selectTriggerClasses("md", true)
+              : heroTrigger
+                ? "inline-flex min-h-11 min-w-0 max-w-full cursor-pointer items-center rounded-md border-0 bg-transparent px-1.5 text-label font-medium text-dim transition-[color,background-color,scale] hover:bg-hover hover:text-fg active:scale-[0.96] data-[popup-open]:bg-hover data-[popup-open]:text-fg"
+                : "border-transparent hover:border-transparent hover:bg-hover",
           className,
         )}
         title={title}
@@ -793,6 +800,22 @@ export function ModelEffortSelect({
               </span>
             </span>
             <IconChevronRight size={16} className="shrink-0 text-faint" />
+          </>
+        ) : fieldTrigger ? (
+          <>
+            <span className="col-start-1 row-start-1 flex size-4 shrink-0 items-center justify-center text-dim">
+              <ModelMark id={effectiveModel} provider={modelInfo?.provider} />
+            </span>
+            <span className="col-start-2 row-start-1 truncate">
+              {modelLabel}
+              {hasEffort && effortLabel && (
+                <span className="text-faint"> · {effortLabel}</span>
+              )}
+            </span>
+            <IconChevronDown
+              size={16}
+              className="col-start-3 row-start-1 shrink-0 text-faint"
+            />
           </>
         ) : heroTrigger ? (
           <span className="truncate">{modelLabel}</span>
@@ -823,7 +846,13 @@ export function ModelEffortSelect({
         )}
       </Menu.Trigger>
       <Menu.Popup
-        align={menuRowTrigger ? "start" : heroTrigger ? "center" : "end"}
+        align={
+          menuRowTrigger || fieldTrigger
+            ? "start"
+            : heroTrigger
+              ? "center"
+              : "end"
+        }
         sideOffset={6}
         className={cn(
           "max-w-[min(360px,calc(100vw-1rem))]",

@@ -29,7 +29,6 @@ import {
   type BusySendPrefs,
 } from "../../lib/busy-send-pref";
 import {
-  DEFAULT_EFFORT_CHOICES,
   getDefaultEffortPref,
   onDefaultEffortPrefChanged,
   setDefaultEffortPref,
@@ -159,8 +158,7 @@ import {
 import { PersonalSandboxDefaultRow } from "./SandboxDefaults";
 import { PendingSendsSection } from "./PendingSendsSection";
 import { RepoTile } from "../RepoTile";
-import { ModelMark } from "../ModelMark";
-import { EFFORTS } from "../ModelEffortSelect";
+import { ModelEffortSelect } from "../ModelEffortSelect";
 import { IconPlus, IconRepo } from "../icons";
 
 // ── Desk voice ─────────────────────────────────────────────────────────────
@@ -750,8 +748,9 @@ export function PreferencesPanel() {
     () => onPinNewWorkspacesChanged(() => setPinNewWs(getPinNewWorkspaces())),
     [],
   );
-  // Per-user default model and effort for NEW sessions ("" = no preference:
-  // the instance default model from GET /api/models, at its own effort).
+  // Per-user default model and effort for NEW sessions, picked together in
+  // the same menu sessions use ("" = no preference: the instance default
+  // model from GET /api/models, at its own effort).
   const [modelPref, setModelPref] = useState<string>(getDefaultModelPref);
   const [effortPref, setEffortPref] = useState<string>(getDefaultEffortPref);
   useEffect(
@@ -760,6 +759,7 @@ export function PreferencesPanel() {
     [],
   );
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [catalogDefaultModel, setCatalogDefaultModel] = useState("");
   const [modelOptionsError, setModelOptionsError] = useState<string | null>(
     null,
   );
@@ -812,7 +812,10 @@ export function PreferencesPanel() {
   );
   useEffect(() => {
     fetchModels()
-      .then((models) => setModelOptions(models.models))
+      .then((models) => {
+        setModelOptions(models.models);
+        setCatalogDefaultModel(models.default);
+      })
       .catch((error) =>
         setModelOptionsError(errorMessage(error, "Failed to load models")),
       );
@@ -825,22 +828,6 @@ export function PreferencesPanel() {
       );
   }, []);
 
-  // The effort ladder belongs to a model, so the row offers the default
-  // model's own levels. With no model preference, any level can be saved and
-  // applies whenever the model a session starts on offers it.
-  const preferredModelOption = modelOptions.find((m) => m.id === modelPref);
-  const effortChoices = preferredModelOption
-    ? DEFAULT_EFFORT_CHOICES.filter((id) =>
-        preferredModelOption.efforts.includes(id),
-      )
-    : DEFAULT_EFFORT_CHOICES;
-  const changeDefaultModel = (next: string) => {
-    setDefaultModelPref(next);
-    const nextEfforts = modelOptions.find((m) => m.id === next)?.efforts;
-    // Keep the saved effort only while the new default model offers it.
-    if (effortPref && nextEfforts && !nextEfforts.includes(effortPref))
-      setDefaultEffortPref("");
-  };
   const checkoutDefault = sessionCheckoutDefault(checkoutPrefs);
   const checkoutOverrideRepos = repoOptions.filter((repo) => {
     const override = checkoutPrefs[repo.id];
@@ -861,53 +848,29 @@ export function PreferencesPanel() {
             title="Default model"
             desc={modelOptionsError}
             control={
-              <Select
-                label="Default model"
-                value={
-                  modelPref && modelOptions.some((m) => m.id === modelPref)
+              <ModelEffortSelect
+                selection={{
+                  models: modelOptions,
+                  defaultModel: catalogDefaultModel,
+                  model: modelOptions.some((m) => m.id === modelPref)
                     ? modelPref
-                    : ""
-                }
-                options={[
-                  { value: "", label: "No preference" },
-                  ...modelOptions.map((m) => ({
-                    value: m.id,
-                    label: m.label,
-                    icon: <ModelMark id={m.id} provider={m.provider} />,
-                  })),
-                ]}
-                onChange={changeDefaultModel}
+                    : "",
+                  effort: effortPref,
+                }}
+                appearance={{ triggerVariant: "field" }}
+                actions={{
+                  changeModel: setDefaultModelPref,
+                  changeEffort: setDefaultEffortPref,
+                  // No preference for either: new sessions follow the
+                  // instance default model at its own effort.
+                  reset: () => {
+                    setDefaultModelPref("");
+                    setDefaultEffortPref("");
+                  },
+                }}
               />
             }
           />
-          {effortChoices.length > 0 && (
-            <SettingRow
-              title="Default effort"
-              desc={
-                preferredModelOption
-                  ? undefined
-                  : "Applies when the session's model supports it."
-              }
-              control={
-                <Select
-                  label="Default effort"
-                  value={
-                    effortChoices.some((id) => id === effortPref)
-                      ? effortPref
-                      : ""
-                  }
-                  options={[
-                    { value: "", label: "Model default" },
-                    ...effortChoices.map((id) => ({
-                      value: id,
-                      label: EFFORTS.find((e) => e.id === id)?.label ?? id,
-                    })),
-                  ]}
-                  onChange={setDefaultEffortPref}
-                />
-              }
-            />
-          )}
 
           <SettingRow
             title="Default repository"
