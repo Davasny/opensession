@@ -18,7 +18,7 @@ import {
 import { MessageBubble } from "./MessageBubble";
 import { agentMessageText } from "../lib/agent-message";
 import { NoteBubble } from "./NoteBubble";
-import { ToolSection, TurnBlock } from "./TurnBlock";
+import { ToolSection, TurnBlock, useTurnActivityPrefs } from "./TurnBlock";
 import {
   turnTouchedFiles,
   TurnFooter,
@@ -121,7 +121,7 @@ interface Props {
   };
   /** The current PR verdict, rendered on the final review loop's own row. */
   reviewResult?: ReviewLoopResult;
-  /** Preview/test hook; the session viewer leaves review loops folded. */
+  /** Opens every review and check-back fold, whatever the Steps preference. */
   reviewLoopsOpen?: boolean;
   onReviewLoopOpenChange?: (open: boolean) => void;
   /** Complete content-free outline. When present, ranges hydrate on demand. */
@@ -1417,6 +1417,9 @@ function ReviewTurnSteps({
   sessionId?: string;
   onOpenSubagent?: (agentId: string, label: string) => void;
 }) {
+  // The loop is the work fold here, so only the Tool calls preference is left
+  // to answer: open renders every call in place, as in an ordinary turn.
+  const { tools } = useTurnActivityPrefs();
   const sections: Array<
     | { kind: "tools"; items: TranscriptEntry[] }
     | { kind: "message"; entry: TranscriptEntry }
@@ -1438,7 +1441,7 @@ function ReviewTurnSteps({
         items={section.items}
         toolResults={toolResults}
         live={live}
-        expandAll={false}
+        expandAll={tools === "open"}
         sessionId={sessionId}
         onOpenSubagent={onOpenSubagent}
       />
