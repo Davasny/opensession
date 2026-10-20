@@ -1119,6 +1119,7 @@ export function nativeSessionRow(data: NativeSessionFile): UnifiedSession {
     walkthrough: data.walkthrough,
     slackShares: data.slackShares,
     shippedChangeDraft: data.shippedChangeDraft,
+    prDeploys: data.prDeploys,
     automation:
       data.automation ||
       (data.createdBy?.endsWith(" (automation)")
