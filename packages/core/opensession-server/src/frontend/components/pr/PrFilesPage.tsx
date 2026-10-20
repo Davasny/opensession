@@ -22,6 +22,7 @@ import { IconChevronLeft, IconChevronRight, IconFile, IconX } from "../icons";
 import { CodeFlow } from "../CodeFlow";
 import { CommentableDiff } from "../DeferredDiff";
 import { DiffPanel } from "../DiffPanel";
+import { DiffStat } from "../DiffStat";
 import { PrFileTree } from "./PrFileTree";
 import {
   PHONE_REVIEW_PILL,
@@ -257,14 +258,17 @@ export function PrFilesPage({
               Files
             </Button>
           )}
-          <span
-            className="mr-auto text-supporting tabular-nums text-dim"
-            role="status"
-          >
-            {reviewedFiles
-              ? `${reviewedCount}/${files.length} reviewed`
-              : `${files.length} files`}
-          </span>
+          <div className="mr-auto flex items-center gap-2.5 text-supporting">
+            <span className="tabular-nums text-dim" role="status">
+              {reviewedFiles
+                ? `${reviewedCount}/${files.length} reviewed`
+                : `${files.length} files`}
+            </span>
+            {/* Phone carries the same stat in its header subtitle. */}
+            {diffSource === "pull-request" && !isPhone && (
+              <DiffStat files={files} />
+            )}
+          </div>
           {codeView !== "flow" && (
             <>
               <Tooltip label="Previous file (K)">
