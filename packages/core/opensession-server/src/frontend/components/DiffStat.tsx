@@ -57,7 +57,10 @@ export function DiffStat({
       </>
     );
   };
-  const wrapper = cn("inline-flex items-center gap-1.5 tabular-nums", className);
+  const wrapper = cn(
+    "inline-flex items-center gap-1.5 tabular-nums",
+    className,
+  );
 
   if (rows.length < 2) return <span className={wrapper}>{counts(false)}</span>;
 
