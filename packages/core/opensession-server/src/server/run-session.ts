@@ -240,7 +240,7 @@ import {
   withUploadsNote,
 } from "./uploads";
 import {
-  attachedGithubRepos,
+  sessionGithubRepos,
   buildSessionNote,
   retrievedMemoryNoteFor,
   sessionRepoIds,
@@ -3242,7 +3242,7 @@ async function runSessionPromptInner(
       : undefined;
   const attachedGhRepos = session.automationDescendantPolicy
     ? undefined
-    : attachedGithubRepos(session);
+    : sessionGithubRepos(session);
   const runnerRun = await maybeLaunchRunnerRun(session, {
     prompt,
     hostId: startToken,
