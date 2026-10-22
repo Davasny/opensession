@@ -7,24 +7,11 @@ import { handleAgentMessageSummaryRoutes } from "./agent-message-summary";
  * next handler (see routes/index.ts for the dispatch order).
  */
 
-import {
-  executeArchiveOverrideProjection,
-  executeSessionProjection,
-} from "../session-projection-executor";
+import { executeSessionProjection } from "../session-projection-executor";
 import { transcriptSearchWorkerArgv } from "../../runner-host/exe";
 import { requestUser, type RouteContext } from "./context";
-import {
-  cancelAgentRunAndWait,
-  currentAgentRunToken,
-  isAgentSessionBusy,
-} from "../agent-runner";
-import {
-  archiveOlderThan,
-  isArchivedId,
-  setArchived,
-  unpinArchivedSessions,
-} from "../archive";
-import { audit } from "../audit";
+import { cancelAgentRunAndWait, isAgentSessionBusy } from "../agent-runner";
+import { archiveOlderThan, isArchivedId } from "../archive";
 import {
   pendingAskAwaitingAnswerSync,
   pendingAskIdsAwaitingAnswer,
@@ -41,7 +28,6 @@ import {
   type WorkspaceGroup,
 } from "@tellahq/opensession-protocol/workspace-group";
 import { deleteSessionTranscript, transcript } from "../actor-transcript";
-import { clearSessionFileArchive } from "../plain-archive";
 
 import {
   clientVisibleQueuedCount,
@@ -53,7 +39,6 @@ import { getReviewRequest } from "../review-requests";
 import { acceptSessionReview, setSessionReviewer } from "../session-review";
 import { getSessionControl, type SandboxRequest } from "../session-control";
 import {
-  requestTurnCancel,
   sessionQueueOwnerActive,
   watchExternalRunAndDrain,
 } from "../run-session";
@@ -81,6 +66,7 @@ import { MAX_PROMPT_IMAGES } from "@tellahq/opensession-protocol/session";
 import { SessionKernelActorError } from "../session-kernel/actor-client";
 import { notifyMentions } from "../mentions";
 import { unarchiveForHumanTurn } from "../session-unarchive";
+import { setSessionArchivedState } from "../session-archive-action";
 import {
   sessionChangesSince,
   sessionGatewayCommand,
@@ -1832,68 +1818,7 @@ export async function handleSessionsRoutes(
       return Response.json({ error: "Session not found" }, { status: 404 });
     const body = await req.json().catch(() => ({}));
     const archived = body.archived !== false;
-    // Archiving means "I'm done with this" — so stop an owned in-flight
-    // run rather than leaving an orphaned turn burning tokens after the
-    // session already reads as archived. Only runs owned by this process
-    // (busyHere) are stoppable; external/CLI runs can't be reached from
-    // here. Graceful Esc-style stop (fall back to hard cancel for runs
-    // with no interrupt support) keeps the transcript clean and resumable
-    // on unarchive.
-    let stoppedRun = false;
-    if (
-      archived &&
-      isAgentSessionBusy(
-        session.claudeSessionId,
-        session.codexThreadId,
-        session.id,
-      )
-    ) {
-      const target = sessionKernel(session.id).runStateProjection();
-      const targetRunId =
-        target.currentRunId ||
-        (target.state === "starting" || target.state === "preparing"
-          ? currentAgentRunToken(session.id)
-          : undefined);
-      if (targetRunId) {
-        try {
-          await requestTurnCancel(session.id, session, {
-            cancelId: `archive-stop:${session.id}:${targetRunId}:${target.generation}`,
-            expectedRunId: targetRunId,
-            expectedGeneration: target.generation,
-            source: "archive",
-          });
-          audit({
-            msg: "run_cancelled",
-            session_id: session.id,
-            source: "archive",
-          });
-          stoppedRun = true;
-        } catch {
-          // The actor fences cancels by run id + generation; losing the race
-          // (the run settled between our busy check and prepare) throws out
-          // of requestTurnCancel. That must not fail the archive — the usual
-          // case is the run having finished anyway.
-        }
-      }
-    }
-    await executeArchiveOverrideProjection(sessionId, () =>
-      setArchived(sessionId, archived),
-    );
-    // Plain done-tickets are archived via a file-level flag, not the
-    // registry; clearing only the registry would leave them archived. On
-    // unarchive, also clear the file flag so the session returns to "My
-    // sessions".
-    if (!archived) clearSessionFileArchive(sessionId);
-    await publishSessionChange(sessionId);
-    if (archived) {
-      // setArchived drops the plain id pin; also drop legacy alias-id pins,
-      // and the workspace pin once its last live session is archived (else the
-      // row resurfaces in Pinned when a new session joins the workspace).
-      await unpinArchivedSessions(
-        [session],
-        await getSessionListSnapshotAsync(),
-      );
-    }
+    const { stoppedRun } = await setSessionArchivedState(session, archived);
     return Response.json({ ok: true, stoppedRun });
   }
 
