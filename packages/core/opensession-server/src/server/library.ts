@@ -68,11 +68,7 @@ import { listInstalledPackages } from "./plugins";
 import { readMcpConfig } from "./connections";
 
 export type LibraryEntryType =
-  | "tool"
-  | "automation"
-  | "integration"
-  | "connection"
-  | "package";
+  "tool" | "automation" | "integration" | "connection" | "package";
 
 /**
  * How an entry gets installed — which decides what the card's button does and
@@ -294,8 +290,7 @@ function connectionEntries(): LibraryEntry[] {
       type: "connection" as const,
       slug: "apple-mobile",
       name: "Apple mobile",
-      description:
-        "Build Swift apps and prepare approved ad-hoc or TestFlight releases.",
+      description: "Build Swift apps and run ad-hoc or TestFlight releases.",
       category: "Developer tools",
       install: "guided" as const,
       installed: Boolean(

@@ -19,14 +19,8 @@ import {
 import { refreshPickerModels } from "../models";
 import {
   appleMobileSetupStatus,
-  appleReleaseApprover,
   configureAppleMobileConnections,
 } from "../apple-mobile-connections";
-import {
-  approveReleasePlan,
-  listReleaseApprovalRequests,
-} from "../../../../../integrations/apple-mobile/src/plans";
-import { stateDir } from "../paths";
 import {
   BRIDGE_PROVIDER_IDS,
   PROVIDER_APIS,
@@ -251,68 +245,6 @@ export async function handleConnectionsRoutes(
     }
   }
 
-  if (
-    path === "/api/connections/apple-mobile/approvals" &&
-    req.method === "GET"
-  ) {
-    const release = readMcpConfig().mcpServers["apple-release"];
-    const allowedUsers = Array.isArray(release?.allowedUsers)
-      ? release.allowedUsers
-      : [];
-    const approver = appleReleaseApprover(ctx.authUser, allowedUsers);
-    if (!ctx.authUser) {
-      return Response.json({
-        authenticated: false,
-        allowed: false,
-        requests: [],
-      });
-    }
-    const allowed = Boolean(approver);
-    return Response.json({
-      authenticated: true,
-      allowed,
-      requests: allowed
-        ? listReleaseApprovalRequests(stateDir("apple-mobile"))
-        : [],
-    });
-  }
-
-  const appleApprovalMatch = path.match(
-    /^\/api\/connections\/apple-mobile\/approvals\/([^/]+)$/,
-  );
-  if (appleApprovalMatch && req.method === "POST") {
-    if (!ctx.authUser) {
-      return Response.json(
-        { error: "Sign in to approve an Apple release" },
-        { status: 401 },
-      );
-    }
-    const release = readMcpConfig().mcpServers["apple-release"];
-    const allowedUsers = Array.isArray(release?.allowedUsers)
-      ? release.allowedUsers
-      : [];
-    const approver = appleReleaseApprover(ctx.authUser, allowedUsers);
-    if (!approver) {
-      return Response.json(
-        { error: "You are not allowed to approve Apple releases" },
-        { status: 403 },
-      );
-    }
-    try {
-      const request = approveReleasePlan(
-        decodeURIComponent(appleApprovalMatch[1]),
-        approver,
-        stateDir("apple-mobile"),
-      );
-      return Response.json({ ok: true, request });
-    } catch (error) {
-      return Response.json(
-        { error: error instanceof Error ? error.message : String(error) },
-        { status: 400 },
-      );
-    }
-  }
-
   if (path === "/api/connections/mcp" && req.method === "POST") {
     const body = await req.json().catch(() => null);
     if (!body) return Response.json({ error: "Invalid JSON" }, { status: 400 });
@@ -498,8 +430,7 @@ export async function handleConnectionsRoutes(
     if (!token)
       return Response.json({ error: "Paste an API token" }, { status: 400 });
     const cfg = readMcpConfig().mcpServers[name] as
-      | { url?: string; oauthUrl?: string }
-      | undefined;
+      { url?: string; oauthUrl?: string } | undefined;
     const target = cfg?.url || cfg?.oauthUrl;
     if (!target)
       return Response.json(
