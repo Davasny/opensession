@@ -430,7 +430,8 @@ export async function handleConnectionsRoutes(
     if (!token)
       return Response.json({ error: "Paste an API token" }, { status: 400 });
     const cfg = readMcpConfig().mcpServers[name] as
-      { url?: string; oauthUrl?: string } | undefined;
+      | { url?: string; oauthUrl?: string }
+      | undefined;
     const target = cfg?.url || cfg?.oauthUrl;
     if (!target)
       return Response.json(
