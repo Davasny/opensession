@@ -475,8 +475,13 @@ type PortalProcess = Pick<
   "pid" | "scopeUnit" | "shutdownGraceMs"
 >;
 
+type PortalLivenessOps = Pick<
+  PortalOps,
+  "probePort" | "pidAlive" | "groupAlive" | "scopeAlive"
+>;
+
 async function portalProcessAlive(
-  ops: PortalOps,
+  ops: PortalLivenessOps,
   processRef: PortalProcess,
 ): Promise<boolean> {
   // The systemd-run client remains in the gateway cgroup while its detached
@@ -491,15 +496,33 @@ async function portalProcessAlive(
   return ops.pidAlive(processRef.pid);
 }
 
-async function waitForPortalPort(
-  ops: PortalOps,
+/** How long a Portal must keep listening, with its process alive, after the
+ *  port first answers. Dev servers such as Next bind before they load their
+ *  config, so one that crashes on it answered once and was reported ready. */
+export const PORTAL_READY_SETTLE_MS = 3_000;
+
+function portalReadySettleMs(): number {
+  const override = Number(process.env.OPENSESSION_PORTAL_READY_SETTLE_MS);
+  return Number.isFinite(override) && override >= 0
+    ? override
+    : PORTAL_READY_SETTLE_MS;
+}
+
+export async function waitForPortalPort(
+  ops: PortalLivenessOps,
   port: number,
   processRef: PortalProcess,
   timeoutMs = 15_000,
+  settleMs = portalReadySettleMs(),
 ): Promise<"ready" | "exited" | "timeout"> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
-    if (await ops.probePort(port)) return "ready";
+    if (await ops.probePort(port)) {
+      await Bun.sleep(settleMs);
+      if (!(await portalProcessAlive(ops, processRef))) return "exited";
+      if (await ops.probePort(port)) return "ready";
+      continue;
+    }
     if (!(await portalProcessAlive(ops, processRef))) return "exited";
     await Bun.sleep(200);
   }

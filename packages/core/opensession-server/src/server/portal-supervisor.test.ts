@@ -54,6 +54,8 @@ const previousPath = process.env.PATH;
 const previousMemoryFloor =
   process.env.OPENSESSION_PORTAL_MIN_AVAILABLE_MEMORY_MB;
 process.env.OPENSESSION_PORTAL_MIN_AVAILABLE_MEMORY_MB = "1";
+// The ready settle window is covered in portal-ready-settle.test.ts.
+process.env.OPENSESSION_PORTAL_READY_SETTLE_MS = "0";
 const processTools = mkdtempSync(join(tmpdir(), "os-process-tools-"));
 let testSetsid = Bun.which("setsid");
 if (!testSetsid) {
