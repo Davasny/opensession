@@ -111,6 +111,10 @@ import {
   startSandboxPortalRelays,
 } from "./src/server/sandbox-portal-relay";
 import {
+  handleSandboxAgentUpgrade,
+  SANDBOX_AGENT_PATH,
+} from "./src/server/sandbox/agent-channel";
+import {
   handleVmDisplayUpgrade,
   isVmDisplayRoute,
 } from "./src/server/vm-display";
@@ -693,6 +697,9 @@ const server: import("bun").Server<WSClientData> = hotServe({
     if (path === "/sandbox-portal-ws") {
       return handleSandboxPortalRelayUpgrade(req, server, path);
     }
+    if (path === SANDBOX_AGENT_PATH) {
+      return handleSandboxAgentUpgrade(req, server, path);
+    }
     // A signed-in viewer of a Mac VM's display (the Desktop tab): the API
     // sign-in gate above already ran, the bridge resolves the VM's host.
     if (isVmDisplayRoute(path)) {
@@ -833,6 +840,10 @@ if (!g.__opensessionBooted) {
         const { startUseComputerIdleSweep } =
           await import("./src/server/sandbox/adapters/usecomputer");
         startUseComputerIdleSweep();
+        // Every provider: sleep idle Sandboxes on the two idle timers.
+        const { startSandboxIdleSweep } =
+          await import("./src/server/sandbox/idle");
+        startSandboxIdleSweep();
         await poolStartup;
       })
       .catch((e) => console.error("[sandbox-prewarm] startup failed:", e));

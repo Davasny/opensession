@@ -163,6 +163,10 @@ export const SETTINGS_KEYWORDS = {
     "usecomputer",
     "isolation",
     "compute",
+    "idle sleep",
+    "resume script",
+    "setup script",
+    "sandbox agent",
   ],
   integrations: [
     "tools",

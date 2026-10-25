@@ -15,6 +15,7 @@ import {
   sandboxHttpsPortFor,
 } from "./sandbox/preview-ports";
 import { hostSessionScratchDir } from "./session-scratch";
+import { noteSandboxActivity } from "./sandbox/idle";
 
 export type SandboxPortalGrant = {
   sessionId: string;
@@ -1020,6 +1021,9 @@ function createRelay(
       // four-minute app fetch timeout.
       idleTimeout: 255,
       fetch: async (request, relayServer) => {
+        // Any request to a Portal, whoever makes it, keeps its Sandbox
+        // around for the interaction window (sandbox/idle.ts).
+        noteSandboxActivity(identity, "human");
         if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
           return relayFetch(identity, request);
         let connection = connections.get(id);
