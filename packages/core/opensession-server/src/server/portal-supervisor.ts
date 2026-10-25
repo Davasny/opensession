@@ -597,12 +597,25 @@ async function portalLogHint(logPath: string | undefined): Promise<string> {
     : " Read its output with read_portal_log.";
 }
 
+/** Starts this process is still driving, by port and start time. The start
+ *  owns its record until it settles: a status read must not promote a server
+ *  that answered once (and may crash on its config) to awake meanwhile. */
+const startsInFlight: Set<string> = ((
+  globalThis as { __opensessionPortalStartsInFlight?: Set<string> }
+).__opensessionPortalStartsInFlight ??= new Set());
+
+function startKey(record: Pick<PortalRecord, "port" | "startedAt">): string {
+  return `${record.port}@${record.startedAt ?? ""}`;
+}
+
 async function listPortals(ops: PortalOps): Promise<PortalRecord[]> {
   const records = await ops.readRegistry();
   let changed = false;
   const checked = await Promise.all(
     records.map(async (record) => {
       if (record.state === "stopped" || record.state === "sleeping")
+        return record;
+      if (record.state === "starting" && startsInFlight.has(startKey(record)))
         return record;
       // A remote probe can fail transiently while the same app still runs.
       // Recheck failed records only while their original owner is alive;
@@ -757,54 +770,60 @@ async function startPortal(
     state: "starting",
     startedAt: new Date().toISOString(),
   };
-  await ops.writeRegistry(upsert(records, base));
-  let processRef: Required<Pick<PortalRecord, "pid">> & PortalProcess;
+  const inFlight = startKey(base);
+  startsInFlight.add(inFlight);
   try {
-    processRef = await input.launch({ name, command, port, url });
-  } catch (error) {
-    const failed = {
-      ...base,
-      state: "failed" as const,
-      lastError: (error as Error).message,
-    };
-    await ops.writeRegistry(upsert(records, failed));
-    throw error;
+    await ops.writeRegistry(upsert(records, base));
+    let processRef: Required<Pick<PortalRecord, "pid">> & PortalProcess;
+    try {
+      processRef = await input.launch({ name, command, port, url });
+    } catch (error) {
+      const failed = {
+        ...base,
+        state: "failed" as const,
+        lastError: (error as Error).message,
+      };
+      await ops.writeRegistry(upsert(records, failed));
+      throw error;
+    }
+    const record = { ...base, ...processRef };
+    await ops.writeRegistry(upsert(records, record));
+    const readyTimeoutMs = Math.min(
+      MAX_PORTAL_READY_MS,
+      Math.max(5_000, input.readyTimeoutMs ?? 15_000),
+    );
+    const readiness = await waitForPortalPort(
+      ops,
+      port,
+      processRef,
+      readyTimeoutMs,
+    );
+    if (readiness !== "ready") {
+      const lastError =
+        (readiness === "exited"
+          ? "The Portal process exited before it started listening."
+          : `Nothing listened on port ${port} within ${Math.round(readyTimeoutMs / 1_000)} seconds.`) +
+        (await portalLogHint(input.logPath));
+      // A timed-out process may still be compiling and can leave watchers or
+      // lock files behind. Never lose its PID by overwriting the failed record
+      // before the complete process group has been terminated.
+      await terminatePortalProcess(ops, processRef);
+      const failed = {
+        ...record,
+        pid: undefined,
+        scopeUnit: undefined,
+        state: "failed" as const,
+        lastError,
+      };
+      await ops.writeRegistry(upsert(records, failed));
+      throw new Error(lastError);
+    }
+    const awake = { ...record, state: "awake" as const };
+    await ops.writeRegistry(upsert(records, awake));
+    return { ...awake, url };
+  } finally {
+    startsInFlight.delete(inFlight);
   }
-  const record = { ...base, ...processRef };
-  await ops.writeRegistry(upsert(records, record));
-  const readyTimeoutMs = Math.min(
-    MAX_PORTAL_READY_MS,
-    Math.max(5_000, input.readyTimeoutMs ?? 15_000),
-  );
-  const readiness = await waitForPortalPort(
-    ops,
-    port,
-    processRef,
-    readyTimeoutMs,
-  );
-  if (readiness !== "ready") {
-    const lastError =
-      (readiness === "exited"
-        ? "The Portal process exited before it started listening."
-        : `Nothing listened on port ${port} within ${Math.round(readyTimeoutMs / 1_000)} seconds.`) +
-      (await portalLogHint(input.logPath));
-    // A timed-out process may still be compiling and can leave watchers or
-    // lock files behind. Never lose its PID by overwriting the failed record
-    // before the complete process group has been terminated.
-    await terminatePortalProcess(ops, processRef);
-    const failed = {
-      ...record,
-      pid: undefined,
-      scopeUnit: undefined,
-      state: "failed" as const,
-      lastError,
-    };
-    await ops.writeRegistry(upsert(records, failed));
-    throw new Error(lastError);
-  }
-  const awake = { ...record, state: "awake" as const };
-  await ops.writeRegistry(upsert(records, awake));
-  return { ...awake, url };
 }
 
 async function terminatePortalProcess(
