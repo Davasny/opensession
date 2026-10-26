@@ -48,6 +48,9 @@ export interface SandboxRepoOverride {
    *  Beats the workspace and personal defaults; an explicit per-session
    *  choice still wins. */
   sessionDefault?: RunnableSandboxProviderId | "none";
+  /** The GPU a new session gets when it starts on this repo's Modal
+   *  default (`sessionDefault: "modal"`). */
+  sessionGpu?: SandboxGpu;
   /** Where this repo's Portals run for a session that lives on this machine:
    *  a Sandbox provisioned on demand for the dev server alone
    *  (portal-sandbox.ts). Absent = the Portal runs beside the session. */
@@ -232,6 +235,8 @@ export function sandboxConfig(): SandboxConfig {
               : isRunnableSandboxProvider(o?.sessionDefault)
                 ? o.sessionDefault
                 : undefined;
+          const sessionGpu =
+            sessionDefault === "modal" ? sandboxGpu(o?.sessionGpu) : undefined;
           const portalSandbox = isRunnableSandboxProvider(o?.portalSandbox)
             ? o.portalSandbox
             : undefined;
@@ -247,6 +252,7 @@ export function sandboxConfig(): SandboxConfig {
             perRepo[repoId] = {
               ...(provider ? { provider } : {}),
               ...(sessionDefault ? { sessionDefault } : {}),
+              ...(sessionGpu ? { sessionGpu } : {}),
               ...(portalSandbox ? { portalSandbox } : {}),
               ...(prebuildPortal ? { prebuildPortal } : {}),
               ...(preSetupScript ? { preSetupScript } : {}),
@@ -702,7 +708,12 @@ export function setRepoSandboxDefault(
   repoId: string,
   value: string | null,
 ): RunnableSandboxProviderId | "none" | null {
-  const normalized = value?.trim().toLowerCase() || "workspace";
+  // "modal:T4": Modal with a GPU, as the Machine menu names it.
+  const [choice = "", gpuName] = (value?.trim() || "").split(":");
+  const normalized = choice.toLowerCase() || "workspace";
+  const gpu = gpuName ? sandboxGpu(gpuName) : undefined;
+  if (gpuName && (!gpu || normalized !== "modal"))
+    throw new Error(`Unknown sandbox choice "${value}"`);
   if (
     normalized !== "workspace" &&
     normalized !== "none" &&
@@ -733,6 +744,8 @@ export function setRepoSandboxDefault(
         : {};
     if (normalized === "workspace") delete entry.sessionDefault;
     else entry.sessionDefault = normalized;
+    if (gpu) entry.sessionGpu = gpu;
+    else delete entry.sessionGpu;
     if (Object.keys(entry).length) perRepo[repoId] = entry;
     else delete perRepo[repoId];
     if (Object.keys(perRepo).length) raw.perRepo = perRepo;
@@ -804,6 +817,15 @@ export function repoSandboxDefault(
 ): RunnableSandboxProviderId | "none" | null {
   if (!repoId) return null;
   return sandboxConfig().perRepo?.[repoId]?.sessionDefault ?? null;
+}
+
+/** The GPU new sessions on `repoId` get from its Modal default, if any. */
+export function repoSandboxGpu(
+  repoId: string | undefined,
+): SandboxGpu | undefined {
+  if (!repoId) return undefined;
+  const entry = sandboxConfig().perRepo?.[repoId];
+  return entry?.sessionDefault === "modal" ? entry.sessionGpu : undefined;
 }
 
 /** Keep one prepared Sandbox waiting for `repoId` on `provider`, or stop

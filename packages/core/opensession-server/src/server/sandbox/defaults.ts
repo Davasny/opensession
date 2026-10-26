@@ -6,6 +6,7 @@ import {
   RUNNABLE_SANDBOX_PROVIDERS,
   type RunnableSandboxProviderId,
   repoSandboxDefault,
+  repoSandboxGpu,
   resolveRequestedSandbox,
   sandboxConfig,
   sandboxProviderCertified,
@@ -28,8 +29,9 @@ export interface SandboxDefaultsStatus {
   personal: PersonalSandboxDefault;
   /** What a new session starts in, for `repo` when one was named. */
   effective: WorkspaceSandboxDefault;
-  /** Per-repo overrides; a repo absent here follows workspace and personal. */
-  repos: Record<string, WorkspaceSandboxDefault>;
+  /** Per-repo overrides; a repo absent here follows workspace and personal.
+   *  Modal with a GPU reads as the Machine menu names it (`modal:T4`). */
+  repos: Record<string, string>;
   /** Repos whose Portals run in a Sandbox of their own for sessions on this
    * machine (repo id → provider); a repo absent here runs them beside the
    * session. */
@@ -57,12 +59,15 @@ export function personalSandboxDefault(user: string): PersonalSandboxDefault {
   return "workspace";
 }
 
-export function repoSandboxDefaults(): Record<string, WorkspaceSandboxDefault> {
-  const out: Record<string, WorkspaceSandboxDefault> = {};
+export function repoSandboxDefaults(): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const [repoId, override] of Object.entries(
     sandboxConfig().perRepo || {},
   )) {
-    if (override.sessionDefault) out[repoId] = override.sessionDefault;
+    if (override.sessionDefault)
+      out[repoId] = override.sessionGpu
+        ? `${override.sessionDefault}:${override.sessionGpu}`
+        : override.sessionDefault;
   }
   return out;
 }
@@ -141,9 +146,10 @@ export function saveRepoSandboxDefault(
   value: string,
 ): SandboxDefaultsStatus {
   const normalized = value.trim().toLowerCase();
-  if (normalized !== "workspace" && normalized !== "none")
-    assertAvailable(normalized);
-  setRepoSandboxDefault(repoId, normalized);
+  const provider = normalized.split(":")[0] || "";
+  if (provider !== "workspace" && provider !== "none")
+    assertAvailable(provider);
+  setRepoSandboxDefault(repoId, value.trim());
   return sandboxDefaultsStatus("Anonymous", repoId);
 }
 
@@ -167,6 +173,22 @@ export function savePersonalSandboxDefault(
     assertAvailable(normalized);
   patchUiPrefs(user || "Anonymous", { [PERSONAL_PREF_KEY]: normalized });
   return sandboxDefaultsStatus(user || "Anonymous");
+}
+
+/** The GPU a new session gets when neither its Sandbox nor its GPU was
+ * chosen and its project's default is Modal with a GPU. */
+export function defaultSandboxGpu(
+  requestedSandbox: unknown,
+  requestedGpu: unknown,
+  provider: string | null | undefined,
+  repoId?: string,
+): string | undefined {
+  if (requestedSandbox !== undefined && requestedSandbox !== null)
+    return undefined;
+  if (requestedGpu !== undefined && requestedGpu !== null) return undefined;
+  if (provider !== "modal" || repoSandboxDefault(repoId) !== "modal")
+    return undefined;
+  return repoSandboxGpu(repoId);
 }
 
 /** Apply defaults only when a caller omitted `sandbox`. false/""/"local"

@@ -46,7 +46,11 @@ import {
   setRepoSandboxDefault,
   setWorkspaceSandboxDefault,
 } from "./config";
-import { resolveInteractiveSandbox } from "./defaults";
+import {
+  defaultSandboxGpu,
+  repoSandboxDefaults,
+  resolveInteractiveSandbox,
+} from "./defaults";
 import {
   connectSandboxProvider,
   setSandboxConnectionQualification,
@@ -147,6 +151,41 @@ describe("sandboxCapabilityStatus (the /api/sandbox/status payload)", () => {
     });
     expect(() => setRepoSandboxDefault("tella", "box")).toThrow(
       /not currently available/,
+    );
+  });
+
+  test("a repo's Modal default may carry a GPU, which new sessions inherit", () => {
+    write({ provider: "daytona" });
+    connectSandboxProvider("modal", {
+      secret: "test-modal-secret",
+      settings: { tokenId: "ak-test" },
+    });
+    setSandboxConnectionQualification("modal", { status: "ready" });
+    expect(setRepoSandboxDefault("tella", "modal:T4")).toBe("modal");
+    expect(JSON.parse(readFileSync(cfgPath(), "utf-8")).perRepo).toEqual({
+      tella: { sessionDefault: "modal", sessionGpu: "T4" },
+    });
+    expect(repoSandboxDefaults()).toEqual({ tella: "modal:T4" });
+    // Only an unchosen Machine follows it.
+    expect(defaultSandboxGpu(undefined, undefined, "modal", "tella")).toBe(
+      "T4",
+    );
+    expect(defaultSandboxGpu("modal", undefined, "modal", "tella")).toBe(
+      undefined,
+    );
+    expect(defaultSandboxGpu(undefined, undefined, "modal", "other")).toBe(
+      undefined,
+    );
+    // Plain Modal drops the GPU.
+    setRepoSandboxDefault("tella", "modal");
+    expect(JSON.parse(readFileSync(cfgPath(), "utf-8")).perRepo).toEqual({
+      tella: { sessionDefault: "modal" },
+    });
+    expect(() => setRepoSandboxDefault("tella", "daytona:T4")).toThrow(
+      /Unknown sandbox choice/,
+    );
+    expect(() => setRepoSandboxDefault("tella", "modal:H100")).toThrow(
+      /Unknown sandbox choice/,
     );
   });
 

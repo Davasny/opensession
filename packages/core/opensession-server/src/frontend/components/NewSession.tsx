@@ -572,10 +572,11 @@ export function NewSession({
       : (sandboxStatus.providers || [])
           .filter((p) => p.configured && p.certified)
           .map((p) => p.id);
+    // A Modal default may carry a GPU (`modal:T4`).
     setSandboxProvider(
       repoSandboxDefault &&
         repoSandboxDefault !== "none" &&
-        ready.includes(repoSandboxDefault)
+        ready.includes(splitSandboxChoice(repoSandboxDefault).provider)
         ? repoSandboxDefault
         : "",
     );

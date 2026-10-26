@@ -10,6 +10,10 @@ import {
   saveRepoPreSetupScript,
   type SandboxLifecycleSettings,
 } from "../../lib/api/sandboxes";
+import {
+  sandboxMachineChoices,
+  splitSandboxChoice,
+} from "../../lib/ready-sandbox-providers";
 import { Button } from "../../ui/button";
 import { SandboxScriptDialog } from "./SandboxScriptDialog";
 import { errorMessage } from "../../lib/error-message";
@@ -31,6 +35,7 @@ function providerLabel(id: string): string {
   if (id === "tart") return "Sandbox · Mac VM";
   if (id === "usecomputer") return "Sandbox · use.computer";
   if (id === "modal") return "Sandbox · Modal";
+  if (id.startsWith("modal:")) return `Sandbox · Modal · ${id.slice(6)} GPU`;
   return id;
 }
 
@@ -212,10 +217,11 @@ function ProjectSandboxDefaults() {
       <SettingCard>
         {repos.map((repo) => {
           const value = defaults.repos?.[repo.id] ?? "workspace";
+          // Modal with a GPU is its own choice (`modal:T4`).
           const unavailable =
             value !== "workspace" &&
             value !== "none" &&
-            !providers.includes(value);
+            !providers.includes(splitSandboxChoice(value).provider);
           const portals = defaults.portals?.[repo.id] ?? "none";
           const portalsUnavailable =
             portals !== "none" && !providers.includes(portals);
@@ -252,7 +258,7 @@ function ProjectSandboxDefaults() {
                               },
                             ]
                           : []),
-                        ...providers.map((id) => ({
+                        ...sandboxMachineChoices(providers).map((id) => ({
                           value: id,
                           label: providerLabel(id),
                         })),

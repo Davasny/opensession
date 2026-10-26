@@ -119,7 +119,10 @@ import {
   sandboxConfig,
   sandboxesEnabled,
 } from "./sandbox/config";
-import { resolveInteractiveSandbox } from "./sandbox/defaults";
+import {
+  defaultSandboxGpu,
+  resolveInteractiveSandbox,
+} from "./sandbox/defaults";
 import { resolveRequestedSandboxGpu, type SandboxGpu } from "./sandbox/config";
 import {
   getRunner,
@@ -2617,8 +2620,17 @@ export async function handleCreateSessionMessage(
   }
   // null = host (no sandbox recorded on the session).
   const createSandboxProvider = sandboxResolved.provider;
+  // An unchosen Machine follows the project's default, GPU included.
   const gpuResolved = resolveRequestedSandboxGpu(
-    forkSource ? undefined : msg.sandboxGpu,
+    forkSource
+      ? undefined
+      : (msg.sandboxGpu ??
+          defaultSandboxGpu(
+            msg.sandbox,
+            msg.sandboxGpu,
+            createSandboxProvider,
+            repo.id,
+          )),
     createSandboxProvider,
   );
   if (!gpuResolved.ok) {
