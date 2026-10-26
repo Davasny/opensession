@@ -155,6 +155,7 @@ import {
   ensureAskCheckout,
   ensureScratchDir,
   getRepo,
+  REPOS,
   repoForPath,
   repoForPathOrNull,
   reviveWorktree,
@@ -1983,6 +1984,22 @@ export function sandboxRunSecuritySpec(
   };
 }
 
+/** Repositories a session's runs may read beside their own: the owning
+ *  automation's list and the repository's configured one
+ *  (RepoSection.readRepos, such as a private dependency fork). */
+function sessionReadRepos(
+  session: Pick<UnifiedSession, "repo">,
+  automationReadRepos: readonly string[] | undefined,
+): string[] | undefined {
+  const repos = [
+    ...new Set([
+      ...(automationReadRepos || []),
+      ...((session.repo ? REPOS[session.repo]?.readRepos : undefined) || []),
+    ]),
+  ];
+  return repos.length ? repos : undefined;
+}
+
 export async function maybeLaunchSandboxedRun(
   session: UnifiedSession,
   opts: {
@@ -2279,6 +2296,7 @@ export async function maybeLaunchSandboxedRun(
       publicationPolicy: security.publicationPolicy,
       confirmTools: STRIPE_CONFIRM_TOOLS,
       aws: false,
+      readRepos: sessionReadRepos(session, owningAutomation?.readRepos),
       author: commitAuthorFor(
         opts.isAutomationSession ? undefined : opts.user,
         opts.isAutomationSession ? undefined : sessionPrincipal(session),
@@ -3426,7 +3444,7 @@ async function runSessionPromptInner(
           aws:
             (!isAutomationSession && !session.plainDiscussionId) ||
             agentAwsCredsForUntrustedRuns(),
-          readRepos: automationReadRepos,
+          readRepos: sessionReadRepos(session, automationReadRepos),
           attachedRepos: attachedGhRepos,
           author: commitAuthorFor(user, sessionPrincipal(session)),
           user: runInputs.user,
