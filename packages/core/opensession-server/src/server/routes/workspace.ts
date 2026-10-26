@@ -26,7 +26,10 @@ import {
   isRemoteSandboxProvider,
   resolveRequestedSandbox,
 } from "../sandbox/config";
-import { resolveInteractiveSandbox } from "../sandbox/defaults";
+import {
+  defaultSandboxGpu,
+  resolveInteractiveSandbox,
+} from "../sandbox/defaults";
 import {
   SESSIONS_DIR,
   findSessionAsync,
@@ -971,6 +974,13 @@ export async function handleWorkspaceRoutes(
     );
     if (!sandboxResolved.ok)
       return Response.json({ error: sandboxResolved.error }, { status: 400 });
+    // A sibling on the project's GPU default gets its GPU too.
+    const siblingGpu = defaultSandboxGpu(
+      body.sandbox,
+      undefined,
+      sandboxResolved.provider,
+      repoId,
+    );
     // A sibling in a ticket-linked session/workspace stays linked to the ticket
     // (conversation tab + ticket→session mapping follow the workspace).
     const siblingWorkspace = workspaceId
@@ -1005,6 +1015,7 @@ export async function handleWorkspaceRoutes(
       // sandbox check vetted (validating one model and running another
       // would make the create-gate meaningless).
       ...(siblingModel ? { model: siblingModel } : {}),
+      ...(siblingGpu ? { sandboxGpu: siblingGpu } : {}),
       ...(sandboxResolved.provider
         ? {
             sandbox: {

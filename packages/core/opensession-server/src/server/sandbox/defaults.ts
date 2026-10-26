@@ -14,6 +14,7 @@ import {
   setRepoPortalSandbox,
   setRepoSandboxDefault,
   setWorkspaceSandboxDefault,
+  type SandboxGpu,
 } from "./config";
 import {
   getSandboxConnection,
@@ -182,7 +183,7 @@ export function defaultSandboxGpu(
   requestedGpu: unknown,
   provider: string | null | undefined,
   repoId?: string,
-): string | undefined {
+): SandboxGpu | undefined {
   if (requestedSandbox !== undefined && requestedSandbox !== null)
     return undefined;
   if (requestedGpu !== undefined && requestedGpu !== null) return undefined;
