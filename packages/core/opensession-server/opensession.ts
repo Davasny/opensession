@@ -840,6 +840,9 @@ if (!g.__opensessionBooted) {
         const { startUseComputerIdleSweep } =
           await import("./src/server/sandbox/adapters/usecomputer");
         startUseComputerIdleSweep();
+        const { startModalIdleSweep } =
+          await import("./src/server/sandbox/adapters/modal");
+        startModalIdleSweep();
         // Every provider: sleep idle Sandboxes on the two idle timers.
         const { startSandboxIdleSweep } =
           await import("./src/server/sandbox/idle");

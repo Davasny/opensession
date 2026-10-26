@@ -11,15 +11,17 @@
  */
 
 /** The provider ids the registry knows (all implemented — see index.ts).
- *  Persisted sessions may still carry a retired id (docker, modal, e2b,
- *  microvm, lambda-microvm); those fail explicitly at dispatch. `tart` is a
+ *  Persisted sessions may still carry a retired id (docker, e2b, microvm,
+ *  lambda-microvm); those fail explicitly at dispatch. `modal` was retired
+ *  and came back with GPU support (adapters/modal.ts). `tart` is a
  *  macOS VM on a paired Mac Runner (adapters/tart.ts). */
 export type SandboxProviderId =
   | "local"
   | "daytona"
   | "box"
   | "tart"
-  | "usecomputer";
+  | "usecomputer"
+  | "modal";
 
 /** Selection authority for starting new work on a configured provider. */
 export type SandboxProviderUsability =
@@ -72,6 +74,10 @@ export interface SandboxSessionSpec {
    * checkpoint's head with its uncommitted changes in place. A workspace
    * that already exists on the sandbox disk keeps that disk instead. */
   restoreCheckpoint?: { ref: string; commit: string; branch: string };
+  /** The GPU a new container carries (modal only: "T4" or "L4"). A wake
+   *  keeps the GPU the container was created with unless this names
+   *  another. */
+  gpu?: string;
 }
 
 export interface ExecOpts {

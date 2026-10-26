@@ -40,6 +40,7 @@ function providerName(id: string): string {
   if (id === "box") return "Boat";
   if (id === "tart") return "Mac VM";
   if (id === "usecomputer") return "use.computer";
+  if (id === "modal") return "Modal";
   return id;
 }
 

@@ -2113,6 +2113,8 @@ export async function maybeLaunchSandboxedRun(
             }
           : {
               cwd: opts.cwd,
+              // A GPU the session asked its Modal Sandbox for.
+              ...(session.sandboxGpu ? { gpu: session.sandboxGpu } : {}),
               // Bind-mode containers mount attached repos too (a changed set
               // recreates the container); volume mode rejects them in ensure().
               attachedDirs: (session.attachedRepos || [])

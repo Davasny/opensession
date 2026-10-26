@@ -62,6 +62,7 @@ import {
 } from "./sandbox/config";
 import { isShuttingDown } from "./shutdown-state";
 import { resolveInteractiveSandbox } from "./sandbox/defaults";
+import { resolveRequestedSandboxGpu } from "./sandbox/config";
 import { sessionSpeed } from "@tellahq/opensession-protocol/session";
 import {
   findSession,
@@ -724,6 +725,7 @@ registerSessionControl({
       user,
       createdByLogin,
       sandbox,
+      sandboxGpu: sandboxGpuInput,
       forkFrom,
       accountId: accountIdInput,
       plainDiscussionId,
@@ -893,6 +895,11 @@ registerSessionControl({
         : resolveInteractiveSandbox(sandbox, user, repo.id, model);
     if (!sandboxResolved.ok) throw new Error(sandboxResolved.error);
     const sandboxProvider = sandboxResolved.provider;
+    const gpuResolved = resolveRequestedSandboxGpu(
+      forkFrom ? undefined : sandboxGpuInput,
+      sandboxProvider,
+    );
+    if (!gpuResolved.ok) throw new Error(gpuResolved.error);
     if (automationDescendantPolicy && !requestedRunnerId && !sandboxProvider)
       throw new Error(
         "Automation descendants require an explicit sandbox or isolation-approved Runner",
@@ -1340,6 +1347,7 @@ ${createMentionsNote}`;
       // like the web path) — the sandbox launcher fail-closes to [].
       runMcpServers: effectiveMcpServers,
       sandboxProvider,
+      ...(gpuResolved.gpu ? { sandboxGpu: gpuResolved.gpu } : {}),
       runnerTarget: selectedRunner
         ? {
             id: selectedRunner.id,

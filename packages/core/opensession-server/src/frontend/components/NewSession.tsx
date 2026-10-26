@@ -63,8 +63,10 @@ import { getSendKeyPref, onSendKeyChanged } from "../lib/send-key-pref";
 import { effectiveSendKey, MOD_ENTER_GLYPH } from "../lib/send-key";
 import { NO_REPO } from "../lib/session-repo";
 import {
+  sandboxMachineChoices,
   sandboxProviderLabel,
   sandboxProviderNote,
+  splitSandboxChoice,
 } from "../lib/ready-sandbox-providers";
 import {
   getSessionCheckoutPrefs,
@@ -586,8 +588,10 @@ export function NewSession({
         .filter((p) => p.configured && p.certified)
         .map((p) => p.id);
   const sandboxAvailable = readySandboxProviders.length > 0;
+  // The Machine choice: a provider, or Modal with a GPU (`modal:T4`).
+  const sandboxChoice = splitSandboxChoice(sandboxProvider);
   const selectedSandboxAvailable =
-    !sandboxProvider || readySandboxProviders.includes(sandboxProvider);
+    !sandboxProvider || readySandboxProviders.includes(sandboxChoice.provider);
   const showSandboxPicker =
     !!sandboxStatus && (sandboxAvailable || !!sandboxProvider);
   const sandboxLabel = (id: string) =>
@@ -598,7 +602,7 @@ export function NewSession({
   // is no longer ready (a project default), so the choice stays visible.
   const sandboxChoices = [
     "",
-    ...readySandboxProviders,
+    ...sandboxMachineChoices(readySandboxProviders),
     ...(sandboxProvider && !selectedSandboxAvailable ? [sandboxProvider] : []),
   ];
   // The repo's first declared Portal, offered to start with the session.
@@ -634,7 +638,9 @@ export function NewSession({
   // Sandbox sessions adopt a full-runner prewarm that starts on the first
   // keystroke. Strictly fire-and-forget: failure must never surface or block
   // typing.
-  const shouldPrewarm = sandboxProvider !== "" && selectedSandboxAvailable;
+  // A GPU machine is never prewarmed: it would hold a GPU while you type.
+  const shouldPrewarm =
+    sandboxProvider !== "" && selectedSandboxAvailable && !sandboxChoice.gpu;
   const [sandboxWarmed, setSandboxWarmed] = useState(false);
   const lastPrewarmAtRef = useRef(0);
   useEffect(() => {
@@ -648,10 +654,10 @@ export function NewSession({
     if (!shouldPrewarm || !hasPromptText || busy) return;
     if (Date.now() - lastPrewarmAtRef.current < 60_000) return;
     lastPrewarmAtRef.current = Date.now();
-    requestSandboxPrewarm(sandboxProvider, repo, getCurrentUser())
+    requestSandboxPrewarm(sandboxChoice.provider, repo, getCurrentUser())
       .then((r) => setSandboxWarmed(r.state === "ready"))
       .catch(() => {});
-  }, [hasPromptText, shouldPrewarm, sandboxProvider, repo, busy]);
+  }, [hasPromptText, shouldPrewarm, sandboxChoice.provider, repo, busy]);
 
   // An empty selection means every available service; one or more picks narrow
   // the session to those services. Command-menu shortcuts seed this same state
@@ -1171,7 +1177,10 @@ export function NewSession({
     if (accountProvider && accountId) createMessage.accountId = accountId;
     // Once defaults have loaded, Host is an explicit override ("local").
     // Omitting the field would make the server re-apply the user's default.
-    if (sandboxStatus) createMessage.sandbox = sandboxProvider || "local";
+    if (sandboxStatus) {
+      createMessage.sandbox = sandboxChoice.provider || "local";
+      if (sandboxChoice.gpu) createMessage.sandboxGpu = sandboxChoice.gpu;
+    }
     if (selectedMcpServers.length) {
       createMessage.mcpServers = selectedMcpServers;
     }
@@ -1819,7 +1828,10 @@ export function NewSession({
                       <Menu.Popup className="max-w-[min(340px,calc(100vw-1rem))]">
                         {sandboxChoices.map((id) => {
                           const available =
-                            id === "" || readySandboxProviders.includes(id);
+                            id === "" ||
+                            readySandboxProviders.includes(
+                              splitSandboxChoice(id).provider,
+                            );
                           const opt = {
                             id,
                             note: available

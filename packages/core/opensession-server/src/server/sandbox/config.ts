@@ -202,6 +202,7 @@ const PROVIDER_IDS = new Set<string>([
   "box",
   "tart",
   "usecomputer",
+  "modal",
 ]);
 
 function asProviderId(v: unknown): SandboxProviderId | undefined {
@@ -534,16 +535,50 @@ export const RUNNABLE_SANDBOX_PROVIDERS = [
   "box",
   "tart",
   "usecomputer",
+  "modal",
 ] as const;
 export type RunnableSandboxProviderId =
   (typeof RUNNABLE_SANDBOX_PROVIDERS)[number];
+
+/** The GPUs a Sandbox can carry, and the one provider that offers them. */
+export const SANDBOX_GPUS = ["T4", "L4"] as const;
+export type SandboxGpu = (typeof SANDBOX_GPUS)[number];
+
+export function sandboxGpu(value: unknown): SandboxGpu | undefined {
+  if (typeof value !== "string") return undefined;
+  const upper = value.trim().toUpperCase();
+  return (SANDBOX_GPUS as readonly string[]).includes(upper)
+    ? (upper as SandboxGpu)
+    : undefined;
+}
+
+/** Check a create request's GPU against the Sandbox it chose: absent is
+ *  fine anywhere; a GPU needs a Modal Sandbox and a known GPU name. */
+export function resolveRequestedSandboxGpu(
+  value: unknown,
+  provider: string | null | undefined,
+): { ok: true; gpu?: SandboxGpu } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === "")
+    return { ok: true };
+  const gpu = sandboxGpu(value);
+  if (!gpu)
+    return {
+      ok: false,
+      error: `Unknown GPU "${String(value)}". Choose ${SANDBOX_GPUS.join(" or ")}.`,
+    };
+  if (provider !== "modal")
+    return {
+      ok: false,
+      error: "A GPU needs a Modal Sandbox: choose Modal as the Machine.",
+    };
+  return { ok: true, gpu };
+}
 
 /** Provider ids Open Session once shipped. A persisted session may still name
  *  one; it can no longer be selected, woken, or recreated. */
 export const RETIRED_SANDBOX_PROVIDERS = new Set<string>([
   "docker",
   "e2b",
-  "modal",
   "microvm",
   "lambda-microvm",
 ]);
@@ -604,6 +639,11 @@ export const SANDBOX_PROVIDER_CERTIFICATIONS: Record<
     behavioralPassedAt: "2026-09-21",
     warmRestorePassedAt: "2026-09-21",
     note: "macOS VM on a reserved use.computer Mac: live qualification, remote run, snapshot sleep/wake, desktop, and terminal passed",
+  }),
+  modal: certification({
+    behavioralPassedAt: "2026-10-26",
+    warmRestorePassedAt: "2026-10-26",
+    note: "Linux container with an optional T4 or L4 GPU: live qualification, exec and upload, Vulkan and CUDA on both GPUs, and filesystem-image sleep/wake passed",
   }),
 };
 
@@ -1017,7 +1057,7 @@ function sandboxProviderSelectionError(
     }
     return `Sandbox provider "${id}" is not currently available.`;
   }
-  return `Sandbox provider "${id}" is not configured: connect ${id === "box" ? "Boat" : id === "tart" ? "a Mac VM host" : id === "usecomputer" ? "use.computer" : "Daytona"} in Workspace > Sandboxes.`;
+  return `Sandbox provider "${id}" is not configured: connect ${id === "box" ? "Boat" : id === "tart" ? "a Mac VM host" : id === "usecomputer" ? "use.computer" : id === "modal" ? "Modal" : "Daytona"} in Workspace > Sandboxes.`;
 }
 
 /** Whether the provider has enabled connection configuration. */

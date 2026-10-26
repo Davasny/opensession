@@ -127,6 +127,7 @@ type TermTargetKind =
   | "box"
   | "tart"
   | "usecomputer"
+  | "modal"
   | "microvm"
   | "runner";
 
@@ -295,6 +296,18 @@ async function resolveTarget(
         displayCwd: target.cwd,
         argv: target.argv,
         env: target.env,
+      };
+    }
+
+    if (sb.provider === "modal" && sandboxProviderConfigured("modal")) {
+      // Modal has no SSH: the shell is an exec with a PTY.
+      const { modalPtySession } = await import("./sandbox/adapters/modal");
+      const sandboxId = sb.sandboxId;
+      return {
+        kind: "remote",
+        target: "modal",
+        displayCwd: cwd,
+        connect: (io) => modalPtySession(sandboxId, cwd, io),
       };
     }
 

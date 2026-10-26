@@ -30,6 +30,7 @@ function providerLabel(id: string): string {
   if (id === "box") return "Sandbox · Boat";
   if (id === "tart") return "Sandbox · Mac VM";
   if (id === "usecomputer") return "Sandbox · use.computer";
+  if (id === "modal") return "Sandbox · Modal";
   return id;
 }
 

@@ -200,6 +200,7 @@ describe("sandboxCapabilityStatus (the /api/sandbox/status payload)", () => {
       "box",
       "tart",
       "usecomputer",
+      "modal",
     ]);
     expect(s.providers.every((p) => !p.configured)).toBe(true);
     expect(s.providers.filter((p) => p.certified).map((p) => p.id)).toEqual([
@@ -207,6 +208,7 @@ describe("sandboxCapabilityStatus (the /api/sandbox/status payload)", () => {
       "box",
       "tart",
       "usecomputer",
+      "modal",
     ]);
     expect(s.killSwitch).toBe(!sandboxesEnabled());
   });
@@ -270,7 +272,7 @@ describe("sandboxCapabilityStatus (the /api/sandbox/status payload)", () => {
   });
 
   test("retired provider ids in the file resolve to local", () => {
-    write({ provider: "docker", sessionDefault: "modal" });
+    write({ provider: "docker", sessionDefault: "e2b" });
     expect(sandboxConfig().provider).toBe("local");
     expect(sandboxConfig().sessionDefault).toBeUndefined();
   });
@@ -463,7 +465,7 @@ describe("resolveRequestedSandbox (create-path validation)", () => {
   test("retired provider ids fail with a retirement error", () => {
     write({ provider: "daytona" });
     ready("daytona");
-    for (const retired of ["docker", "modal", "e2b", "lambda-microvm"]) {
+    for (const retired of ["docker", "e2b", "lambda-microvm"]) {
       const r = resolveRequestedSandbox(retired);
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error).toContain("retired");

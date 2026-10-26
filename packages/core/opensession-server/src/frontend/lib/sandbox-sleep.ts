@@ -15,6 +15,7 @@ const KEEPS = new Map<string, SandboxSleepKeeps>([
   ["box", { memory: false, disk: true }],
   ["tart", { memory: false, disk: true }],
   ["usecomputer", { memory: false, disk: true }],
+  ["modal", { memory: false, disk: true }],
 ]);
 
 export function sandboxSleepKeeps(provider: string): SandboxSleepKeeps {
