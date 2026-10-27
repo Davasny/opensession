@@ -1,40 +1,51 @@
 type SessionListResponseRevisionState = typeof globalThis & {
-  __osSessionListResponseRevision?: number;
+	__osSessionListResponseRevision?: number;
 };
 
 const state = globalThis as SessionListResponseRevisionState;
 
 export function sessionListResponseRevision(): number {
-  return state.__osSessionListResponseRevision ?? 0;
+	return state.__osSessionListResponseRevision ?? 0;
 }
 
 export function advanceSessionListResponseRevision(): void {
-  state.__osSessionListResponseRevision = sessionListResponseRevision() + 1;
+	state.__osSessionListResponseRevision = sessionListResponseRevision() + 1;
 }
+
+const MAX_REVISION_BUILDS = 3;
 
 /**
  * Rebuild when a session mutation lands while a response is being assembled.
  * Otherwise every request coalesced onto that older build receives its stale
  * result and has no later WebSocket frame to trigger another refresh.
+ *
+ * Bounded: when builds are slow and sessions change constantly, every build
+ * overlaps a mutation, and an unbounded loop never answers anyone. After the
+ * last attempt the newest result is returned; response snapshots expire on a
+ * short TTL, so the next poll rebuilds past the mutation it missed.
  */
 export async function buildAtCurrentSessionListRevision<T>(
-  build: () => Promise<T>,
+	build: () => Promise<T>,
 ): Promise<T> {
-  while (true) {
-    const revision = sessionListResponseRevision();
-    const result = await build();
-    if (revision === sessionListResponseRevision()) return result;
-  }
+	for (let attempt = 1; ; attempt++) {
+		const revision = sessionListResponseRevision();
+		const result = await build();
+		if (
+			revision === sessionListResponseRevision() ||
+			attempt >= MAX_REVISION_BUILDS
+		)
+			return result;
+	}
 }
 
 /** Personal overlays change sidebar membership without changing a session row. */
 export function invalidateSidebarSessionResponses(): void {
-  advanceSessionListResponseRevision();
-  const snapshots = (
-    globalThis as typeof globalThis & {
-      __osSessionsResponseSnapshots?: Map<string, { expiresAt: number }>;
-    }
-  ).__osSessionsResponseSnapshots;
-  for (const [key, snapshot] of snapshots ?? [])
-    if (key.startsWith("sidebar\u0000")) snapshot.expiresAt = 0;
+	advanceSessionListResponseRevision();
+	const snapshots = (
+		globalThis as typeof globalThis & {
+			__osSessionsResponseSnapshots?: Map<string, { expiresAt: number }>;
+		}
+	).__osSessionsResponseSnapshots;
+	for (const [key, snapshot] of snapshots ?? [])
+		if (key.startsWith("sidebar\u0000")) snapshot.expiresAt = 0;
 }
