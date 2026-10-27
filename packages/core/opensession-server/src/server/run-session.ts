@@ -117,7 +117,6 @@ import {
   mergedSessionTranscript,
   mergedSessionTranscriptAsync,
   readEngineHandoffTranscriptAsync,
-  readEngineTranscriptAsync,
   trailingUserTexts,
 } from "./sessions";
 import {
@@ -3257,12 +3256,15 @@ async function runSessionPromptInner(
   const turnMetricStartedAt = Date.now();
   // Pi buffers its native session file until the first assistant message.
   // Detached hosts get a server-read snapshot for the rare resume-miss case;
-  // the host must never open transcripts.db itself.
+  // the host must never open transcripts.db itself. That snapshot only feeds
+  // a bounded handoff note, so read the bounded handoff tail: the full
+  // transcript of a long session can be hundreds of MB (inline screenshots),
+  // and serializing it into the host spec stalls the gateway every turn.
   const piHostSeedEntries =
     routedEngine === "pi" && engineSessionId
-      ? (await readEngineTranscriptAsync(cwd, engineSessionId, "pi")).filter(
-          (entry) => entry.id !== durablePromptEntryId,
-        )
+      ? (
+          await readEngineHandoffTranscriptAsync(cwd, engineSessionId, "pi")
+        ).filter((entry) => entry.id !== durablePromptEntryId)
       : undefined;
   // Every terminal path of this run settles its Plain discussion through the
   // same idempotent finalizer (see settlePlainDiscussionTurn); the wrapper's
