@@ -1145,6 +1145,7 @@ export function nativeSessionRow(data: NativeSessionFile): UnifiedSession {
     speed: data.speed,
     pstackMode: data.pstackMode,
     accountId: data.accountId,
+    subscriptionPolicy: data.subscriptionPolicy,
     codexThreadId: data.codexThreadId,
     piSessionId: data.piSessionId,
     lastEngineProvider: data.lastEngineProvider,
