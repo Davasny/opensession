@@ -1,15 +1,15 @@
 type SessionListResponseRevisionState = typeof globalThis & {
-	__osSessionListResponseRevision?: number;
+  __osSessionListResponseRevision?: number;
 };
 
 const state = globalThis as SessionListResponseRevisionState;
 
 export function sessionListResponseRevision(): number {
-	return state.__osSessionListResponseRevision ?? 0;
+  return state.__osSessionListResponseRevision ?? 0;
 }
 
 export function advanceSessionListResponseRevision(): void {
-	state.__osSessionListResponseRevision = sessionListResponseRevision() + 1;
+  state.__osSessionListResponseRevision = sessionListResponseRevision() + 1;
 }
 
 const MAX_REVISION_BUILDS = 3;
@@ -25,27 +25,27 @@ const MAX_REVISION_BUILDS = 3;
  * short TTL, so the next poll rebuilds past the mutation it missed.
  */
 export async function buildAtCurrentSessionListRevision<T>(
-	build: () => Promise<T>,
+  build: () => Promise<T>,
 ): Promise<T> {
-	for (let attempt = 1; ; attempt++) {
-		const revision = sessionListResponseRevision();
-		const result = await build();
-		if (
-			revision === sessionListResponseRevision() ||
-			attempt >= MAX_REVISION_BUILDS
-		)
-			return result;
-	}
+  for (let attempt = 1; ; attempt++) {
+    const revision = sessionListResponseRevision();
+    const result = await build();
+    if (
+      revision === sessionListResponseRevision() ||
+      attempt >= MAX_REVISION_BUILDS
+    )
+      return result;
+  }
 }
 
 /** Personal overlays change sidebar membership without changing a session row. */
 export function invalidateSidebarSessionResponses(): void {
-	advanceSessionListResponseRevision();
-	const snapshots = (
-		globalThis as typeof globalThis & {
-			__osSessionsResponseSnapshots?: Map<string, { expiresAt: number }>;
-		}
-	).__osSessionsResponseSnapshots;
-	for (const [key, snapshot] of snapshots ?? [])
-		if (key.startsWith("sidebar\u0000")) snapshot.expiresAt = 0;
+  advanceSessionListResponseRevision();
+  const snapshots = (
+    globalThis as typeof globalThis & {
+      __osSessionsResponseSnapshots?: Map<string, { expiresAt: number }>;
+    }
+  ).__osSessionsResponseSnapshots;
+  for (const [key, snapshot] of snapshots ?? [])
+    if (key.startsWith("sidebar\u0000")) snapshot.expiresAt = 0;
 }
