@@ -20,6 +20,7 @@
  * its tokens ahead of expiry with a periodic upkeep tick.
  */
 
+import { withLabel } from "./provider-account-label";
 import { registerMemoryProbe } from "./memory-probes";
 import { accessSync, chmodSync, constants, existsSync, readFileSync } from "fs";
 import { writeFileAtomic } from "./shared/atomic-write";
@@ -65,6 +66,8 @@ const USAGE_GATE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 export interface XaiAccount {
   id: string;
   name: string;
+  /** Display name a person chose; shown instead of the email when set. */
+  label?: string;
   /** xAI account identity from the id token or the proxy's /user. */
   email?: string;
   /** Personal account: only this person's runs may use it, and their runs
@@ -81,6 +84,7 @@ export interface XaiAccount {
 export interface XaiAccountPublic {
   id: string;
   name: string;
+  label?: string;
   email?: string;
   kind: "oauth";
   owner?: string;
@@ -229,6 +233,7 @@ function toPublic(a: XaiAccount): XaiAccountPublic {
   return {
     id: a.id,
     name: a.name,
+    ...(a.label ? { label: a.label } : {}),
     ...(a.email ? { email: a.email } : {}),
     kind: "oauth",
     ...(a.owner ? { owner: a.owner } : {}),
@@ -322,6 +327,20 @@ export function setXaiAccountOwner(
   const trimmed = owner?.trim() || undefined;
   if (trimmed) next.owner = trimmed;
   else delete next.owner;
+  accounts[idx] = next;
+  writeStore(accounts);
+  return toPublic(next);
+}
+
+/** Set or clear (empty) the display name shown instead of the email. */
+export function setXaiAccountLabel(
+  id: string,
+  label: string,
+): XaiAccountPublic | null {
+  const accounts = readStore();
+  const idx = accounts.findIndex((a) => a.id === id);
+  if (idx === -1) return null;
+  const next = withLabel(accounts[idx], label);
   accounts[idx] = next;
   writeStore(accounts);
   return toPublic(next);

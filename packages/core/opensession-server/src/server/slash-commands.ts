@@ -5,6 +5,7 @@
  * as a command, or null to send it to the engine as a normal prompt.
  */
 
+import { accountDisplayName } from "./provider-account-label";
 import {
   fixedSubscriptionModelError,
   isFixedSubscription,
@@ -248,7 +249,7 @@ export async function handleSlashCommand(
       !account.owner || (!!user && userMatchesAny(user, [account.owner])),
   );
   const accountLabel = (account: (typeof accounts)[number]) =>
-    account.email?.trim() || account.name;
+    accountDisplayName(account);
   if (
     accountCommand &&
     (!accountInput || accountInput === "show" || accountInput === "list")
@@ -290,6 +291,9 @@ export async function handleSlashCommand(
       accounts.find((a) => a.id === input) ||
       accounts.find(
         (a) => accountLabel(a).toLowerCase() === input.toLowerCase(),
+      ) ||
+      accounts.find(
+        (a) => a.email?.trim().toLowerCase() === input.toLowerCase(),
       ) ||
       accounts.find((a) => a.name.toLowerCase() === input.toLowerCase());
     if (!match) {

@@ -42,6 +42,7 @@ import { BrandMark, IconTile } from "../BrandTile";
 import {
   IconDotsHorizontal,
   IconHistory,
+  IconPencil,
   IconPeople,
   IconPlug,
   IconPlus,
@@ -49,6 +50,7 @@ import {
   IconTrash,
 } from "../icons";
 import { ClaudeSignInForm } from "./ClaudeSignInForm";
+import { RenameDialog } from "../RenameDialog";
 
 // The Claude and Codex subscription accounts runs draw from, and how full each
 // one is. Rendered by Settings → Providers; the account list and its meters live
@@ -58,6 +60,7 @@ import { ClaudeSignInForm } from "./ClaudeSignInForm";
 interface ClaudeAccountInfo {
   id: string;
   name: string;
+  label?: string;
   tokenMasked: string;
   authKind: "setup-token" | "oauth";
   email?: string;
@@ -94,6 +97,7 @@ interface ClaudeAccountInfo {
 interface CodexAccountInfo {
   id: string;
   name: string;
+  label?: string;
   email?: string;
   kind: "api_key" | "home";
   valueMasked: string;
@@ -132,6 +136,7 @@ interface CodexUsageBucket {
 interface XaiAccountInfo {
   id: string;
   name: string;
+  label?: string;
   email?: string;
   kind: "oauth";
   owner?: string;
@@ -513,6 +518,70 @@ function ClaudeAccountStatus({ a }: { a: ClaudeAccountInfo }) {
   return <AccountStatus tone="yellow">Near limit</AccountStatus>;
 }
 
+/** A renamed account's row title no longer shows its email, so the
+ * description line keeps it. */
+function renamedEmail(account: { label?: string; email?: string }): string {
+  return account.label?.trim() && account.email ? ` · ${account.email}` : "";
+}
+
+/** The Rename… action every account row shares. A blank name clears it, so
+ * the row shows the account's email again. */
+function useAccountRename(
+  poolPath: "/claude-accounts" | "/codex-accounts" | "/xai-accounts",
+  provider: string,
+  load: () => Promise<void>,
+  setError: (message: string) => void,
+) {
+  const [target, setTarget] = useState<{
+    id: string;
+    name: string;
+    label?: string;
+    email?: string;
+  } | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+
+  function start(account: NonNullable<typeof target>) {
+    setTarget(account);
+    setDraft(account.label ?? "");
+  }
+
+  function cancel() {
+    setDraft(null);
+  }
+
+  async function commit() {
+    if (!target || draft === null) return;
+    const label = draft.trim();
+    setDraft(null);
+    if (label === (target.label ?? "")) return;
+    try {
+      await request(`${poolPath}/${encodeURIComponent(target.id)}`, {
+        method: "PUT",
+        body: { label },
+        label: `Could not rename ${provider} account`,
+      });
+      void load();
+    } catch (cause) {
+      setError(errorMessage(cause, `Could not rename ${provider} account`));
+    }
+  }
+
+  return {
+    start,
+    dialog: (
+      <RenameDialog
+        title="Rename account"
+        draft={draft}
+        placeholder={target?.email || target?.name}
+        allowEmpty
+        onDraftChange={setDraft}
+        onCommit={() => void commit()}
+        onCancel={cancel}
+      />
+    ),
+  };
+}
+
 function useClaudeAccounts() {
   const [accounts, setAccounts] = useState<ClaudeAccountInfo[] | null>(null);
   const [signIn, setSignIn] = useState<ClaudeAccountInfo | null>(null);
@@ -607,6 +676,7 @@ function useClaudeAccounts() {
     remove,
     setCredentialsPath,
     setError,
+    rename: useAccountRename("/claude-accounts", "Anthropic", load, setError),
     setOwner,
     setSignIn,
     signIn,
@@ -618,6 +688,7 @@ type ClaudeAccountsState = ReturnType<typeof useClaudeAccounts>;
 function ClaudeAccountRows({ state }: { state: ClaudeAccountsState }) {
   return (
     <>
+      {state.rename.dialog}
       {[...(state.accounts || [])]
         .sort(
           (left, right) =>
@@ -647,6 +718,7 @@ function ClaudeAccountRows({ state }: { state: ClaudeAccountsState }) {
                     .join(" · ")}
                 >
                   Anthropic
+                  {renamedEmail(account)}
                   {account.plan
                     ? ` · ${account.plan.replace("default_claude_", "")}`
                     : ""}
@@ -712,6 +784,10 @@ function ClaudeAccountRows({ state }: { state: ClaudeAccountsState }) {
                         Usage credentials…
                       </Menu.Item>
                     )}
+                    <Menu.Item onClick={() => state.rename.start(account)}>
+                      <IconPencil size={16} className="text-faint" />
+                      Rename…
+                    </Menu.Item>
                     <Menu.Item
                       onClick={() => state.remove(account)}
                       className="text-red data-[highlighted]:bg-red-soft"
@@ -1004,7 +1080,17 @@ function useCodexAccounts() {
     }
   }
 
-  return { accounts, error, load, refreshing, remove, setError, setOwner };
+  const rename = useAccountRename("/codex-accounts", "OpenAI", load, setError);
+  return {
+    accounts,
+    error,
+    load,
+    refreshing,
+    remove,
+    rename,
+    setError,
+    setOwner,
+  };
 }
 
 type CodexAccountsState = ReturnType<typeof useCodexAccounts>;
@@ -1012,6 +1098,7 @@ type CodexAccountsState = ReturnType<typeof useCodexAccounts>;
 function CodexAccountRows({ state }: { state: CodexAccountsState }) {
   return (
     <>
+      {state.rename.dialog}
       {[...(state.accounts || [])]
         .sort(
           (left, right) =>
@@ -1038,6 +1125,7 @@ function CodexAccountRows({ state }: { state: CodexAccountsState }) {
               >
                 OpenAI ·{" "}
                 {account.kind === "api_key" ? "API key" : "ChatGPT login"}
+                {renamedEmail(account)}
                 {account.usage?.buckets.find((bucket) => bucket.plan)?.plan
                   ? ` · ${account.usage.buckets.find((bucket) => bucket.plan)!.plan}`
                   : ""}
@@ -1069,6 +1157,10 @@ function CodexAccountRows({ state }: { state: CodexAccountsState }) {
                   <IconDotsHorizontal size={18} />
                 </Menu.Trigger>
                 <Menu.Popup align="end" sideOffset={4}>
+                  <Menu.Item onClick={() => state.rename.start(account)}>
+                    <IconPencil size={16} className="text-faint" />
+                    Rename…
+                  </Menu.Item>
                   <Menu.Item
                     onClick={() => state.remove(account)}
                     className="text-red data-[highlighted]:bg-red-soft"
@@ -1303,7 +1395,17 @@ function useXaiAccounts() {
     }
   }
 
-  return { accounts, error, load, refreshing, remove, setError, setOwner };
+  const rename = useAccountRename("/xai-accounts", "xAI", load, setError);
+  return {
+    accounts,
+    error,
+    load,
+    refreshing,
+    remove,
+    rename,
+    setError,
+    setOwner,
+  };
 }
 
 type XaiAccountsState = ReturnType<typeof useXaiAccounts>;
@@ -1311,6 +1413,7 @@ type XaiAccountsState = ReturnType<typeof useXaiAccounts>;
 function XaiAccountRows({ state }: { state: XaiAccountsState }) {
   return (
     <>
+      {state.rename.dialog}
       {[...(state.accounts || [])]
         .sort(
           (left, right) =>
@@ -1333,6 +1436,7 @@ function XaiAccountRows({ state }: { state: XaiAccountsState }) {
               </div>
               <SettingRowDescription className="truncate text-meta">
                 xAI · SuperGrok login
+                {renamedEmail(account)}
                 {account.usage?.subscriptionTier
                   ? ` · ${account.usage.subscriptionTier}`
                   : ""}
@@ -1363,6 +1467,10 @@ function XaiAccountRows({ state }: { state: XaiAccountsState }) {
                   <IconDotsHorizontal size={18} />
                 </Menu.Trigger>
                 <Menu.Popup align="end" sideOffset={4}>
+                  <Menu.Item onClick={() => state.rename.start(account)}>
+                    <IconPencil size={16} className="text-faint" />
+                    Rename…
+                  </Menu.Item>
                   <Menu.Item
                     onClick={() => state.remove(account)}
                     className="text-red data-[highlighted]:bg-red-soft"

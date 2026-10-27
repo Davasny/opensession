@@ -13,6 +13,7 @@ import {
   listAccountsPublic,
   refreshAllUsage,
   removeAccount,
+  setAccountLabel,
   setAccountOwner,
 } from "../claude-accounts";
 import {
@@ -20,6 +21,7 @@ import {
   listCodexAccountsPublic,
   refreshAllCodexUsage,
   removeCodexAccount,
+  setCodexAccountLabel,
   setCodexAccountOwner,
 } from "../codex-accounts";
 import {
@@ -41,6 +43,7 @@ import {
   listXaiAccountsPublic,
   refreshXaiUsage,
   removeXaiAccount,
+  setXaiAccountLabel,
   setXaiAccountOwner,
 } from "../xai-accounts";
 import {
@@ -48,6 +51,22 @@ import {
   getXaiDeviceLogin,
   startXaiDeviceLogin,
 } from "../xai-device-login";
+
+/** A PUT body that renames the account: {"label": "Team"}, or "" to show
+ *  the email again. */
+function isRename(body: unknown): body is { label: string } {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    typeof (body as { label?: unknown }).label === "string"
+  );
+}
+
+function foundOr404(updated: object | null): Response {
+  return updated
+    ? Response.json(updated)
+    : Response.json({ error: "Not found" }, { status: 404 });
+}
 
 export async function handleAccountsRoutes(
   ctx: RouteContext,
@@ -125,6 +144,11 @@ export async function handleAccountsRoutes(
   // Set/clear an account's personal owner ({"owner": "Alex"} or "").
   if (accountDelMatch && req.method === "PUT") {
     const body = await req.json().catch(() => null);
+    if (isRename(body)) {
+      return foundOr404(
+        setAccountLabel(decodeURIComponent(accountDelMatch[1]), body.label),
+      );
+    }
     const updated = setAccountOwner(
       decodeURIComponent(accountDelMatch[1]),
       typeof body?.owner === "string" ? body.owner : undefined,
@@ -247,6 +271,14 @@ export async function handleAccountsRoutes(
   // Set/clear an account's personal owner ({"owner": "Alex"} or "").
   if (codexAccountDelMatch && req.method === "PUT") {
     const body = await req.json().catch(() => null);
+    if (isRename(body)) {
+      return foundOr404(
+        setCodexAccountLabel(
+          decodeURIComponent(codexAccountDelMatch[1]),
+          body.label,
+        ),
+      );
+    }
     const updated = setCodexAccountOwner(
       decodeURIComponent(codexAccountDelMatch[1]),
       typeof body?.owner === "string" ? body.owner : undefined,
@@ -304,6 +336,11 @@ export async function handleAccountsRoutes(
   // Set/clear an account's personal owner ({"owner": "Alex"} or "").
   if (xaiAccountMatch && req.method === "PUT") {
     const body = await req.json().catch(() => null);
+    if (isRename(body)) {
+      return foundOr404(
+        setXaiAccountLabel(decodeURIComponent(xaiAccountMatch[1]), body.label),
+      );
+    }
     const updated = setXaiAccountOwner(
       decodeURIComponent(xaiAccountMatch[1]),
       typeof body?.owner === "string" ? body.owner : undefined,

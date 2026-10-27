@@ -79,6 +79,8 @@ export async function fetchModels(): Promise<ModelCatalog> {
 export interface ProviderAccountOption {
   id: string;
   name: string;
+  /** Display name a person chose in Settings. */
+  label?: string;
   email?: string;
   provider: "claude" | "codex" | "xai";
   /** Personal-sub owner, if any (else it's a shared-pool account). */
@@ -97,6 +99,7 @@ export interface ProviderAccountOption {
 const providerAccountRecordSchema = z.object({
   id: z.string(),
   name: z.string(),
+  label: z.string().optional(),
   email: z.string().optional(),
   owner: z.string().optional(),
   usable: z.boolean().optional(),
@@ -124,6 +127,7 @@ export async function fetchProviderAccounts(options?: {
         const option: ProviderAccountOption = {
           id: account.id,
           name: account.name,
+          label: account.label,
           email: account.email,
           provider,
           owner: account.owner,

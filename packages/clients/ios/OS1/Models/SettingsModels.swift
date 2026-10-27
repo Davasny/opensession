@@ -180,6 +180,8 @@ struct ModelDefaults: Codable, Sendable {
 struct ProviderAccount: Codable, Sendable, Identifiable, Equatable {
     var id: String?
     var name: String?
+    /// Display name chosen in web Settings; shown instead of the email.
+    var label: String?
     var owner: String?
     var kind: String?
     var usable: Bool?

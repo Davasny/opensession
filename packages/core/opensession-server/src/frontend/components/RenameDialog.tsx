@@ -12,12 +12,18 @@ import { Modal } from "../ui/modal";
 export function RenameDialog({
   title,
   draft,
+  placeholder,
+  allowEmpty = false,
   onDraftChange,
   onCommit,
   onCancel,
 }: {
   title: string;
   draft: string | null;
+  /** Shown in an empty field, e.g. what a blank name falls back to. */
+  placeholder?: string;
+  /** Allow saving a blank name, for names that fall back to a default. */
+  allowEmpty?: boolean;
   onDraftChange: (value: string) => void;
   onCommit: () => void;
   onCancel: () => void;
@@ -47,6 +53,7 @@ export function RenameDialog({
             size="lg"
             value={shown}
             aria-label="Name"
+            placeholder={placeholder}
             enterKeyHint="done"
             onChange={(event) => onDraftChange(event.target.value)}
             onFocus={(event) => event.target.select()}
@@ -66,7 +73,7 @@ export function RenameDialog({
               size="lg"
               variant="primary"
               className="phone:min-h-11 phone:flex-1"
-              disabled={!shown.trim()}
+              disabled={!allowEmpty && !shown.trim()}
             >
               Rename
             </Button>

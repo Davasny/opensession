@@ -11,6 +11,7 @@
  * kept in memory; the UI reads it via the /api/claude-accounts routes.
  */
 
+import { withLabel } from "./provider-account-label";
 import { registerMemoryProbe } from "./memory-probes";
 import { homeDir } from "./paths";
 import { chmodSync, existsSync, readFileSync } from "fs";
@@ -61,6 +62,8 @@ const SCOPED_EXHAUSTED_UTILIZATION = 100;
 export interface ClaudeAccount {
   id: string;
   name: string;
+  /** Display name a person chose; shown instead of the email when set. */
+  label?: string;
   token: string;
   /** Compatibility for OAuth-only records created by an earlier build. */
   authKind?: "oauth";
@@ -121,6 +124,7 @@ export interface AccountUsage {
 export interface ClaudeAccountPublic {
   id: string;
   name: string;
+  label?: string;
   tokenMasked: string;
   authKind: "setup-token" | "oauth";
   email?: string;
@@ -977,6 +981,7 @@ function toPublic(a: ClaudeAccount): ClaudeAccountPublic {
   return {
     id: a.id,
     name: a.name,
+    ...(a.label ? { label: a.label } : {}),
     tokenMasked: maskToken(a.token),
     authKind: a.authKind === "oauth" ? "oauth" : "setup-token",
     email: a.email,
@@ -1124,6 +1129,20 @@ export function setAccountOwner(
   console.log(
     `[claude-accounts] ${next.name} is now ${trimmed ? `the personal sub of ${trimmed}` : "a shared pool account"}`,
   );
+  return toPublic(next);
+}
+
+/** Set or clear (empty) the display name shown instead of the email. */
+export function setAccountLabel(
+  id: string,
+  label: string,
+): ClaudeAccountPublic | null {
+  const accounts = readStore();
+  const idx = accounts.findIndex((a) => a.id === id);
+  if (idx === -1) return null;
+  const next = withLabel(accounts[idx], label);
+  accounts[idx] = next;
+  writeStore(accounts);
   return toPublic(next);
 }
 
