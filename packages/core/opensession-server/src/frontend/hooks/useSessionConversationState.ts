@@ -32,7 +32,6 @@ import type {
 } from "../lib/types";
 import { modelIsCodex } from "../components/session-viewer/model-labels";
 import { suggestedShippedChangeMessage } from "../lib/shipped-change-copy";
-import { awaitingPrDeploy } from "../../shared/pr-deploy";
 import { fetchShippedChangeSuggestion } from "../lib/api/shipped-changes";
 import {
   cancelComposedSlackMessageAction,
@@ -174,19 +173,8 @@ export function useShippedChangePresentation({
   const mergedPrNumber = mergedPr?.number;
   const mergedPrRepo = mergedPr?.repo;
   const mergedPrBranch = mergedPr?.branch;
-  // In a repo with deploy tracking the card waits until the change is live:
-  // it announces something people can use.
-  const awaitingDeploy =
-    mergedPrNumber !== undefined &&
-    awaitingPrDeploy(session.prDeploys, {
-      repoId: mergedPrRepo,
-      prNumber: mergedPrNumber,
-    });
   const suggestionKey =
-    mergedPrNumber !== undefined &&
-    !shareDismissed &&
-    !shippedSent &&
-    !awaitingDeploy
+    mergedPrNumber !== undefined && !shareDismissed && !shippedSent
       ? `${session.id}#${mergedPrNumber}`
       : "";
   const [suggested, setSuggested] = useState<{
@@ -244,12 +232,7 @@ export function useShippedChangePresentation({
       ? suggested.channel
       : undefined;
   const shippedChangeShare = useMemo(() => {
-    if (
-      mergedPr?.number === undefined ||
-      shareDismissed ||
-      (awaitingDeploy && !shippedSent)
-    )
-      return undefined;
+    if (mergedPr?.number === undefined || shareDismissed) return undefined;
     const share: ShippedChangeShare = {
       prNumber: mergedPr.number,
       sessionId: session.id,
@@ -297,7 +280,6 @@ export function useShippedChangePresentation({
     suggestedMessage,
     suggestedChannel,
     drafting,
-    awaitingDeploy,
   ]);
   return { shippedSent, shippedChangeShare };
 }

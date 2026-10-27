@@ -21,7 +21,6 @@ import { resolvePrTarget } from "./session-repos";
 import { prHostFor } from "./pr-host";
 import { getPrsByRepo } from "./pr-cache";
 import { getRepo } from "./worktree";
-import { awaitingPrDeploy } from "../shared/pr-deploy";
 import type { ShippedChangeDraft, UnifiedSession } from "./types";
 
 type PrTarget = { ghRepo: string; branch: string; repoId: string };
@@ -123,15 +122,6 @@ export async function draftShippedChangeAfterTurn(
   const pr = getPrsByRepo().get(target.repoId)?.get(target.branch);
   if (!pr || pr.state !== "MERGED") return;
   if (session.slackShares?.some((share) => share.prNumber === pr.number))
-    return;
-  // The card waits for the deploy, and the deploy's own message to the
-  // session ends a turn that drafts then, against the fuller session.
-  if (
-    awaitingPrDeploy(session.prDeploys, {
-      repoId: target.repoId,
-      prNumber: pr.number,
-    })
-  )
     return;
   await draftShippedChange(session, target, user);
 }
