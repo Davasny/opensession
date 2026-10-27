@@ -260,6 +260,26 @@ describe("orderGroupsByScore", () => {
     ).toEqual(["session", "action"]);
   });
 
+  test("an exact action name outranks workspaces that mention it", () => {
+    const workspaces = matchWorkspaces("analytics", [
+      session({
+        id: "a",
+        workspaceId: "a",
+        workspaceName: "How to open analytics",
+      }),
+      session({
+        id: "b",
+        workspaceId: "b",
+        workspaceName: "Analytics cost tile",
+      }),
+    ]).map((hit) => ({ row: hit.name, score: hit.score }));
+    const action = {
+      row: "Analytics",
+      score: matchScore("analytics", ["Analytics"], "Analytics"),
+    };
+    expect(orderGroupsByScore([workspaces, [action]])[0]).toBe("Analytics");
+  });
+
   test("keeps the given order when groups tie", () => {
     expect(
       orderGroupsByScore([
