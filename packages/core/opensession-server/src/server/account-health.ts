@@ -27,6 +27,7 @@
  */
 
 import { existsSync, readFileSync } from "fs";
+import { accountDisplayName } from "./provider-account-label";
 import { listAccountsPublic } from "./claude-accounts";
 import { listCodexAccountsPublic } from "./codex-accounts";
 import { refreshIdleCodexTokens } from "./codex-token-refresh";
@@ -114,7 +115,7 @@ function claudeIssues(): Issue[] {
   const issues: Issue[] = [];
   for (const a of listAccountsPublic()) {
     const who = a.owner || FALLBACK_TEAMMATE;
-    const identity = a.email?.trim() || a.name;
+    const identity = accountDisplayName(a);
     const label = a.owner
       ? `your personal Claude sub "${identity}"`
       : `pool Claude account "${identity}"`;
@@ -158,7 +159,7 @@ function codexIssues(): Issue[] {
   const issues: Issue[] = [];
   for (const a of listCodexAccountsPublic()) {
     if (a.kind !== "home") continue; // API keys don't expire on a clock.
-    const identity = a.email?.trim() || a.name;
+    const identity = accountDisplayName(a);
     const home = a.valueMasked; // for kind=home this is the CODEX_HOME path
     const fix = `Fix on the VPS: \`CODEX_HOME=${home} codex login\` (or copy a fresh ~/.codex/auth.json into ${home}/).`;
     const authPath = `${home}/auth.json`;
@@ -210,7 +211,7 @@ function xaiIssues(): Issue[] {
     ({ account, message, reloginRequired }) => {
       if (!reloginRequired) return [];
       const who = account.owner || FALLBACK_TEAMMATE;
-      const identity = account.email?.trim() || account.name;
+      const identity = accountDisplayName(account);
       const label = account.owner
         ? `your personal SuperGrok account "${identity}"`
         : `pool SuperGrok account "${identity}"`;

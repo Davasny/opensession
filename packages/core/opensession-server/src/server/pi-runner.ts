@@ -2588,6 +2588,7 @@ async function* runPiAttempt(
       mcpServers,
       user,
       mcpGrantUser: opts.mcpGrantUser,
+      mcpRunAs: opts.mcpRunAs,
       sessionUrl: journal?.osSessionId
         ? sessionLink(journal.osSessionId)
         : undefined,
@@ -2614,6 +2615,9 @@ async function* runPiAttempt(
           tool: e.tool,
           ok: e.ok,
           ms: e.ms,
+          // Whose personal OAuth grant authorized this server, when it was
+          // not the workspace grant (an automation's mcpRunAs shows here).
+          ...(e.grantUser ? { grant_user: e.grantUser } : {}),
         }),
     });
     mcpBridge = await createPiMcpBridge(mcpRuntime);

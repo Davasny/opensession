@@ -380,7 +380,7 @@ enum WeeklyRemaining {
                     accountId: accountId,
                     kind: pooled.kind,
                     scope: limit.scope,
-                    name: account.name ?? account.email ?? "Account",
+                    name: account.label ?? account.name ?? account.email ?? "Account",
                     owner: owner,
                     remaining: max(0, min(100, Int((100 - used).rounded()))),
                     resetsAt: limit.resetsAt.flatMap(AccountUsageReading.parse)

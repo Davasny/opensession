@@ -807,13 +807,14 @@ export function SessionSearch({
       pool.filter(passesFilters),
       searchIndex,
     );
-    // Workspaces come first: a workspace is what the sidebar names, so its
-    // name is the first thing a person types.
+    // Workspaces lead on a tie: a workspace is what the sidebar names, so its
+    // name is the first thing a person types. They still compete on score,
+    // so "analytics" opens Analytics rather than burying it under every
+    // workspace that mentions the word.
     const workspaceHits = matchWorkspaces(q, filtered, searchIndex).slice(0, 8);
-    const workspaceRows: PaletteResult[] = workspaceHits.map((workspace) => ({
-      type: "workspace",
-      category: "Workspaces",
-      workspace,
+    const workspaceRows: Scored[] = workspaceHits.map((workspace) => ({
+      row: { type: "workspace", category: "Workspaces", workspace },
+      score: workspace.score,
     }));
     // A session in a workspace row above is already one Enter away; list it
     // again only when its own title matches too, and not when that title
@@ -878,10 +879,12 @@ export function SessionSearch({
           archivedIndex,
         )
       : [];
-    const listed = [
-      ...workspaceRows,
-      ...orderGroupsByScore([actionResults, prResults, sessionRows]),
-    ];
+    const listed = orderGroupsByScore([
+      workspaceRows,
+      actionResults,
+      prResults,
+      sessionRows,
+    ]);
     const conversationRows = hasQuery
       ? conversationResults(
           snippets,

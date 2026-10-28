@@ -60,7 +60,7 @@ struct ProviderAccountSections: View {
                         onRemove: {
                             removal = AccountRemoval(
                                 id: item.account.id ?? "",
-                                name: item.account.name ?? "this account",
+                                name: item.account.label ?? item.account.name ?? "this account",
                                 kind: item.kind
                             )
                         }
@@ -249,7 +249,7 @@ private struct AccountUsageRow: View {
             HStack(alignment: .top, spacing: 10) {
                 BrandTile(name: kind.brand, size: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(account.name ?? account.email ?? "Account")
+                    Text(account.label ?? account.name ?? account.email ?? "Account")
                     Text("\(kind.providerName) · \(ownership)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -267,7 +267,7 @@ private struct AccountUsageRow: View {
                     .buttonStyle(.borderless)
                 Button(role: .destructive, action: onRemove) {
                     Label(
-                        "Remove \(account.name ?? account.email ?? "account")",
+                        "Remove \(account.label ?? account.name ?? account.email ?? "account")",
                         systemImage: "trash"
                     )
                 }

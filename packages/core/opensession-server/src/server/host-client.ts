@@ -75,6 +75,7 @@ import {
   type HostRunControl,
 } from "./host-registry";
 import { registerRunToken, unregisterRunToken } from "./run-rpc";
+import type { McpRunAs } from "./automation-mcp-run-as";
 import {
   ndjsonReader,
   runHostsDir,
@@ -224,6 +225,7 @@ export interface HostedRunOpts {
   cwd: string;
   mode?: "ask" | "code" | "scratch";
   mcpGrantUser?: string;
+  mcpRunAs?: McpRunAs;
   model?: string;
   selectedModel?: string;
   images?: ImageInput[];
@@ -459,6 +461,7 @@ async function* runAgentInProcess(
       files: opts.remoteWorkspace ? opts.files : undefined,
       mode: opts.mode,
       mcpGrantUser: opts.mcpGrantUser,
+      mcpRunAs: opts.mcpRunAs,
       model: opts.model,
       selectedModel: opts.selectedModel,
       images: opts.images,
@@ -674,6 +677,7 @@ async function spawnHostRun(
     cwd: opts.cwd,
     mode: opts.mode,
     mcpGrantUser: opts.mcpGrantUser,
+    mcpRunAs: opts.mcpRunAs,
     model: opts.model,
     selectedModel: opts.selectedModel,
     images: opts.images,

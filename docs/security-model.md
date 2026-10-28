@@ -39,6 +39,17 @@ configuration for the run.
   support-triage automation might name only its support-inbox, identity,
   analytics, issue-tracker, error-tracker, and billing servers so it can look
   up the customer, related issues, and errors while investigating.
+- Automation runs carry no personal MCP OAuth grant by default: only the
+  workspace grant. One automation may opt into a single teammate's personal
+  grants with `mcpRunAs` ("Run MCP sign-ins as"). Only that teammate can set
+  it, to themselves: the server checks the signed-in user over HTTP, or the
+  person who sent the turn for the admin MCP tool, never a request field.
+  Clearing it needs no identity. It applies only to the servers pinned when it
+  was set that are still in the automation's explicit `mcpServers` allowlist,
+  only to the automation's own root session (descendants and turns another
+  person sends get none), and only to the grant lookup: the `allowedUsers`
+  gate, provider-account routing, and AWS policy are unchanged. The run's
+  `pi_mcp_call` audit lines name the grant's owner as `grant_user`.
 - Scheduled automation `inputs` are a separate read path from the primary
   run's MCP allowlist. Built-in input providers fetch a bounded time window,
   pass it through a tool-less one-shot reducer as explicitly untrusted data,
@@ -874,17 +885,18 @@ set:
   the summary cannot point a responder at another session. Separately, every
   run's `incident_create` gets the declaring session's link appended to its
   summary before it is sent.
-- `opensession-sessions` in its `humanResume` shape is mounted on a turn a
-  person sends to an automation-owned session (a thread reply or a message in
-  the web UI; `resolveSessionRunInputs` reports it as the
-  `automation+human-spawn` branch). It carries the session list/get reads and
-  `spawn_task`, `task_status`, and `cancel_task` only, never
-  `answer_session_question`, `send_to_session`, `cancel_session`, or
-  `create_session`. Without `isAdmin`, `cancel_task` cancels only children
-  this session started with `spawn_task` (persisted `parentSessionId`), so it
-  is not `cancel_session` under another name. Children are created for the
+- The full `opensession-sessions` toolset (`isAdmin` plus `humanResume`) is
+  mounted on a turn a person sends to an automation-owned session (a thread
+  reply or a message in the web UI; `resolveSessionRunInputs` reports it as
+  the `automation+human-spawn` branch), as in any session that person
+  drives: `send_to_session`, `create_session`, `answer_session_question`,
+  `cancel_session`, and the spawn suite. The person present is what makes
+  steering other sessions legitimate. Sessions it creates belong to the
   person who prompted, so they are ordinary interactive sessions in that
-  person's workspaces, depth-guarded like every spawned child. The
+  person's workspaces; spawned children are depth-guarded like every other.
+  A timer or other wait registered on that turn wakes as `waitActor(person)`,
+  which mounts only the narrower `waitContinuation` shape (waits and
+  `task_status`), so no person-less turn inherits the controls. The
   automation's own ticks never carry it, and neither does a scheduled `/loop`
   tick sent in a person's name (`"Kent (loop)"`, `loopActor`): the prompter
   is `interactivePrompter(user)` (`RunInputs.humanPrompter`), undefined for

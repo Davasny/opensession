@@ -16,6 +16,7 @@
  * settings UI; rotation still uses observed run failures as its hard gate.
  */
 
+import { withLabel } from "./provider-account-label";
 import { homeDir } from "./paths";
 import { chmodSync, existsSync, readFileSync, readdirSync } from "fs";
 import { writeFileAtomic } from "./shared/atomic-write";
@@ -55,6 +56,8 @@ export function __setCodexHomeForTest(dir: string): string {
 export interface CodexAccount {
   id: string;
   name: string;
+  /** Display name a person chose; shown instead of the email when set. */
+  label?: string;
   kind: "api_key" | "home";
   /** API key (kind=api_key) or CODEX_HOME directory path (kind=home). */
   value: string;
@@ -68,6 +71,7 @@ export interface CodexAccount {
 export interface CodexAccountPublic {
   id: string;
   name: string;
+  label?: string;
   /** ChatGPT identity read from the login's ID token. API-key accounts have none. */
   email?: string;
   /** ChatGPT plan from the login ("pro", "promax" for Pro $500, ...). */
@@ -242,6 +246,7 @@ function toPublic(a: CodexAccount): CodexAccountPublic {
   return {
     id: a.id,
     name: a.name,
+    ...(a.label ? { label: a.label } : {}),
     email: identity.email,
     ...(identity.plan ? { plan: identity.plan } : {}),
     kind: a.kind,
@@ -359,6 +364,20 @@ export function setCodexAccountOwner(
   const trimmed = owner?.trim() || undefined;
   if (trimmed) next.owner = trimmed;
   else delete next.owner;
+  accounts[idx] = next;
+  writeStore(accounts);
+  return toPublic(next);
+}
+
+/** Set or clear (empty) the display name shown instead of the email. */
+export function setCodexAccountLabel(
+  id: string,
+  label: string,
+): CodexAccountPublic | null {
+  const accounts = readStore();
+  const idx = accounts.findIndex((a) => a.id === id);
+  if (idx === -1) return null;
+  const next = withLabel(accounts[idx], label);
   accounts[idx] = next;
   writeStore(accounts);
   return toPublic(next);

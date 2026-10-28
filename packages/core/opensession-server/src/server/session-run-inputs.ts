@@ -20,8 +20,10 @@ import type { UnifiedSession } from "./types";
 import {
   type Automation,
   automationDeniedTools,
+  automationMcpRunAsById,
   automationMcpServersByName,
 } from "./automations";
+import type { McpRunAs } from "./automation-mcp-run-as";
 import {
   humanPrompter,
   interactivePrompter,
@@ -48,8 +50,8 @@ export type InProcessMcpBranch =
    *  (an auto-triage run's `plainDiscussionId`; see automationSessionMcp). */
   | "automation-self-improve"
   /** Automation-owned, prompted by a person themselves: the automation-bar
-   *  set plus `opensession-sessions` in its spawn-only `humanResume` shape,
-   *  so the session can start the work the person asked for. Never the
+   *  set plus the full `opensession-sessions` toolset (`isAdmin` +
+   *  `humanResume`), as in any session the person drives. Never the
    *  automation's own ticks, a scheduled /loop tick sent in a person's name,
    *  or a sandboxed descendant. */
   | "automation+human-spawn"
@@ -85,6 +87,12 @@ export interface SessionRunInputs {
   user: string | undefined;
   /** Session creator, whose OAuth grants take precedence for MCP calls. */
   mcpGrantUser: string | undefined;
+  /** An automation-owned session's "Run MCP sign-ins as" (Automation.mcpRunAs)
+   *  for this turn: set only for the automation's own root session, on a
+   *  turn no other person sent. Descendants never inherit it. MCP grant
+   *  lookup only; it never reaches provider accounts or the allowedUsers
+   *  gate. */
+  mcpRunAs: McpRunAs | undefined;
   /** The person whose personal provider subscription may serve this turn:
    *  the human who sent the prompt, or undefined when a machine did (an
    *  automation tick, a review handoff, auto-continue). Unlike `user` it
@@ -114,6 +122,7 @@ export interface SessionRunInputs {
 export type RunInputsSession = Pick<
   UnifiedSession,
   | "automation"
+  | "automationId"
   | "automationDescendantPolicy"
   | "mcpServers"
   | "externalRefs"
@@ -213,6 +222,12 @@ export async function resolveSessionRunInputs(
     user:
       isAutomationSession || isPlainDiscussionSession ? undefined : opts.user,
     mcpGrantUser: session.createdByLogin || undefined,
+    mcpRunAs:
+      session.automation && !session.automationDescendantPolicy
+        ? // The raw sender: a /loop or scheduled tick keeps the name of the
+          // person who set it, so it is checked against the named person.
+          await automationMcpRunAsById(session.automationId, opts.user)
+        : undefined,
     accountUser,
     humanPrompter: prompter,
     inProcessMcpBranch: sessionInProcessMcpBranch(session, prompter),

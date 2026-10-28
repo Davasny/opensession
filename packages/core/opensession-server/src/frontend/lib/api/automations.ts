@@ -79,6 +79,8 @@ export async function fetchModels(): Promise<ModelCatalog> {
 export interface ProviderAccountOption {
   id: string;
   name: string;
+  /** Display name a person chose in Settings. */
+  label?: string;
   email?: string;
   provider: "claude" | "codex" | "xai";
   /** Personal-sub owner, if any (else it's a shared-pool account). */
@@ -97,6 +99,7 @@ export interface ProviderAccountOption {
 const providerAccountRecordSchema = z.object({
   id: z.string(),
   name: z.string(),
+  label: z.string().optional(),
   email: z.string().optional(),
   owner: z.string().optional(),
   usable: z.boolean().optional(),
@@ -124,6 +127,7 @@ export async function fetchProviderAccounts(options?: {
         const option: ProviderAccountOption = {
           id: account.id,
           name: account.name,
+          label: account.label,
           email: account.email,
           provider,
           owner: account.owner,
@@ -210,6 +214,9 @@ export interface Automation {
   webhookMaxConcurrent?: number;
   eventKey?: string;
   mcpServers?: string[];
+  /** "Run MCP sign-ins as": the teammate whose personal MCP sign-ins this
+   *  automation's runs use, for these allowlisted servers. */
+  mcpRunAs?: { person: string; servers: string[]; setAt: string };
   slackWatch?: { channel: string };
   inputs?: AutomationInput[];
   outputs?: AutomationOutput[];
@@ -508,6 +515,7 @@ export async function createAutomationApi(input: {
   usageCredits?: boolean;
   sandbox?: boolean;
   mcpServers?: string[];
+  mcpRunAs?: string;
   slackWatch?: { channel: string };
   webhookEnabled?: boolean;
   inputs?: unknown[];
@@ -519,10 +527,12 @@ export async function createAutomationApi(input: {
 }
 
 export type AutomationPatch = Partial<
-  Omit<Automation, "mcpServers" | "slackWatch">
+  Omit<Automation, "mcpServers" | "slackWatch" | "mcpRunAs">
 > & {
   mcpServers?: string[] | null;
   slackWatch?: { channel: string } | null;
+  /** Your own name sets it (the server checks it is you); "" clears it. */
+  mcpRunAs?: string;
 };
 
 export async function updateAutomationApi(

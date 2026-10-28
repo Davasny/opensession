@@ -10,6 +10,7 @@ import {
   listCodexAccountsPublic,
   markCodexExhausted,
   markCodexWedged,
+  setCodexAccountLabel,
 } from "./codex-accounts";
 import { pickOpenaiAccount } from "./openai-auth";
 
@@ -223,6 +224,20 @@ describe("pickOpenaiAccount pins", () => {
       undefined,
     );
     expect("error" in picked).toBe(true);
+  });
+
+  test("renames an account and clears the name back to its email", () => {
+    expect(setCodexAccountLabel("chatgpt", "  Work  ")).toMatchObject({
+      label: "Work",
+      email: "person@example.com",
+      owner: "Grant",
+    });
+    expect(
+      listCodexAccountsPublic().find((account) => account.id === "chatgpt")
+        ?.label,
+    ).toBe("Work");
+    expect(setCodexAccountLabel("chatgpt", " ")?.label).toBeUndefined();
+    expect(setCodexAccountLabel("missing", "Work")).toBeNull();
   });
 
   test("registers a ChatGPT login by email without a supplied name", () => {

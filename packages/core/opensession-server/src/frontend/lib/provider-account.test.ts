@@ -11,6 +11,23 @@ describe("providerAccountLabel", () => {
     ).toBe("person@example.com");
   });
 
+  test("shows a chosen display name over the email", () => {
+    expect(
+      providerAccountLabel({
+        name: "Team account",
+        label: " Work ",
+        email: "person@example.com",
+      }),
+    ).toBe("Work");
+    expect(
+      providerAccountLabel({
+        name: "Team account",
+        label: " ",
+        email: "person@example.com",
+      }),
+    ).toBe("person@example.com");
+  });
+
   test("keeps names as a compatibility fallback", () => {
     expect(providerAccountLabel({ name: "Platform key" })).toBe("Platform key");
     expect(providerAccountLabel({ name: "Older account", email: " " })).toBe(
