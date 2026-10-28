@@ -352,6 +352,88 @@ describe("TranscriptBlocks compact tool runs", () => {
     setTurnPrefs(null);
   });
 
+  describe("a message sent while a tool runs", () => {
+    const runningTurn: TranscriptEntry[] = [
+      {
+        id: "ask",
+        type: "user",
+        content: "Measure it",
+        timestamp: "2026-08-13T06:00:00Z",
+      },
+      {
+        id: "narration",
+        type: "assistant",
+        content: "Timing the typed reads now.",
+        timestamp: "2026-08-13T06:00:01Z",
+      },
+      {
+        id: "cargo",
+        type: "tool_use",
+        toolUseId: "cargo-call",
+        toolName: "bash",
+        toolInput: { command: "cargo test --release zz_timing" },
+        content: "Using bash",
+        timestamp: "2026-08-13T06:00:02Z",
+      },
+      {
+        id: "steer",
+        type: "user",
+        content: "Are you on option B?",
+        timestamp: "2026-08-13T06:05:00Z",
+      },
+    ];
+
+    test("keeps the turn above it working", () => {
+      setTurnPrefs(null);
+      const html = renderToStaticMarkup(
+        <TranscriptBlocks live entries={runningTurn} />,
+      );
+      expect(html).toContain(">Working</span>");
+      expect(html).not.toContain(">Worked</span>");
+      expect(html).toContain("cargo test --release zz_timing");
+      expect(html.indexOf("cargo test")).toBeLessThan(
+        html.indexOf("Are you on option B?"),
+      );
+    });
+
+    test("shows the running step with a spinner, not a missing result", () => {
+      setTurnPrefs("open", "open");
+      const html = renderToStaticMarkup(
+        <TranscriptBlocks live entries={runningTurn} />,
+      );
+      expect(html).toContain("animate-spin");
+      setTurnPrefs(null);
+    });
+
+    test("settles once the session stops", () => {
+      setTurnPrefs(null);
+      const html = renderToStaticMarkup(
+        <TranscriptBlocks entries={runningTurn} />,
+      );
+      expect(html).toContain(">Worked</span>");
+    });
+
+    test("settles once the tool returns", () => {
+      setTurnPrefs(null);
+      const html = renderToStaticMarkup(
+        <TranscriptBlocks
+          live
+          entries={[
+            ...runningTurn,
+            {
+              id: "cargo-result",
+              type: "tool_result",
+              toolUseId: "cargo-call",
+              content: "ok",
+              timestamp: "2026-08-13T06:06:00Z",
+            },
+          ]}
+        />,
+      );
+      expect(html).toContain(">Worked</span>");
+    });
+  });
+
   test("keeps a lone live call behind its Working row", () => {
     setTurnPrefs(null);
     const html = renderToStaticMarkup(

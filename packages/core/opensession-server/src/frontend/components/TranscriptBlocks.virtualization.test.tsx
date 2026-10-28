@@ -201,6 +201,90 @@ describe("TranscriptBlocks indexed ranges", () => {
     );
   });
 
+  describe("a message sent while a tool runs", () => {
+    const index = [
+      indexRow(1, "user"),
+      indexRow(2, "assistant"),
+      indexRow(3, "tool_use"),
+      indexRow(4, "user"),
+    ];
+    const payload: TranscriptEntry[] = [
+      {
+        id: "indexed-1",
+        seq: 1,
+        changeSeq: 1,
+        type: "user",
+        content: "Measure it",
+        timestamp: "2026-08-12T12:00:01Z",
+      },
+      {
+        id: "indexed-2",
+        seq: 2,
+        changeSeq: 2,
+        type: "assistant",
+        content: "Timing the typed reads now.",
+        timestamp: "2026-08-12T12:00:02Z",
+      },
+      {
+        id: "indexed-3",
+        seq: 3,
+        changeSeq: 3,
+        type: "tool_use",
+        toolUseId: "cargo-call",
+        toolName: "bash",
+        toolInput: { command: "cargo test --release zz_timing" },
+        content: "Using bash",
+        timestamp: "2026-08-12T12:00:03Z",
+      },
+      {
+        id: "indexed-4",
+        seq: 4,
+        changeSeq: 4,
+        type: "user",
+        content: "Are you on option B?",
+        timestamp: "2026-08-12T12:00:04Z",
+      },
+    ];
+
+    test("keeps the range running the tool working", () => {
+      setTurnPrefs("open", "open");
+      const html = renderToStaticMarkup(
+        <TranscriptBlocks live transcriptIndex={index} entries={payload} />,
+      );
+      expect(html).toContain(">Working</span>");
+      expect(html).not.toContain(">Worked</span>");
+      expect(html).toContain("animate-spin");
+      setTurnPrefs(null);
+    });
+
+    test("gives the call the result that landed in the next range", () => {
+      setTurnPrefs("open", "open");
+      const html = renderToStaticMarkup(
+        <TranscriptBlocks
+          live
+          transcriptIndex={[...index, indexRow(5, "tool_result")]}
+          entries={[
+            ...payload,
+            {
+              id: "indexed-5",
+              seq: 5,
+              changeSeq: 5,
+              type: "tool_result",
+              toolUseId: "cargo-call",
+              content: "typed 3.1ms json 9.4ms",
+              timestamp: "2026-08-12T12:00:05Z",
+            },
+          ]}
+        />,
+      );
+      expect(html).toContain(">Worked</span>");
+      expect(html).not.toContain("animate-spin");
+      // A call with no result reads as "–".
+      expect(html).not.toContain(">–</span>");
+      setTurnPrefs(null);
+    });
+  });
+
   test("places an optimistic prompt before later tools despite clock skew", () => {
     setTurnPrefs("open", "open");
     const html = renderToStaticMarkup(

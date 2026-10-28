@@ -143,6 +143,10 @@ interface Props {
   turnMountScope?: string;
   /** Which thinking rows each work rail shows; see arrangeThinkingMessages. */
   thinkingMessages?: ThinkingMessagesPref;
+  /** Tool results from the whole loaded transcript. An indexed range row only
+   *  holds its own entries, and a message sent while a tool ran opens a new
+   *  range, so the call and its result can sit in different rows. */
+  sharedToolResults?: ReadonlyMap<string, TranscriptEntry>;
 }
 
 type ReviewBlockRole =
@@ -483,6 +487,7 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
   shouldMaintainEnd,
   onLayout,
   thinkingMessages = getThinkingMessagesPref(),
+  sharedToolResults,
 }: Props) {
   // Top level only (nested per-range instances pass virtualize={false} and are
   // suppressed): without an outline every block renders real content, so the
@@ -515,7 +520,7 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
     }
   }
   // Build tool_use → tool_result map
-  const toolResults = new Map<string, TranscriptEntry>();
+  const toolResults = new Map<string, TranscriptEntry>(sharedToolResults);
   for (const e of renderedEntries) {
     if (e.type === "tool_result" && e.toolUseId)
       toolResults.set(e.toolUseId, e);
@@ -661,11 +666,21 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
     }
   }
   const groupedBlocks = groupCheckBacks(groupReviewLoops(blocks));
-  const liveTurnBoundary = groupedBlocks.findLastIndex(
-    (block) =>
-      block.kind === "entry" &&
-      (block.entry.type === "user" || block.entry.type === "system"),
-  );
+  const isConversationBoundary = (block: RenderBlock) =>
+    block.kind === "entry" &&
+    (block.entry.type === "user" || block.entry.type === "system");
+  // Messages sent while a tool runs land below it, but that turn is still the
+  // one working: it keeps its Working header and its running step.
+  const runningWork = live
+    ? runningWorkIndex(groupedBlocks, isConversationBoundary, (block) =>
+        Boolean(
+          block.kind === "turn" && hasRunningToolCall(block.items, toolResults),
+        ),
+      )
+    : -1;
+  const liveTurnBoundary = (
+    runningWork >= 0 ? groupedBlocks.slice(0, runningWork) : groupedBlocks
+  ).findLastIndex(isConversationBoundary);
   const lastReviewLoop = groupedBlocks.findLastIndex(
     (block) => block.kind === "review-loop" && block.variant === "review",
   );
@@ -1120,6 +1135,28 @@ function IndexedTranscriptBlocks(props: Props) {
     key: indexedItemKey(item, index),
     ranges: indexedItemRanges(item),
   }));
+  const sharedToolResults = new Map<string, TranscriptEntry>();
+  for (const entry of entries) {
+    if (entry.type === "tool_result" && entry.toolUseId)
+      sharedToolResults.set(entry.toolUseId, entry);
+  }
+  const itemPayload = (item: IndexedTimelineItem) =>
+    indexedItemEntryIds(item).flatMap((id) => {
+      const entry = payloadById.get(id) ?? optimisticById.get(id);
+      return entry ? [entry] : [];
+    });
+  // A message sent while a tool runs opens its own range below the call, so
+  // the range still running that call stays live along with the tail.
+  const runningItem = props.live
+    ? runningWorkIndex(
+        renderedTimeline,
+        ({ item }) =>
+          itemPayload(item).every(
+            (entry) => entry.type === "user" || entry.type === "system",
+          ),
+        ({ item }) => hasRunningToolCall(itemPayload(item), sharedToolResults),
+      )
+    : -1;
   const items: VirtualTranscriptItem[] = renderedTimeline.map(
     ({ item, index }, position) => {
       const entryIds = indexedItemEntryIds(item);
@@ -1142,6 +1179,7 @@ function IndexedTranscriptBlocks(props: Props) {
       const key = indexedItemKey(item, index);
       const estimateSize = indexedItemEstimate(item);
       const isLast = position === renderedTimeline.length - 1;
+      const isRunning = position === runningItem;
       return {
         key,
         anchorId: key,
@@ -1173,7 +1211,8 @@ function IndexedTranscriptBlocks(props: Props) {
               notes={undefined}
               walkthrough={undefined}
               virtualize={false}
-              live={Boolean(props.live && isLast)}
+              live={Boolean(props.live && (isLast || isRunning))}
+              sharedToolResults={sharedToolResults}
               onContinue={isLast ? props.onContinue : undefined}
             />
           ) : (
@@ -1188,7 +1227,8 @@ function IndexedTranscriptBlocks(props: Props) {
               walkthrough={indexedItemWalkthrough(item)}
               virtualize={false}
               turnMountScope={item.kind === "range" ? key : undefined}
-              live={Boolean(props.live && isLast)}
+              live={Boolean(props.live && (isLast || isRunning))}
+              sharedToolResults={sharedToolResults}
               reviewLoopsOpen={
                 item.kind === "review" && openedReviewKeys.has(key)
                   ? true
@@ -1248,6 +1288,35 @@ export function sentMidTurn(
   const last = previousTurn[previousTurn.length - 1];
   if (!last) return false;
   return last.type !== "assistant" || Boolean(last.isReasoning);
+}
+
+/**
+ * The item still running a tool call beneath messages sent while it ran, or
+ * -1. Those messages wait for the call to finish, so they say nothing about
+ * the turn above them being over. Only called while the session is live: an
+ * interrupted call is closed with a result, so an unanswered call in a live
+ * session is the one running.
+ */
+export function runningWorkIndex<T>(
+  items: readonly T[],
+  isMessage: (item: T) => boolean,
+  isRunning: (item: T) => boolean,
+): number {
+  let i = items.length - 1;
+  while (i >= 0 && isMessage(items[i]!)) i--;
+  return i >= 0 && i < items.length - 1 && isRunning(items[i]!) ? i : -1;
+}
+
+function hasRunningToolCall(
+  entries: readonly TranscriptEntry[],
+  toolResults: ReadonlyMap<string, TranscriptEntry>,
+): boolean {
+  return entries.some(
+    (entry) =>
+      entry.type === "tool_use" &&
+      Boolean(entry.toolUseId) &&
+      !toolResults.has(entry.toolUseId!),
+  );
 }
 
 function isTurnContinuationEntry(entry: TranscriptEntry): boolean {

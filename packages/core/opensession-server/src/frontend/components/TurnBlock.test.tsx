@@ -291,6 +291,18 @@ describe("grouped tool run row", () => {
     expect(render(items, new Map(), true)).toContain("running");
   });
 
+  test("names the step a folded run is still waiting on", () => {
+    const items = [
+      toolUse("wait-a", "Bash", { command: "git status" }),
+      toolUse("wait-b", "Bash", { command: "cargo test --release" }),
+    ];
+    const results = new Map([["use-wait-a", result("wait-a")]]);
+
+    expect(render(items, results, true)).toContain("cargo test --release");
+    expect(render(items, results, true)).not.toContain("git status");
+    expect(render(items, results, false)).not.toContain("cargo test");
+  });
+
   test("renders identically for identical inputs", () => {
     const items = [
       toolUse("same-a", "Bash", { command: "ls" }),

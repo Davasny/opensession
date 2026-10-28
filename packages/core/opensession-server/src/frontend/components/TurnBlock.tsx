@@ -546,6 +546,15 @@ function ToolRunBlock({
 
   const { label, pending, additions, deletions, statusLabel, mediaLabel } =
     toolRunAggregate(items, toolResults, live);
+  // Folded, the count alone hides what the run is waiting on. A long build
+  // looked like nothing was happening, so name the step still running.
+  const pathRoots = useToolPathRoots();
+  const running =
+    pending > 0 && !expanded
+      ? items.findLast(
+          (entry) => entry.toolUseId && !toolResults.has(entry.toolUseId),
+        )
+      : undefined;
 
   return (
     <div data-tool-run="true" data-eid={`${items[items.length - 1].id}#run`}>
@@ -592,7 +601,15 @@ function ToolRunBlock({
         {additions + deletions > 0 && (
           <LineStats additions={additions} deletions={deletions} />
         )}
-        <span className="min-w-0 flex-1" />
+        <span className="min-w-0 flex-1 truncate text-label leading-4 text-faint">
+          {running &&
+            `${toolDisplayName(running.toolName)}: ${toolSummary(
+              running.toolName || "Tool",
+              running.toolInput,
+              running.content,
+              pathRoots,
+            )}`}
+        </span>
         {mediaLabel && (
           <span className="flex-shrink-0 text-meta text-faint">
             {mediaLabel}
