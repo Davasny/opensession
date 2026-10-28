@@ -19,11 +19,7 @@ import { neutralizeContextSentinels, wrapContext } from "../prompt-context";
 import { hostSessionScratchDir } from "../session-scratch";
 import { gitIdentityFor, resolveTeammate } from "../shared/user-mappings";
 import { utf8Bytes } from "../memory-v2/budget";
-import {
-  RETRIEVED_MEMORY_BUDGET_BYTES,
-  retrieveMemory,
-} from "../memory-v2/retrieval";
-import type { MemoryRecord } from "../memory-v2/types";
+import { RETRIEVED_MEMORY_BUDGET_BYTES } from "../memory-v2/retrieval";
 import { memoryRolloutMode } from "../memory-v2/runtime";
 import { auditAsync } from "../audit";
 import { memoryRepo } from "./client";
@@ -242,43 +238,23 @@ export async function retrieveRepoMemoryForPrompt(
 ): Promise<{ text: string; ids: string[] }> {
   if (!query.trim() || !scopeKeys.length) return { text: "", ids: [] };
   await memoryRepo.service("fresh", reposForScopes(scopeKeys));
-  const records: MemoryRecord[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await memoryRepo.index("search", query, {
-      scopeKeys,
-      states: ["active"],
-      includeDetails: true,
-      matchAny: true,
-      cursor,
-      limit: 100,
-    });
-    records.push(...page.items);
-    cursor = page.nextCursor;
-  } while (cursor && records.length < 500);
-  const selected = retrieveMemory(
-    records.map((record) => ({
-      ...record,
-      summary: neutralizeContextSentinels(record.summary),
-    })),
-    query,
-    {
-      scopeKeys,
-      primaryRepoKey,
-      budgetBytes: Math.max(
-        0,
-        RETRIEVED_MEMORY_BUDGET_BYTES - utf8Bytes(wrapContext("", "memory")),
-      ),
-    },
-  );
-  const ids = selected.records.map(({ record }) => record.id);
-  if (ids.length) await memoryRepo.index("markRetrieved", ids);
+  // Search, ranking and rendering run in the memory worker: tokenizing up to
+  // 500 records here blocked the gateway for 300 ms or more every turn.
+  const selected = await memoryRepo.index("retrieve", query, {
+    scopeKeys,
+    primaryRepoKey,
+    budgetBytes: Math.max(
+      0,
+      RETRIEVED_MEMORY_BUDGET_BYTES - utf8Bytes(wrapContext("", "memory")),
+    ),
+  });
+  const ids = selected.ids;
   auditAsync({
     kind: "memory_retrieval",
     store: "repo",
     record_ids: ids,
     omitted: selected.omitted,
-    query_terms: selected.queryTerms.length,
+    query_terms: selected.queryTerms,
   });
   return {
     text: selected.text ? wrapContext(selected.text, "memory") : "",

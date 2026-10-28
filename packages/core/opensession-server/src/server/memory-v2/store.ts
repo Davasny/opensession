@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "crypto";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { neutralizeContextSentinels } from "../prompt-context";
+import { retrieveMemory } from "./retrieval";
 import {
   MEMORY_KINDS,
   MEMORY_SOURCE_TYPES,
@@ -425,6 +427,54 @@ export class MemoryStore {
       record: fromRow(row),
       score: Math.max(-Number(row.rank), 0),
     }));
+  }
+
+  /** Prompt-matched memory for one turn: search, rank and render where the
+   * index lives, then count the retrieval. The memory worker runs this so the
+   * gateway thread never tokenizes hundreds of records per turn; it receives
+   * only the rendered summaries and their ids. */
+  retrieve(
+    query: string,
+    options: {
+      scopeKeys: string[];
+      primaryRepoKey?: string;
+      budgetBytes: number;
+    },
+  ): { text: string; ids: string[]; omitted: number; queryTerms: number } {
+    const records: MemoryRecord[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = this.search(query, {
+        scopeKeys: options.scopeKeys,
+        states: ["active"],
+        includeDetails: true,
+        matchAny: true,
+        cursor,
+        limit: 100,
+      });
+      records.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor && records.length < 500);
+    const selected = retrieveMemory(
+      records.map((record) => ({
+        ...record,
+        summary: neutralizeContextSentinels(record.summary),
+      })),
+      query,
+      {
+        scopeKeys: options.scopeKeys,
+        primaryRepoKey: options.primaryRepoKey,
+        budgetBytes: options.budgetBytes,
+      },
+    );
+    const ids = selected.records.map(({ record }) => record.id);
+    if (ids.length) this.markRetrieved(ids);
+    return {
+      text: selected.text,
+      ids,
+      omitted: selected.omitted,
+      queryTerms: selected.queryTerms.length,
+    };
   }
 
   markRetrieved(ids: string[], now = new Date()): number {

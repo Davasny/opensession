@@ -275,3 +275,36 @@ describe("memory lifecycle", () => {
     expect(store.get(imported.record.id)).toBeNull();
   });
 });
+
+describe("memory retrieval in the store", () => {
+  test("ranks, renders within budget, scopes and counts the retrieval", () => {
+    const store = fresh();
+    const deploy = store.create(
+      input("Restart the gateway with deploy_self after backend changes."),
+    );
+    store.create(input("Pin the frontend bundle before a release."));
+    const other = store.create(
+      input("Restart the gateway only from the shared checkout.", {
+        scopeKey: "repo-elsewhere",
+      }),
+    );
+
+    const result = store.retrieve("how do I restart the gateway", {
+      scopeKeys: ["repo-opensession"],
+      budgetBytes: 4_000,
+    });
+    expect(result.ids).toEqual([deploy.id]);
+    expect(result.ids).not.toContain(other.id);
+    expect(result.text).toContain(deploy.summary);
+    expect(result.queryTerms).toBeGreaterThan(0);
+    expect(store.get(deploy.id)?.retrievalCount).toBe(1);
+
+    // A budget too small for any line renders nothing and counts nothing.
+    const none = store.retrieve("restart gateway", {
+      scopeKeys: ["repo-opensession"],
+      budgetBytes: 10,
+    });
+    expect(none.ids).toEqual([]);
+    expect(store.get(deploy.id)?.retrievalCount).toBe(1);
+  });
+});

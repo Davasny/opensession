@@ -58,6 +58,7 @@ export const INDEX_METHODS = [
   "get",
   "list",
   "search",
+  "retrieve",
   "all",
   "stats",
   "markRetrieved",
