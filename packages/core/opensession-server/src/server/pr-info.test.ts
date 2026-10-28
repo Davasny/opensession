@@ -15,6 +15,7 @@ import {
   reconcilePrDetails,
   seedPrDiff,
   type PrDetails,
+  prDetailsSnapshot,
 } from "./pr-info";
 import type { UnifiedSession } from "./types";
 
@@ -330,5 +331,32 @@ describe("PR diff cache bound", () => {
     expect(chars).toBeLessThanOrEqual(PR_DIFF_CACHE_LIMITS.maxWeight);
     expect(cache.has("acme/widgets\u0000session-499")).toBe(true);
     cache.clear();
+  });
+});
+
+describe("PR details snapshot", () => {
+  test("keeps open PRs a week and ended PRs a day", () => {
+    const now = Date.parse("2026-10-28T12:00:00Z");
+    const hours = (n: number) => now - n * 3600_000;
+    const entry = (state: string | null, ts: number) => ({
+      data: state ? ({ state } as unknown as PrDetails) : null,
+      ts,
+    });
+    const snapshot = prDetailsSnapshot(
+      [
+        ["open-old", entry("OPEN", hours(100))],
+        ["open-expired", entry("OPEN", hours(24 * 8))],
+        ["merged-recent", entry("MERGED", hours(2))],
+        ["merged-old", entry("MERGED", hours(30))],
+        ["closed-old", entry("CLOSED", hours(30))],
+        ["none", entry(null, hours(30))],
+      ],
+      now,
+    );
+    expect(Object.keys(snapshot).sort()).toEqual([
+      "merged-recent",
+      "none",
+      "open-old",
+    ]);
   });
 });

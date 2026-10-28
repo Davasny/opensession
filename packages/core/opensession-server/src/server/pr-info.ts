@@ -632,16 +632,31 @@ async function resolvePrNumber(
 loadPrDetailsSnapshot();
 
 // Debounced and written asynchronously: the snapshot only seeds the cache
-// after a restart, and a synchronous write stalled the gateway.
+// after a restart, and a missing entry is simply fetched again. It is still
+// serialized on the gateway thread, so keep it small: a merged or closed PR
+// is kept a day (its comments and checks made the file 17 MB), and the file
+// is written at most every 30 seconds.
+const SNAPSHOT_RETAIN_MS = 7 * 24 * 3600_000;
+const SNAPSHOT_ENDED_RETAIN_MS = 24 * 3600_000;
+
+/** The entries worth restoring after a restart. Exported for tests. */
+export function prDetailsSnapshot(
+  entries: Iterable<[string, { data: PrDetails | null; ts: number }]>,
+  now = Date.now(),
+): Record<string, { data: PrDetails | null; ts: number }> {
+  const obj: Record<string, { data: PrDetails | null; ts: number }> = {};
+  for (const [k, v] of entries) {
+    const ended = v.data?.state === "MERGED" || v.data?.state === "CLOSED";
+    const retain = ended ? SNAPSHOT_ENDED_RETAIN_MS : SNAPSHOT_RETAIN_MS;
+    if (v.ts > now - retain) obj[k] = v;
+  }
+  return obj;
+}
+
 const detailsWriter = coalescedWriter({
   path: () => DETAILS_CACHE_FILE,
-  render: () => {
-    const cutoff = Date.now() - 7 * 24 * 3600_000; // drop long-dead branches
-    const obj: Record<string, { data: PrDetails | null; ts: number }> = {};
-    for (const [k, v] of cache) if (v.ts > cutoff) obj[k] = v;
-    return JSON.stringify(obj);
-  },
-  delayMs: 5_000,
+  render: () => JSON.stringify(prDetailsSnapshot(cache)),
+  delayMs: 30_000,
   label: "pr-details",
 });
 function schedulePersist() {
