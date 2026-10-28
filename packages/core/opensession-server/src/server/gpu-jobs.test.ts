@@ -5,7 +5,6 @@ import {
   gpuMachineSessionId,
   isGpuJobMachine,
   MAX_GPU_JOB_MINUTES,
-  MAX_GPU_MACHINES,
   parseRepoGpuJobs,
   pickGpuMachine,
   type GpuJobRecord,
@@ -101,14 +100,30 @@ describe("choosing a GPU machine for a new job", () => {
     expect(pickGpuMachine(jobs, "os-1", "L4")).toBe("os-1--gpu-3");
   });
 
-  test("every machine busy: no machine", () => {
-    const jobs = Array.from({ length: MAX_GPU_MACHINES }, (_, i) =>
+  test("every machine busy: another machine, however many run", () => {
+    const jobs = Array.from({ length: 12 }, (_, i) =>
       record({
         state: "running",
         machine: gpuMachineSessionId("os-1", i + 1),
       }),
     );
-    expect(pickGpuMachine(jobs, "os-1", "T4")).toBeNull();
+    expect(pickGpuMachine(jobs, "os-1", "T4")).toBe("os-1--gpu-13");
+  });
+
+  test("a machine whose job records were pruned is reused before a new one", () => {
+    const jobs = [record({ state: "running", machine: "os-1--gpu" })];
+    expect(
+      pickGpuMachine(jobs, "os-1", "T4", ["os-1--gpu", "os-1--gpu-3"]),
+    ).toBe("os-1--gpu-3");
+    // Every known machine busy: a new one skips the numbers they hold.
+    expect(
+      pickGpuMachine(
+        [...jobs, record({ state: "running", machine: "os-1--gpu-3" })],
+        "os-1",
+        "T4",
+        ["os-1--gpu", "os-1--gpu-3"],
+      ),
+    ).toBe("os-1--gpu-2");
   });
 });
 

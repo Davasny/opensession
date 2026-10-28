@@ -8,7 +8,8 @@
  * `<session>--gpu`, then `<session>--gpu-2` and so on, like a Portal
  * Sandbox's `<session>--portals`), lands the checkpoint there, and starts
  * the command detached inside the machine. Each machine runs one job at a
- * time, so jobs started together run in parallel on separate machines. The
+ * time, so jobs started together run in parallel on separate machines, as
+ * many as Modal has GPUs for (a start waits for capacity). The
  * job writes its log and exit code to files in the machine, so a deploy or a
  * crash of this server does not stop it: the registry here is persisted and
  * reattached at boot. When the job ends, the session is woken with how it
@@ -47,8 +48,6 @@ export const GPU_JOB_PROVIDER = "modal" as const;
 export const GPU_JOBS_FILE = ".agents/gpu-jobs.json";
 export const DEFAULT_GPU_JOB_MINUTES = 60;
 export const MAX_GPU_JOB_MINUTES = 6 * 60;
-/** GPU machines one session may hold, which caps its parallel jobs. */
-export const MAX_GPU_MACHINES = 4;
 const POLL_MS = 15_000;
 const WAKE_TAIL_BYTES = 3000;
 const SAVED_LOG_BYTES = 512 * 1024;
@@ -214,9 +213,13 @@ export interface GpuJobRecord {
   logPath?: string;
 }
 
-type Registry = { jobs: GpuJobRecord[] };
+/** `machines`: every GPU machine (provider session key) each session ever
+ *  started a job on. Job records are pruned after a week; this is not, so a
+ *  machine whose jobs were all pruned is still reused, slept and retired. */
+type Registry = { jobs: GpuJobRecord[]; machines?: Record<string, string[]> };
 type GpuJobsState = {
   jobs: Map<string, GpuJobRecord>;
+  machines: Map<string, Set<string>>;
   loaded?: Promise<void>;
   polling?: ReturnType<typeof setInterval>;
   preparing: Set<string>;
@@ -224,8 +227,17 @@ type GpuJobsState = {
 const g = globalThis as { __gpuJobs?: GpuJobsState };
 const state: GpuJobsState = (g.__gpuJobs ??= {
   jobs: new Map(),
+  machines: new Map(),
   preparing: new Set(),
 });
+// A state object from before `machines` existed (hot reload).
+state.machines ??= new Map();
+
+function rememberMachine(sessionId: string, machine: string): void {
+  let set = state.machines.get(sessionId);
+  if (!set) state.machines.set(sessionId, (set = new Set()));
+  set.add(machine);
+}
 
 function registryPath(): string {
   return stateDir("gpu-jobs.json");
@@ -237,7 +249,12 @@ function ensureLoaded(): Promise<void> {
     if (!text) return;
     try {
       const parsed = JSON.parse(text) as Registry;
-      for (const job of parsed.jobs || []) state.jobs.set(job.id, job);
+      for (const job of parsed.jobs || []) {
+        state.jobs.set(job.id, job);
+        rememberMachine(job.sessionId, gpuJobMachine(job));
+      }
+      for (const [sessionId, machines] of Object.entries(parsed.machines || {}))
+        for (const machine of machines) rememberMachine(sessionId, machine);
     } catch (error) {
       console.warn("[gpu-jobs] registry unreadable:", error);
     }
@@ -252,6 +269,9 @@ async function persist(): Promise<void> {
       state.jobs.delete(id);
   await writeJsonAtomicAsync(registryPath(), {
     jobs: [...state.jobs.values()],
+    machines: Object.fromEntries(
+      [...state.machines].map(([sessionId, set]) => [sessionId, [...set]]),
+    ),
   } satisfies Registry);
 }
 
@@ -284,15 +304,19 @@ export function gpuJobActive(sessionId: string): boolean {
 /**
  * The machine a new job of this session goes to: a free one that last ran
  * this GPU (its container needs no switch), else any free one, most recently
- * used first (its build cache is warmest), else a new one. Null when every
- * one of the MAX_GPU_MACHINES is busy. Synchronous, so a job recorded right
- * after this call claims the machine before another start can pick it.
+ * used first (its build cache is warmest), else a new one with the lowest
+ * unused number. `known` adds machines whose job records were pruned; they
+ * are free and come after the ones with a record. There is no cap: Modal's
+ * GPU capacity is the limit, and a start waits for it. Synchronous, so a job
+ * recorded right after this call claims the machine before another start
+ * can pick it.
  */
 export function pickGpuMachine(
   jobs: Iterable<GpuJobRecord>,
   sessionId: string,
   gpu: SandboxGpu,
-): string | null {
+  known: Iterable<string> = [],
+): string {
   const busy = new Set<string>();
   const last = new Map<string, GpuJobRecord>();
   for (const job of jobs) {
@@ -310,15 +334,19 @@ export function pickGpuMachine(
         b.startedAt.localeCompare(a.startedAt),
     );
   if (free[0]) return free[0][0];
-  for (let slot = 1; slot <= MAX_GPU_MACHINES; slot++) {
+  const taken = new Set(last.keys());
+  for (const machine of known)
+    if (!taken.has(machine)) return machine;
+    else taken.add(machine);
+  for (let slot = 1; ; slot++) {
     const machine = gpuMachineSessionId(sessionId, slot);
-    if (!last.has(machine)) return machine;
+    if (!taken.has(machine)) return machine;
   }
-  return null;
 }
 
-/** Sessions that may hold GPU machines (any job on record). */
+/** Sessions that may hold GPU machines (any job or machine on record). */
 export function sessionHasGpuMachine(sessionId: string): boolean {
+  if (state.machines.get(sessionId)?.size) return true;
   for (const job of state.jobs.values())
     if (job.sessionId === sessionId) return true;
   return false;
@@ -356,11 +384,13 @@ export async function startGpuJob(
     return { error: "a Runner session's workspace cannot be checkpointed" };
   if (!session.repo || !session.worktreeDir)
     return { error: "this session has no repository workspace" };
-  const machine = pickGpuMachine(state.jobs.values(), session.id, input.gpu);
-  if (!machine)
-    return {
-      error: `this session already runs ${MAX_GPU_MACHINES} GPU jobs at once, one per GPU machine; wait for one to end, or stop one with stop_gpu_job`,
-    };
+  const machine = pickGpuMachine(
+    state.jobs.values(),
+    session.id,
+    input.gpu,
+    state.machines.get(session.id) ?? [],
+  );
+  rememberMachine(session.id, machine);
   const minutes = Math.min(
     Math.max(1, input.timeoutMinutes),
     MAX_GPU_JOB_MINUTES,
@@ -838,7 +868,7 @@ function sessionMachines(sessionId: string): {
   all: Set<string>;
   busy: Set<string>;
 } {
-  const all = new Set<string>();
+  const all = new Set<string>(state.machines.get(sessionId));
   const busy = new Set<string>();
   for (const job of state.jobs.values())
     if (job.sessionId === sessionId) {
@@ -893,6 +923,7 @@ export async function retireGpuMachine(sessionId: string): Promise<void> {
   );
   for (const [jobId, job] of state.jobs)
     if (job.sessionId === sessionId) state.jobs.delete(jobId);
+  state.machines.delete(sessionId);
   await persist().catch(() => {});
   for (const id of ids)
     if (id) console.log(`[gpu-jobs] ${sessionId}: GPU machine ${id} retired`);
@@ -945,6 +976,7 @@ export async function startGpuJobs(): Promise<void> {
 export function __resetGpuJobsForTest(): void {
   if (state.polling) clearInterval(state.polling);
   state.jobs.clear();
+  state.machines.clear();
   state.preparing.clear();
   state.polling = undefined;
   state.loaded = Promise.resolve();
