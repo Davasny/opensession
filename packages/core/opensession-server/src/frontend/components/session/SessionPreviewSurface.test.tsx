@@ -65,10 +65,11 @@ test("SessionViewer keeps preview selection and state ownership", async () => {
   expect(portal).toBeGreaterThan(-1);
   expect(staging).toBeGreaterThan(portal);
   expect(branch).toContain("deployment: staging");
-  expect(branch).toContain("url: stagingUrl");
+  expect(branch).toContain("url: browserTab.url");
   expect(branch).toContain("shareLink,");
-  // Both surfaces keep their page in the app-wide frame layer.
-  expect(branch.split("frameScope={frameScope}")).toHaveLength(3);
+  expect(branch).toContain('kind: "browser", url: browserTab.url');
+  // Every surface keeps its page in the app-wide frame layer.
+  expect(branch.split("frameScope={frameScope}")).toHaveLength(4);
 });
 
 test("a kept preview leaves its frame to the app-wide layer", () => {
@@ -86,4 +87,15 @@ test("a kept preview leaves its frame to the app-wide layer", () => {
 
   expect(html).toContain(`value="${STAGING_URL.replace("&", "&amp;")}"`);
   expect(html).not.toContain("<iframe");
+});
+
+test("a link opened in the Browser tab renders in a browser pane", () => {
+  const html = renderToStaticMarkup(
+    <SessionPreviewSurface
+      surface={{ kind: "browser", url: "https://acme.example.test/page" }}
+    />,
+  );
+
+  expect(html).toContain('src="https://acme.example.test/page"');
+  expect(html).toContain('aria-label="Browser address"');
 });

@@ -25,6 +25,7 @@ type PreviewSurface =
       kind: "portal";
       target: ComponentProps<typeof PortalPane>["target"];
     }
+  | { kind: "browser"; url: string }
   | {
       kind: "staging";
       deployment: StagingDeployment | null;
@@ -48,6 +49,21 @@ export function SessionPreviewSurface({
           <PortalPane
             target={surface.target}
             keepAliveKey={frameScope && keptFrameKey("portal", frameScope)}
+          />
+        </div>
+      );
+    case "browser":
+      // A link opened from the transcript. It shares the Browser tab, and so
+      // its kept-alive frame, with the preview deployment.
+      return (
+        <div className={VIEWER_REVIEW_MAIN}>
+          <BrowserPane
+            url={surface.url}
+            name="Browser"
+            frameTitle="Browser"
+            keepAliveKey={frameScope && keptFrameKey("staging", frameScope)}
+            allow="clipboard-read; clipboard-write; fullscreen; autoplay"
+            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
           />
         </div>
       );

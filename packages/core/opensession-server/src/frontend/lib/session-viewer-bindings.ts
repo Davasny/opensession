@@ -207,6 +207,9 @@ export interface SessionViewerViewTabsBinding {
   showPortal?: boolean;
   /** The service currently loaded in the center-panel browser. */
   portalTarget?: PortalTarget | null;
+  /** A link opened in the Browser tab. Shown there instead of the PR's
+   * preview deployment. */
+  browserUrl?: string | null;
 }
 
 export interface SessionViewerSubagentsBinding {

@@ -117,6 +117,7 @@ import type { PrFocus } from "../../lib/pr-focus";
 import type { PrReviewPage } from "../PrPanel";
 import type { WorkspaceMediaItem } from "../../lib/api";
 import type { useNavigation } from "../../hooks/useNavigation";
+import { useLinkContextMenu } from "../LinkContextMenu";
 import type { useSessionSocket } from "../../hooks/useSessionSocket";
 import type { useSessionAssets } from "../AssetsPanel";
 import type { useSessionRuntimeController } from "../../hooks/useSessionRuntimeController";
@@ -156,13 +157,17 @@ type SlackComposerDraft = {
   channel?: string;
 };
 
+type BrowserTab = Pick<PreviewSurface, "kind"> & { url: string };
+
 interface SurfaceRegion {
   showPortal: boolean;
   portalTarget: SessionViewerProps["viewTabs"]["portalTarget"];
   showDesktop: boolean;
   showStaging: boolean;
   staging: Extract<PreviewSurface, { kind: "staging" }>["deployment"];
-  stagingUrl?: string | null;
+  /** What the Browser tab shows: a link opened from the transcript, or the
+   * PR's preview deployment. */
+  browserTab: BrowserTab | null;
   shareLink: Extract<PreviewSurface, { kind: "staging" }>["shareLink"];
   showAssets: boolean;
   showTerminal: boolean;
@@ -453,7 +458,7 @@ export function SessionViewerMainRegion({
     showDesktop,
     showStaging,
     staging,
-    stagingUrl,
+    browserTab,
     shareLink,
     showAssets,
     showTerminal,
@@ -481,6 +486,7 @@ export function SessionViewerMainRegion({
     terminalTabOpen,
     previewStatus,
   } = panes;
+  const linkMenu = useLinkContextMenu(navigation.openBrowser);
   const {
     openPr,
     allSessions,
@@ -709,12 +715,17 @@ export function SessionViewerMainRegion({
         <div className={VIEWER_REVIEW_MAIN}>
           <SandboxDesktopPane sessionId={session.id} />
         </div>
-      ) : showStaging && stagingUrl ? (
+      ) : showStaging && browserTab?.kind === "browser" ? (
+        <SessionPreviewSurface
+          surface={{ kind: "browser", url: browserTab.url }}
+          frameScope={frameScope}
+        />
+      ) : showStaging && browserTab ? (
         <SessionPreviewSurface
           surface={{
             kind: "staging",
             deployment: staging,
-            url: stagingUrl,
+            url: browserTab.url,
             shareLink,
           }}
           frameScope={frameScope}
@@ -867,6 +878,7 @@ export function SessionViewerMainRegion({
           <div className={VIEWER_MESSAGES_REGION} style={summaryStepStyle}>
             {/* Selecting transcript text offers actions without changing either
 						    composer until the person chooses where to use it. */}
+            {linkMenu.element}
             <QuoteSelection
               containerRef={messagesRef}
               disabled={noEngine}
@@ -899,6 +911,7 @@ export function SessionViewerMainRegion({
               data-lightbox-session-id={session.id}
               onScroll={handleMessagesScroll}
               onClick={handleMessagesClick}
+              onContextMenu={linkMenu.onContextMenu}
             >
               {/* The outgoing setup/loading canvas owns min-h-full. Waiting for its
 							    short fade before mounting transcript rows prevents both surfaces

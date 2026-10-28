@@ -481,6 +481,7 @@ export function SessionViewer({
     videoTitle = null,
     showPortal = false,
     portalTarget = null,
+    browserUrl = null,
     showDesktop = false,
   },
   subagents: {
@@ -678,7 +679,8 @@ export function SessionViewer({
     },
     surface: {
       phonePr,
-      showStaging,
+      // A link in the Browser tab keeps it open without a preview deploy.
+      showStaging: showStaging && !browserUrl,
       onCloseStaging,
       showReview,
       sessionHidden,
@@ -1653,7 +1655,11 @@ export function SessionViewer({
             showDesktop,
             showStaging,
             staging,
-            stagingUrl,
+            browserTab: browserUrl
+              ? { kind: "browser", url: browserUrl }
+              : stagingUrl
+                ? { kind: "staging", url: stagingUrl }
+                : null,
             shareLink,
             showAssets,
             showTerminal,

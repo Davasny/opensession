@@ -65,6 +65,8 @@ export interface NavigationActions {
 
   openReview(): void;
   openStaging(): void;
+  /** Open a link in this workspace's Browser tab. */
+  openBrowser(url: string): void;
   openPortal(target: PortalTarget): void;
   openAssets(): void;
   openTerminal(): void;

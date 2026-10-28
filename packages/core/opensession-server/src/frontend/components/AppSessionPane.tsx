@@ -80,6 +80,7 @@ interface AppSessionPaneProps {
     | "videoPanel"
     | "videoRef"
     | "currentPortalTarget"
+    | "currentBrowserUrl"
     | "subagentActive"
     | "terminalOpen"
     | "closeStagingTab"
@@ -154,6 +155,7 @@ export function AppSessionPane({
     videoPanel,
     videoRef,
     currentPortalTarget,
+    currentBrowserUrl,
     subagentActive,
     terminalOpen,
     closeStagingTab,
@@ -320,6 +322,7 @@ export function AppSessionPane({
             ? viewTabKind(surfaceId) === "portal"
             : focused && portalActive,
           portalTarget: currentPortalTarget,
+          browserUrl: currentBrowserUrl,
           showDesktop: splitMode
             ? viewTabKind(surfaceId) === "desktop"
             : focused && desktopActive,

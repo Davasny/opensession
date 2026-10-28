@@ -28,6 +28,9 @@ export function useOnDemandViewTabs({
   const [portalTargets, setPortalTargets] = useState<
     Record<string, PortalTarget>
   >({});
+  // A link opened in the Browser tab, per workspace. It takes the tab over
+  // from the PR's preview deployment until the tab closes.
+  const [browserUrls, setBrowserUrls] = useState<Record<string, string>>({});
   const [assetsOpen, setAssetsOpen] = useState<Set<string>>(
     () => new Set(getActiveViewTabKeys("assets")),
   );
@@ -51,6 +54,16 @@ export function useOnDemandViewTabs({
     });
     setActiveViewTab("staging");
   }
+  // Open a link in this workspace's Browser tab, adding the tab if absent.
+  function openBrowser(url: string) {
+    if (!workspaceKey) return;
+    const key = workspaceKey;
+    setBrowserUrls((prev) =>
+      prev[key] === url ? prev : { ...prev, [key]: url },
+    );
+    setStagingOpen((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+    setActiveViewTab("staging");
+  }
   function openPortal(target: PortalTarget) {
     if (!workspaceKey) return;
     setPortalTargets((prev) => ({ ...prev, [workspaceKey]: target }));
@@ -72,6 +85,12 @@ export function useOnDemandViewTabs({
     if (workspaceKey) {
       const key = workspaceKey;
       dropKeptFrame(keptFrameKey("staging", key));
+      setBrowserUrls((prev) => {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
       setStagingOpen((prev) => {
         if (!prev.has(key)) return prev;
         const next = new Set(prev);
@@ -149,6 +168,9 @@ export function useOnDemandViewTabs({
   const currentPortalTarget = workspaceKey
     ? (portalTargets[workspaceKey] ?? null)
     : null;
+  const currentBrowserUrl = workspaceKey
+    ? (browserUrls[workspaceKey] ?? null)
+    : null;
 
   return {
     stagingOpen,
@@ -156,7 +178,9 @@ export function useOnDemandViewTabs({
     terminalOpen,
     desktopOpen,
     currentPortalTarget,
+    currentBrowserUrl,
     openStaging,
+    openBrowser,
     closeStagingTab,
     openAssets,
     closeAssetsTab,

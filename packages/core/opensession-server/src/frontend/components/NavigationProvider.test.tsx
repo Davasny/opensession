@@ -46,6 +46,7 @@ function navigationFixture(openPrs: () => void): NavigationActions {
     openPrefilledSession() {},
     openReview() {},
     openStaging() {},
+    openBrowser() {},
     openPortal() {},
     openAssets() {},
     openTerminal() {},
