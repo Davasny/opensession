@@ -3,6 +3,7 @@ import type { DeliveryActorRequest } from "./delivery-protocol";
 import type { GatewayCommandRequest } from "./gateway-command-protocol";
 import type { CoreActorRequest } from "./core-protocol";
 import type { MetadataActorRequest } from "./metadata-protocol";
+import type { UsageActorRequest } from "./usage-protocol";
 import type { CatalogDocumentRequest } from "./catalog-document-protocol";
 import type { CreationActorEffect } from "./creation-effect-protocol";
 import type { TurnActorRequest } from "./turn-protocol";
@@ -65,6 +66,11 @@ export type SessionActorReducerCommand =
       kind: "catalog_document";
       commandId: string;
       request: CatalogDocumentRequest;
+    }
+  | {
+      kind: "usage";
+      commandId: string;
+      request: UsageActorRequest;
     }
   | {
       kind: "transcript";

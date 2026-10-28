@@ -537,6 +537,28 @@ batches up to 1,000 rows, one key batch at most 256 KiB of keys, one
 `get_many` answer at most 32 MiB, one page at most 8 MiB, and one seed batch
 at most 32 MiB.
 
+### Model usage
+
+Pi reports each finished model request once, where it runs
+(`model-usage.ts`). In the gateway process the records are batched into the
+`usage` reducer (`usage-protocol.ts`, `usage-store.ts`, schema 35); a run host
+registers a forwarder instead and sends them in the run-host `usage` frame,
+which it re-sends on reattach and to a fresh server epoch, as it does
+transcript history. `record` rides the owning session's mailbox: the actor
+adds the request to `session_kernel_usage_days` (per UTC day and model) and
+skips any record at or below its attempt's high-water mark in
+`session_kernel_usage_attempts`, so re-delivery counts nothing. It never marks
+the session for a runtime wake, and a failed write returns an error to the
+caller instead of quarantining the session. The same lane pass overwrites
+the session's touched days in the central `session_kernel_usage_catalog`.
+Usage with no native session to own it (utility one-shots, auxiliary workers,
+or a session that was deleted or quarantined) is counted in the catalog
+directly with `record_unowned`. `day` reads one date's rows from the catalog
+lane, which is all Analytics needs (`pi-usage.ts`); the gateway never walks
+engine session files. Days before the catalog started read the per-day file
+the retired scanner wrote; `scripts/pi-usage-backfill.ts` writes a missing one
+offline.
+
 The transcript database keeps its own `changeSeq`, which is the client replay
 cursor. SessionKernel also records lifecycle and metadata changes in its own
 change stream. Token deltas remain ephemeral.

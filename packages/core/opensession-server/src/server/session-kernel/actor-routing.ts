@@ -8,6 +8,7 @@ import type { SessionActorReducerCommand } from "./lifecycle-protocol";
 import { isMetadataCatalogRequest, isMetadataRead } from "./metadata-protocol";
 import { sessionKernelStoreRoute } from "./store-routing";
 import { isTranscriptRead } from "./transcript-protocol";
+import { isUsageRead } from "./usage-protocol";
 
 export type SessionActorRoute =
   | { scope: "global" }
@@ -30,6 +31,7 @@ export function isReadReducer(command: SessionActorReducerCommand): boolean {
   if (command.kind === "metadata") return isMetadataRead(command.request);
   if (command.kind === "catalog_document")
     return isCatalogDocumentRead(command.request);
+  if (command.kind === "usage") return isUsageRead(command.request);
   return command.kind === "turn" && command.request.op === "snapshot";
 }
 
@@ -90,6 +92,19 @@ export function sessionActorReducerRoute(
       // because no session mailbox can overlap them. Neither opens a session
       // actor.
       return isCatalogDocumentRead(command.request)
+        ? { scope: "catalog_read" }
+        : { scope: "central_write" };
+    case "usage":
+      // A session's usage is counted in its own mailbox, so recording spreads
+      // across session lanes. Unowned usage and the per-day read touch only
+      // the central catalog.
+      if (command.request.op === "record")
+        return {
+          scope: "session",
+          sessionId: command.request.sessionId,
+          mutation: true,
+        };
+      return command.request.op === "day"
         ? { scope: "catalog_read" }
         : { scope: "central_write" };
     default: {

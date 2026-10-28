@@ -201,6 +201,30 @@ const transcriptRelay = new TranscriptRelay();
   });
 }
 
+// ── Usage relay ──────────────────────────────────────────────────────────────
+// Same shape as the transcript relay: every finished model request becomes a
+// `usage` frame, so the server counts it in the owning session. Records carry
+// an attempt id and sequence and are skipped server-side when seen before, so
+// the whole (record-bounded) history is simply re-sent wherever transcript
+// history is: on a socket reattach and to a fresh server epoch.
+const MAX_USAGE_HISTORY_RECORDS = 10_000;
+const usageHistory: Array<{
+  sessionId?: string;
+  records: import("../server/model-usage").ModelUsageRecord[];
+}> = [];
+let usageHistoryRecords = 0;
+{
+  const { setModelUsageForwarder } = await import("../server/model-usage");
+  setModelUsageForwarder((sessionId, records) => {
+    usageHistory.push({ sessionId, records });
+    usageHistoryRecords += records.length;
+    while (usageHistoryRecords > MAX_USAGE_HISTORY_RECORDS) {
+      usageHistoryRecords -= usageHistory.shift()?.records.length ?? 0;
+    }
+    send({ t: "usage", ...(sessionId ? { sessionId } : {}), records });
+  });
+}
+
 function send(msg: HostToClientMsg): void {
   // hello/ping are per-connection transport chatter — never sequenced,
   // never replayed; everything else goes through the WS buffer in WS mode.
@@ -240,6 +264,7 @@ function sendHello(): void {
   if (!RUN_WS_URL) {
     for (const batch of transcriptRelay.replay())
       send({ t: "transcript", ...batch });
+    for (const batch of usageHistory) send({ t: "usage", ...batch });
     send({ t: "catchup_complete" });
   }
 }
@@ -372,6 +397,8 @@ if (RUN_WS_URL) {
           for (const batch of transcriptRelay.replay()) {
             sock.send(JSON.stringify({ t: "transcript", ...batch }));
           }
+          for (const batch of usageHistory)
+            sock.send(JSON.stringify({ t: "usage", ...batch }));
         }
         if (gap) {
           log(

@@ -36,6 +36,7 @@ import type {
   CatalogDocumentRequest,
   CatalogDocumentResult,
 } from "./catalog-document-protocol";
+import type { UsageActorRequest, UsageActorResult } from "./usage-protocol";
 import {
   assertTranscriptActorRequest,
   decodeAgentTranscriptActorRequest,
@@ -454,6 +455,19 @@ export class SessionKernelActorClient {
       },
       `catalog document ${request.op}`,
       request.op === "page" || request.op === "get_many",
+    );
+  }
+
+  decideUsageAsync<T extends UsageActorRequest>(
+    request: T,
+  ): Promise<UsageActorResult<T>> {
+    return this.callAsync<UsageActorResult<T>>(
+      {
+        t: "reduce",
+        command: { kind: "usage", commandId: crypto.randomUUID(), request },
+      },
+      `usage ${request.op}`,
+      request.op === "day",
     );
   }
 

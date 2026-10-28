@@ -43,6 +43,7 @@ import type {
 type PiProviderConfigInput = Parameters<ModelRuntime["registerProvider"]>[1];
 import { stateDir } from "./paths";
 import { audit, summarizeText } from "./audit";
+import { recordModelUsage, shortModel } from "./model-usage";
 import {
   journalSet,
   buildRunJournalRecord,
@@ -2123,6 +2124,36 @@ async function* runPiAttempt(
   };
   let usageRequests = 0;
   let sawUsage = false;
+  // Each finished request is counted once, by the session that owns it
+  // (model-usage.ts). requestId names this attempt; usageRequests orders it.
+  const recordRequestUsage = (
+    usage: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      cost?: { total?: number };
+    },
+    requestModel: unknown,
+    timestamp: unknown,
+  ) =>
+    recordModelUsage(unifiedSessionId, {
+      attemptId: requestId,
+      seq: usageRequests,
+      at: Math.round(
+        typeof timestamp === "number" && Number.isFinite(timestamp)
+          ? timestamp < 10_000_000_000
+            ? timestamp * 1000
+            : timestamp
+          : Date.now(),
+      ),
+      model: shortModel(requestModel || model),
+      input: Math.max(0, usage.input || 0),
+      output: Math.max(0, usage.output || 0),
+      cacheRead: Math.max(0, usage.cacheRead || 0),
+      cacheWrite: Math.max(0, usage.cacheWrite || 0),
+      costUsd: Math.max(0, usage.cost?.total || 0),
+    });
   const usageAuditFields = () =>
     sawUsage
       ? {
@@ -3404,6 +3435,7 @@ async function* runPiAttempt(
                   (usageTotal.costUsd || 0) + (u.cost?.total || 0);
                 usageTotal.contextTokens =
                   (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
+                recordRequestUsage(u, msg.model, msg.timestamp);
                 push({ type: "usage_snapshot", usage: { ...usageTotal } });
               }
               // Persist thinking, text, and tool calls now (messages have no
@@ -3518,6 +3550,7 @@ async function* runPiAttempt(
                 usageTotal.cacheCreationTokens += cu.cacheWrite || 0;
                 usageTotal.costUsd =
                   (usageTotal.costUsd || 0) + (cu.cost?.total || 0);
+                recordRequestUsage(cu, undefined, undefined);
                 push({ type: "usage_snapshot", usage: { ...usageTotal } });
               }
             }

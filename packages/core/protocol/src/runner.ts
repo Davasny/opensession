@@ -280,7 +280,32 @@ type HostToClientPayload =
       t: "transcript";
       engineSessionId: string;
       lines: Record<string, unknown>[];
+    }
+  /**
+   * Model requests the host's engine finished, for the server to count once
+   * in the owning session (or as unowned usage when `sessionId` is absent).
+   * Each record carries its engine attempt id and a 1-based sequence within
+   * it, so re-delivery (socket-mode reattach resend, WS replay) is skipped
+   * server-side. Servers that predate this frame ignore it.
+   */
+  | {
+      t: "usage";
+      sessionId?: string;
+      records: ModelUsageFrameRecord[];
     };
+
+export interface ModelUsageFrameRecord {
+  attemptId: string;
+  seq: number;
+  /** Epoch ms when the request finished. */
+  at: number;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  costUsd: number;
+}
 
 export type ClientToHostMsg =
   | { t: "ask_answer"; askId: string; result: AskResult }

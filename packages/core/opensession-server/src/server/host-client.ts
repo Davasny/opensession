@@ -28,6 +28,7 @@
 
 import type { SessionSpeed } from "@tellahq/opensession-protocol/session";
 import type { McpScope } from "./runner-shared";
+import { applyRelayedModelUsage } from "./model-usage";
 import { audit } from "./audit";
 import { waitForRunHostAdmission } from "./host-admission";
 import {
@@ -1811,6 +1812,11 @@ export class HostHandle {
                 lines,
               );
         });
+        break;
+      case "usage":
+        // Not fenced by run generation: a superseded run's tokens were still
+        // spent. Records are deduped by attempt and sequence server-side.
+        applyRelayedModelUsage(msg.sessionId, msg.records);
         break;
       case "steer_failed":
         if (this.acceptsSideEffectFrame("steer_failed")) {

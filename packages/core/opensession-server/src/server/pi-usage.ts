@@ -1,15 +1,21 @@
-import {
-  createReadStream,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { basename, dirname } from "node:path";
-import { createInterface } from "node:readline";
+/**
+ * Pi model usage per UTC day, for Analytics and Home.
+ *
+ * Usage is counted at the source: Pi records each finished request
+ * (model-usage.ts), the owning session's actor counts it per day and model,
+ * and the session kernel's central catalog projects every session's counters
+ * (session-kernel/usage-store.ts). A day is one indexed catalog query; the
+ * gateway never walks engine session files.
+ *
+ * Days before the catalog started are served from the per-day files the
+ * retired file scanner wrote (pi-usage-scan.ts; scripts/pi-usage-backfill.ts
+ * writes a missing one offline). Days before the Pi cutover keep the final
+ * OpenCode measurement or their audit rows.
+ */
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { shortModel } from "./model-usage";
 import { isNativeSessionId, stateDir } from "./paths";
+import { sessionUsage, type UsageDayRow } from "./session-kernel";
 
 export interface PiModelUsage {
   model: string;
@@ -37,25 +43,27 @@ export interface PiUsageDay {
   unmeasured: boolean;
 }
 
-interface MutableUsage {
+export interface MutableUsage {
   byModel: Map<string, PiModelUsage>;
   bySession: Map<string, { requests: number; output: number }>;
 }
-
-const PI_DIR = () => stateDir("pi");
 const CACHE_DIR = () => stateDir("analytics-cache");
 const CACHE_VERSION = 1;
 export const PI_USAGE_CUTOVER_MS = Date.parse("2026-08-19T13:35:30Z");
-const CUTOVER_DAY = "2026-08-19";
-const VOLATILE_TTL_MS = 60_000;
-const volatile = new Map<string, { at: number; day: PiUsageDay }>();
-let inflight: Promise<void> | null = null;
+export const CUTOVER_DAY = "2026-08-19";
+/** The first whole UTC day the usage catalog counted. Earlier days come from
+ * the retired scanner's per-day files. */
+export const USAGE_CATALOG_START_DAY = "2026-10-29";
+const TODAY_TTL_MS = 60_000;
+/** Finished days do not change; keep about a year of them. */
+const MAX_REMEMBERED_DAYS = 400;
+const remembered = new Map<string, { at: number; day: PiUsageDay }>();
 
-function emptyMutable(): MutableUsage {
+export function emptyMutable(): MutableUsage {
   return { byModel: new Map(), bySession: new Map() };
 }
 
-function emptyDay(unmeasured = false): PiUsageDay {
+export function emptyDay(unmeasured = false): PiUsageDay {
   return {
     byModel: [],
     bySession: {},
@@ -73,7 +81,7 @@ function emptyDay(unmeasured = false): PiUsageDay {
   };
 }
 
-function finishDay(value: MutableUsage): PiUsageDay {
+export function finishDay(value: MutableUsage): PiUsageDay {
   const day = emptyDay();
   day.byModel = [...value.byModel.values()].sort(
     (a, b) =>
@@ -92,60 +100,16 @@ function finishDay(value: MutableUsage): PiUsageDay {
   return day;
 }
 
-function mergeDay(target: MutableUsage, source: PiUsageDay): void {
-  for (const usage of source.byModel || []) {
-    const current = target.byModel.get(usage.model) || {
-      model: usage.model,
-      requests: 0,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      costUsd: 0,
-    };
-    current.requests += usage.requests || 0;
-    current.input += usage.input || 0;
-    current.output += usage.output || 0;
-    current.cacheRead += usage.cacheRead || 0;
-    current.cacheWrite += usage.cacheWrite || 0;
-    current.costUsd += usage.costUsd || 0;
-    target.byModel.set(usage.model, current);
-  }
-  for (const [session, usage] of Object.entries(source.bySession || {})) {
-    const current = target.bySession.get(session) || { requests: 0, output: 0 };
-    current.requests += usage.requests || 0;
-    current.output += usage.output || 0;
-    target.bySession.set(session, current);
-  }
-}
-
-function cachePath(date: string): string {
-  return `${CACHE_DIR()}/pi-day-v${CACHE_VERSION}-${date}.json`;
-}
-
-function readCache(date: string): PiUsageDay | null {
+async function readLegacyAuditDay(date: string): Promise<PiUsageDay | null> {
+  const path = `${stateDir("audit")}/audit-${date}.jsonl`;
+  let text: string;
   try {
-    const parsed = JSON.parse(readFileSync(cachePath(date), "utf8"));
-    return parsed?.v === CACHE_VERSION && parsed?.day ? parsed.day : null;
+    text = await readFile(path, "utf8");
   } catch {
     return null;
   }
-}
-
-function writeCache(date: string, day: PiUsageDay): void {
-  try {
-    mkdirSync(CACHE_DIR(), { recursive: true });
-    writeFileSync(cachePath(date), JSON.stringify({ v: CACHE_VERSION, day }));
-  } catch (error) {
-    console.error("[analytics] Pi usage cache write failed:", error);
-  }
-}
-
-function readLegacyAuditDay(date: string): PiUsageDay | null {
-  const path = `${stateDir("audit")}/audit-${date}.jsonl`;
-  if (!existsSync(path)) return null;
   const bucket = emptyMutable();
-  for (const line of readFileSync(path, "utf8").split("\n")) {
+  for (const line of text.split("\n")) {
     if (!line.includes('"kind":"result"')) continue;
     let event: Record<string, unknown>;
     try {
@@ -193,10 +157,10 @@ function readLegacyAuditDay(date: string): PiUsageDay | null {
 /** Preserve the final OpenCode measurement on the mixed cutover day and all
  * earlier days. The retired scanner wrote this versioned shape once per day;
  * the cutover day's still-volatile measurement falls back to its audit rows. */
-function readLegacyEngineDay(date: string): PiUsageDay | null {
+async function readLegacyEngineDay(date: string): Promise<PiUsageDay | null> {
   try {
     const parsed = JSON.parse(
-      readFileSync(`${CACHE_DIR()}/engine-day-${date}.json`, "utf8"),
+      await readFile(`${CACHE_DIR()}/engine-day-${date}.json`, "utf8"),
     );
     const day = parsed?.day;
     if (!day || !Array.isArray(day.byModel))
@@ -217,143 +181,87 @@ function readLegacyEngineDay(date: string): PiUsageDay | null {
       coverage: { pi: day.unmeasured ? "unmeasured" : "measured" },
     };
   } catch {
-    return readLegacyAuditDay(date);
+    return await readLegacyAuditDay(date);
   }
 }
 
-function messageTimeMs(
-  entry: Record<string, unknown>,
-  message: Record<string, unknown>,
-): number {
-  const raw = message.timestamp ?? entry.timestamp;
-  if (typeof raw === "number") return raw < 10_000_000_000 ? raw * 1000 : raw;
-  if (typeof raw === "string") return Date.parse(raw);
-  return Number.NaN;
+function cachePath(date: string): string {
+  return `${CACHE_DIR()}/pi-day-v${CACHE_VERSION}-${date}.json`;
 }
 
-function shortModel(model: unknown): string {
-  const stripped = String(model || "unknown").replace(
-    /^(?:pi|claude|codex|opencode)\/[^/]+\//,
-    "",
-  );
-  return stripped.split("/").pop() || "unknown";
-}
-
-function sessionIdForFile(path: string): string | null {
-  const candidate = basename(dirname(path));
-  return isNativeSessionId(candidate) ? candidate : null;
-}
-
-function jsonlFiles(root: string): string[] {
-  const files: string[] = [];
-  let dirs;
+async function readCache(date: string): Promise<PiUsageDay | null> {
   try {
-    dirs = readdirSync(root, { withFileTypes: true });
+    const parsed = JSON.parse(await readFile(cachePath(date), "utf8"));
+    return parsed?.v === CACHE_VERSION && parsed?.day ? parsed.day : null;
   } catch {
-    return files;
+    return null;
   }
-  for (const dir of dirs) {
-    if (!dir.isDirectory()) continue;
-    const child = `${root}/${dir.name}`;
-    try {
-      for (const file of readdirSync(child))
-        if (file.endsWith(".jsonl")) files.push(`${child}/${file}`);
-    } catch {}
-  }
-  return files;
 }
 
-export async function scanPiUsage(
-  fromDate: string,
-  root = `${PI_DIR()}/sessions`,
-): Promise<{
-  days: Map<string, PiUsageDay>;
-  earliest: string | null;
-  complete: boolean;
-}> {
-  const fromMs = Date.parse(`${fromDate}T00:00:00Z`);
-  const buckets = new Map<string, MutableUsage>();
-  const seen = new Set<string>();
-  let earliest = "";
-  let complete = true;
-  let scanned = 0;
-  for (const path of jsonlFiles(root)) {
-    try {
-      if (statSync(path).mtimeMs < fromMs) continue;
-      const lines = createInterface({
-        input: createReadStream(path, { encoding: "utf8" }),
-        crlfDelay: Infinity,
-      });
-      for await (const line of lines) {
-        if (!line || !line.includes('"type":"message"')) continue;
-        let entry: Record<string, unknown>;
-        try {
-          entry = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const message = entry.message as Record<string, unknown> | undefined;
-        if (!message || message.role !== "assistant") continue;
-        const usage = message.usage as Record<string, unknown> | undefined;
-        if (!usage) continue;
-        const time = messageTimeMs(entry, message);
-        if (!Number.isFinite(time)) continue;
-        const date = new Date(time).toISOString().slice(0, 10);
-        if (!earliest || date < earliest) earliest = date;
-        if (
-          time < fromMs ||
-          (date === CUTOVER_DAY && time < PI_USAGE_CUTOVER_MS)
-        )
-          continue;
-        const id = String(entry.id || "");
-        if (id && seen.has(id)) continue;
-        if (id) seen.add(id);
-        const bucket = buckets.get(date) || emptyMutable();
-        buckets.set(date, bucket);
-        const model = shortModel(message.model);
-        const modelUsage = bucket.byModel.get(model) || {
-          model,
-          requests: 0,
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          costUsd: 0,
-        };
-        modelUsage.requests++;
-        modelUsage.input += Number(usage.input) || 0;
-        modelUsage.output += Number(usage.output) || 0;
-        modelUsage.cacheRead += Number(usage.cacheRead) || 0;
-        modelUsage.cacheWrite += Number(usage.cacheWrite) || 0;
-        modelUsage.costUsd +=
-          Number((usage.cost as Record<string, unknown> | undefined)?.total) ||
-          0;
-        bucket.byModel.set(model, modelUsage);
-        const session = sessionIdForFile(path);
-        if (session) {
-          const sessionUsage = bucket.bySession.get(session) || {
-            requests: 0,
-            output: 0,
-          };
-          sessionUsage.requests++;
-          sessionUsage.output += Number(usage.output) || 0;
-          bucket.bySession.set(session, sessionUsage);
-        }
-      }
-    } catch (error) {
-      complete = false;
-      console.error(`[analytics] Pi usage file unreadable: ${path}`, error);
+/** Offline backfill only (scripts/pi-usage-backfill.ts). */
+export async function writePiUsageCache(
+  date: string,
+  day: PiUsageDay,
+): Promise<string> {
+  await mkdir(CACHE_DIR(), { recursive: true });
+  const path = cachePath(date);
+  await writeFile(path, JSON.stringify({ v: CACHE_VERSION, day }));
+  return path;
+}
+
+/** Fold one date's catalog rows into the day shape Analytics reads. */
+export function usageDayFromCatalog(rows: UsageDayRow[]): PiUsageDay {
+  const bucket = emptyMutable();
+  for (const row of rows) {
+    const model = shortModel(row.model);
+    const usage = bucket.byModel.get(model) || {
+      model,
+      requests: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      costUsd: 0,
+    };
+    usage.requests += row.requests;
+    usage.input += row.input;
+    usage.output += row.output;
+    usage.cacheRead += row.cacheRead;
+    usage.cacheWrite += row.cacheWrite;
+    usage.costUsd += row.costUsd;
+    bucket.byModel.set(model, usage);
+    if (isNativeSessionId(row.sessionId)) {
+      const session = bucket.bySession.get(row.sessionId) || {
+        requests: 0,
+        output: 0,
+      };
+      session.requests += row.requests;
+      session.output += row.output;
+      bucket.bySession.set(row.sessionId, session);
     }
-    if (++scanned % 25 === 0)
-      await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  return {
-    days: new Map(
-      [...buckets].map(([date, value]) => [date, finishDay(value)]),
-    ),
-    earliest: earliest || null,
-    complete,
-  };
+  return finishDay(bucket);
+}
+
+async function measureDay(date: string): Promise<PiUsageDay | null> {
+  if (date >= USAGE_CATALOG_START_DAY) {
+    try {
+      return usageDayFromCatalog(await sessionUsage({ op: "day", date }));
+    } catch (error) {
+      console.warn(
+        `[analytics] usage catalog read failed for ${date}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return null;
+    }
+  }
+  const cached = await readCache(date);
+  if (cached) return cached;
+  if (date <= CUTOVER_DAY) {
+    const legacy = await readLegacyEngineDay(date);
+    if (legacy) return legacy;
+  }
+  return null;
 }
 
 export async function piUsageForDates(
@@ -361,69 +269,30 @@ export async function piUsageForDates(
 ): Promise<Map<string, PiUsageDay>> {
   const today = new Date().toISOString().slice(0, 10);
   const out = new Map<string, PiUsageDay>();
-  const missing: string[] = [];
-  const volatileDay = (date: string): PiUsageDay | null => {
-    const cached = volatile.get(date);
-    return cached && Date.now() - cached.at < VOLATILE_TTL_MS
-      ? cached.day
-      : null;
-  };
-  for (const date of dates) {
-    const cached = date < today ? readCache(date) : volatileDay(date);
-    if (cached) out.set(date, cached);
-    else missing.push(date);
-  }
-  if (!missing.length) return out;
-  while (inflight) await inflight;
-  let release!: () => void;
-  inflight = new Promise<void>((resolve) => (release = resolve));
-  try {
-    const stillMissing = missing.filter(
-      (date) =>
-        !out.has(date) && !(date < today ? readCache(date) : volatileDay(date)),
-    );
-    if (stillMissing.length) {
-      const scanFrom = stillMissing.reduce((a, b) => (a < b ? a : b));
-      const scanned =
-        scanFrom <= CUTOVER_DAY
-          ? await scanPiUsage(CUTOVER_DAY)
-          : await scanPiUsage(scanFrom);
-      for (const date of stillMissing) {
-        const merged = emptyMutable();
-        let measured = false;
-        if (date <= CUTOVER_DAY) {
-          const legacy = readLegacyEngineDay(date);
-          if (legacy) {
-            mergeDay(merged, legacy);
-            measured = !legacy.unmeasured;
-          }
-        }
-        if (date >= CUTOVER_DAY && existsSync(`${PI_DIR()}/sessions`)) {
-          const pi = scanned.days.get(date);
-          if (pi) mergeDay(merged, pi);
-          measured = true;
-        }
-        let day = measured ? finishDay(merged) : emptyDay(true);
-        if (!scanned.complete && date >= CUTOVER_DAY) {
-          day.unmeasured = true;
-          day.coverage.pi = "unmeasured";
-          day.sessionAttribution = "unmeasured";
-        }
-        if (date < today) writeCache(date, day);
-        else volatile.set(date, { at: Date.now(), day });
-        out.set(date, day);
-      }
+  for (const date of new Set(dates)) {
+    const known = remembered.get(date);
+    if (known && (date < today || Date.now() - known.at < TODAY_TTL_MS)) {
+      out.set(date, known.day);
+      continue;
     }
-  } finally {
-    release();
-    inflight = null;
-  }
-  for (const date of dates) {
-    if (!out.has(date))
-      out.set(
-        date,
-        (date < today ? readCache(date) : volatileDay(date)) || emptyDay(true),
-      );
+    if (date > today) {
+      out.set(date, emptyDay());
+      continue;
+    }
+    const day = await measureDay(date);
+    if (!day) {
+      // Unavailable is not zero: say so, and ask again next time.
+      out.set(date, emptyDay(true));
+      continue;
+    }
+    remembered.delete(date);
+    remembered.set(date, { at: Date.now(), day });
+    while (remembered.size > MAX_REMEMBERED_DAYS) {
+      const oldest = remembered.keys().next().value;
+      if (oldest === undefined) break;
+      remembered.delete(oldest);
+    }
+    out.set(date, day);
   }
   return out;
 }

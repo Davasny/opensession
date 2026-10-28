@@ -11,6 +11,8 @@ import type {
 } from "./metadata-protocol";
 import * as metadataStore from "./metadata-store";
 import * as catalogDocumentStore from "./catalog-document-store";
+import * as usageStore from "./usage-store";
+import type { ModelUsageRecord, UsageDayRow } from "./usage-protocol";
 import type {
   CatalogDocumentPutResult,
   CatalogDocumentRecord,
@@ -271,7 +273,7 @@ const PROCESS_OWNER_ID = (ownerGlobal.__opensessionSessionKernelOwnerId ??=
     bootId: linuxBootId(),
     start: linuxProcessStart(process.pid),
   } satisfies ProcessOwnerIdentity));
-export const SESSION_KERNEL_SCHEMA_VERSION = 34;
+export const SESSION_KERNEL_SCHEMA_VERSION = 35;
 export const SESSION_KERNEL_MAX_CREATION_EFFECT_RECEIPTS = 256;
 export const SESSION_KERNEL_MAX_OPENING_PLAN_BYTES = 16 * 1024 * 1024;
 
@@ -1598,6 +1600,7 @@ export class SessionKernelStore {
     migrateAgentOperationCancellationSchema32(this.db, schemaVersion);
     metadataStore.migrateSessionMetadataSchema33(this.db, schemaVersion);
     catalogDocumentStore.migrateCatalogDocumentSchema34(this.db, schemaVersion);
+    usageStore.migrateUsageSchema35(this.db, schemaVersion);
     assertAgentOperationSchema28(this.db);
     assertAgentOperationCancellationSchema32(this.db);
     if (path !== ":memory:") {
@@ -6259,6 +6262,39 @@ export class SessionKernelStore {
         Date.now(),
       ],
     );
+  }
+
+  // ── Model usage ────────────────────────────────────────────────────────
+  // Counted by the owning actor and projected into the central catalog; see
+  // usage-store.ts for the SQL and usage-protocol.ts for the contract.
+
+  recordSessionUsage(
+    sessionId: string,
+    records: ModelUsageRecord[],
+  ): { counted: number; dates: string[] } {
+    return usageStore.recordSessionUsage(this.db, sessionId, records);
+  }
+
+  recordUnownedUsage(label: string, records: ModelUsageRecord[]): number {
+    return usageStore.recordUnownedUsage(this.db, label, records);
+  }
+
+  sessionUsageDays(
+    sessionId: string,
+    dates: string[],
+  ): Array<UsageDayRow & { date: string }> {
+    return usageStore.sessionUsageDays(this.db, sessionId, dates);
+  }
+
+  settleSessionUsageCatalog(
+    sessionId: string,
+    rows: Array<UsageDayRow & { date: string }>,
+  ): void {
+    usageStore.settleSessionUsageCatalog(this.db, sessionId, rows);
+  }
+
+  usageCatalogDay(date: string): UsageDayRow[] {
+    return usageStore.usageCatalogDay(this.db, date);
   }
 
   // ── Session metadata ───────────────────────────────────────────────────

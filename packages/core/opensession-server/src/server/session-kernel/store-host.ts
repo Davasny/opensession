@@ -519,6 +519,25 @@ export class SessionKernelStoreHost {
     );
   }
 
+  /** Project one session's usage counters for the given dates into the
+   * central catalog, after the actor committed them. */
+  settleSessionUsageCatalog(
+    store: SessionKernelStore,
+    sessionId: string,
+    dates: string[],
+  ): void {
+    if (!dates.length) return;
+    const rows =
+      store === this.central
+        ? this.centralOperation(() =>
+            this.central.sessionUsageDays(sessionId, dates),
+          )
+        : store.sessionUsageDays(sessionId, dates);
+    this.centralOperation(() =>
+      this.central.settleSessionUsageCatalog(sessionId, rows),
+    );
+  }
+
   refreshSessionProjections(sessionId: string): void {
     if (!this.isIsolated(sessionId)) return;
     const store = this.storeForSession(sessionId);

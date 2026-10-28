@@ -21,6 +21,10 @@ import { sessionKernelStoreRoute } from "./store-routing";
 import { assertTranscriptActorRequest } from "./transcript-protocol";
 import { assertMetadataActorRequest } from "./metadata-protocol";
 import { assertCatalogDocumentRequest } from "./catalog-document-protocol";
+import {
+  assertUsageActorRequest,
+  type UsageActorRequest,
+} from "./usage-protocol";
 
 class SessionQuarantinedError extends Error {
   readonly code = "session_quarantined";
@@ -87,6 +91,64 @@ export function startSessionKernelActorWorker(): void {
     self.postMessage({ ...message, workerMetrics: host.metrics() });
   }
 
+  /** Model usage is bookkeeping beside the session's lifecycle: counting it
+   * must never wake the session runtime, and a failed write must never
+   * quarantine the session or stop the actor. The SQL is one transaction, so
+   * a failure leaves nothing half-applied and the caller may retry it. */
+  function executeUsage(request: UsageActorRequest): KernelActorCallResult {
+    // A malformed request is the caller's bug: reject it plainly.
+    assertUsageActorRequest(request);
+    try {
+      let result: unknown;
+      if (request.op === "day")
+        result = host.central.usageCatalogDay(request.date);
+      else if (request.op === "record_unowned")
+        result = host.central.recordUnownedUsage(
+          request.label,
+          request.records,
+        );
+      else {
+        const store = host.storeForSession(request.sessionId, false);
+        if (
+          host.quarantinedSession(request.sessionId) ||
+          store.isTombstoned(request.sessionId)
+        )
+          // The actor no longer takes writes, but the tokens were spent.
+          return executeUsage({
+            op: "record_unowned",
+            label: request.sessionId,
+            records: request.records,
+          });
+        const recorded = store.recordSessionUsage(
+          request.sessionId,
+          request.records,
+        );
+        host.settleSessionUsageCatalog(
+          store,
+          request.sessionId,
+          recorded.dates,
+        );
+        result = recorded.counted;
+      }
+      return boundCallResult(JSON.stringify({ ok: true, result }), true);
+    } catch (error) {
+      host.recordSqliteBusy(error);
+      return boundCallResult(
+        JSON.stringify({
+          ok: false,
+          error: (error instanceof Error ? error.message : String(error)).slice(
+            0,
+            8_000,
+          ),
+          ...(isSessionKernelInfrastructureFailure(error)
+            ? { code: "retryable" }
+            : {}),
+        }),
+        false,
+      );
+    }
+  }
+
   /** Executes the call exactly once and bounds its encoded result. */
   function executeCall(
     request: KernelActorServiceCall["request"],
@@ -96,6 +158,8 @@ export function startSessionKernelActorWorker(): void {
     let readOnlyCall = false;
     try {
       let result: unknown;
+      if (request.t === "reduce" && request.command.kind === "usage")
+        return executeUsage(request.command.request);
       if (request.t === "reduce") {
         const command = request.command;
         readOnlyCall = isReadReducer(command);

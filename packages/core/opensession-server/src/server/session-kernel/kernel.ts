@@ -35,6 +35,7 @@ import type {
   CatalogDocumentRequest,
   CatalogDocumentResult,
 } from "./catalog-document-protocol";
+import type { UsageActorRequest, UsageActorResult } from "./usage-protocol";
 import type {
   TranscriptActorRequest,
   TranscriptActorResult,
@@ -276,6 +277,16 @@ export async function sessionCatalogDocument<T extends CatalogDocumentRequest>(
   throw new Error(
     `Unknown catalog document op ${String((request as { op?: unknown }).op)}`,
   );
+}
+
+/** Model usage: the session actor counts its own requests; the central
+ * catalog projects every session's per-day counters. No compatibility store:
+ * usage is only ever recorded through the authoritative actor. */
+export async function sessionUsage<T extends UsageActorRequest>(
+  request: T,
+): Promise<UsageActorResult<T>> {
+  if (state.actor) return state.actor.decideUsageAsync(request);
+  throw new Error("Model usage requires the authoritative actor");
 }
 
 export async function sessionCoreAsync<T extends CoreActorRequest>(

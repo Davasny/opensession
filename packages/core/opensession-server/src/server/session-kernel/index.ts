@@ -12,6 +12,7 @@ export * from "./gateway-command-protocol";
 export * from "./core-protocol";
 export * from "./metadata-protocol";
 export * from "./catalog-document-protocol";
+export * from "./usage-protocol";
 export * from "./transcript-protocol";
 export * from "./ask-map";
 export * from "./ask-protocol";
