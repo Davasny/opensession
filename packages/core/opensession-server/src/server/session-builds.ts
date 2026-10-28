@@ -16,14 +16,16 @@
  * stay the agent's channel.
  *
  * Kept in memory with a debounced async snapshot, so a restart keeps the
- * card. Rows and merges are dropped a day after their last change.
+ * card. Rows and merges are dropped a day after their last change. A run is
+ * tracked only so its job events find it: it is dropped an hour after it
+ * ends, which keeps the snapshot small on a busy organization.
  *
  * Kill switch: OPENSESSION_SESSION_BUILDS=0.
  */
 import { readFile } from "node:fs/promises";
 import type { SessionBuildWire } from "@tellahq/opensession-protocol/session";
 import { stateDir } from "./paths";
-import { writeJsonAtomicAsync } from "./shared/atomic-write";
+import { writeFileAtomicAsync } from "./shared/atomic-write";
 
 export type SessionBuild = SessionBuildWire;
 
@@ -59,10 +61,15 @@ interface TrackedRun {
 }
 
 const RETAIN_MS = 24 * 60 * 60_000;
+/** Late job events for an ended run arrive within minutes, and an unknown
+ * run's job events are ignored, so an ended run needs no long memory. */
+const ENDED_RUN_RETAIN_MS = 60 * 60_000;
 const MAX_ROWS_PER_SESSION = 40;
 const BRANCH_CACHE_MS = 30_000;
 const BROADCAST_DEBOUNCE_MS = 300;
-const SAVE_DEBOUNCE_MS = 2_000;
+/** The snapshot only restores UI cards after a restart; a short loss is fine,
+ * and webhooks arrive every second on a busy organization. */
+const SAVE_DEBOUNCE_MS = 15_000;
 export const ROLLOUT_CONTEXT_PREFIX = "cd/";
 
 const FAILED = new Set(["failure", "timed_out", "startup_failure"]);
@@ -99,7 +106,9 @@ const defaultDeps: SessionBuildDeps = {
     );
   },
   load: () => readFile(snapshotPath(), "utf-8").catch(() => null),
-  save: (json) => writeJsonAtomicAsync(snapshotPath(), JSON.parse(json), false),
+  // Already serialized: write the text as is rather than parse and
+  // re-serialize it on the gateway thread.
+  save: (json) => writeFileAtomicAsync(snapshotPath(), json),
   now: () => Date.now(),
   setTimer: (fn, ms) => setTimeout(fn, ms),
 };
@@ -176,7 +185,9 @@ function ensureLoaded(): Promise<void> {
 function prune(): void {
   const cutoff = deps.now() - RETAIN_MS;
   for (const [k, m] of state.merges) if (m.at < cutoff) state.merges.delete(k);
-  for (const [k, r] of state.runs) if (r.at < cutoff) state.runs.delete(k);
+  const endedCutoff = deps.now() - ENDED_RUN_RETAIN_MS;
+  for (const [k, r] of state.runs)
+    if (r.at < (r.ended ? endedCutoff : cutoff)) state.runs.delete(k);
   for (const [sessionId, rows] of state.rows) {
     for (const [id, row] of rows)
       if (Date.parse(row.updatedAt) < cutoff) rows.delete(id);

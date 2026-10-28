@@ -215,3 +215,51 @@ describe("session builds", () => {
     expect(parseRolloutContext("ci/prod/api")).toBeNull();
   });
 });
+
+describe("session builds snapshot", () => {
+  test("drops an ended run an hour after it ends, keeps an open one", async () => {
+    const saved: string[] = [];
+    let timers: Array<() => void> = [];
+    const fire = async () => {
+      const due = timers;
+      timers = [];
+      for (const fn of due) fn();
+      await Promise.resolve();
+    };
+    __resetSessionBuildsForTest({
+      sessionsForBranch: async (_repo, branch) => owners[branch] ?? [],
+      broadcast: () => {},
+      load: async () => null,
+      save: async (json) => {
+        saved.push(json);
+      },
+      now: () => clock,
+      setTimer: (fn) => {
+        timers.push(fn);
+        return 1;
+      },
+    });
+    await observeWorkflowRun(repo, run({ id: 1 }));
+    await observeWorkflowRun(
+      repo,
+      run({ id: 2, status: "completed", conclusion: "success" }),
+    );
+    await fire();
+    expect(Object.keys(JSON.parse(saved.at(-1)!).runs).sort()).toEqual([
+      "acme/app#1",
+      "acme/app#2",
+    ]);
+
+    clock += 61 * 60_000;
+    // Any change schedules the next save, which prunes first.
+    await observeWorkflowRun(
+      repo,
+      run({ id: 3, status: "completed", conclusion: "success" }),
+    );
+    await fire();
+    expect(Object.keys(JSON.parse(saved.at(-1)!).runs).sort()).toEqual([
+      "acme/app#1",
+      "acme/app#3",
+    ]);
+  });
+});
