@@ -534,17 +534,17 @@ export async function handleSystemRoutes(
   // pull individual detail sections under the engine's tool-output cap.
   if (path === "/api/audit/digest" && req.method === "GET") {
     const { buildAuditDigest, listAuditDates } =
-      await import("../../server/audit");
+      await import("../../server/audit-read-client");
     const date =
       url.searchParams.get("date") ||
       new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const digestJson = buildAuditDigest(date);
+    const digestJson = await buildAuditDigest(date);
     if (!digestJson) {
       return Response.json(
         {
           ok: false,
           error: `no audit log for ${date}`,
-          dates: listAuditDates().slice(0, 7),
+          dates: (await listAuditDates()).slice(0, 7),
         },
         { status: 404 },
       );
@@ -603,13 +603,13 @@ export async function handleSystemRoutes(
   // ── Audit log viewer (Settings → Audit log) ──
   if (path === "/api/audit" && req.method === "GET") {
     const { listAuditDates, readAuditEvents } =
-      await import("../../server/audit");
+      await import("../../server/audit-read-client");
     const date = url.searchParams.get("date") || "";
-    const dates = listAuditDates();
+    const dates = await listAuditDates();
     if (!date) return Response.json({ dates });
     return Response.json({
       dates,
-      ...readAuditEvents({
+      ...(await readAuditEvents({
         date,
         q: url.searchParams.get("q") || undefined,
         type: url.searchParams.get("type") || undefined,
@@ -617,7 +617,7 @@ export async function handleSystemRoutes(
         significantOnly: url.searchParams.get("all") !== "1",
         offset: Number(url.searchParams.get("offset")) || 0,
         limit: Number(url.searchParams.get("limit")) || 200,
-      }),
+      })),
     });
   }
 

@@ -4,11 +4,12 @@
  *
  * - The audit log (~/.opensession-audit/audit-YYYY-MM-DD.jsonl) for logical
  *   turn facts: active sessions, duration, run kinds, errors and cancellations.
- *   Day files are 10-20MB, so each day is parsed once into a compact rollup and
- *   disk-cached (keyed by source size — today's growing file recomputes, past
- *   days never do).
- * - Pi's native session JSONL for per-request model, token and list-price usage,
- *   including retries, tool rounds, failed attempts and cache writes.
+ *   Day files reach 100 MB, so a worker parses each day into a compact rollup
+ *   (analytics-rollup.ts, audit-read-worker.ts), disk-cached by source size;
+ *   today's growing file is recomputed at most every two minutes.
+ * - The session kernel's usage catalog for per-request model, token and
+ *   list-price usage, including retries, tool rounds, failed attempts and
+ *   cache writes (pi-usage.ts).
  * - Central metadata and Slack catalogs for who created what: person,
  *   automation, mode, branch, repo.
  * - `gh pr list` for PRs opened/merged in the range, attributed to Open Session
@@ -44,376 +45,69 @@ import {
   machineActorLabel,
 } from "./session-actors";
 import { PI_USAGE_CUTOVER_MS, piUsageForDates } from "./pi-usage";
+import {
+  emptyModelAgg,
+  emptyReviewAgg,
+  emptyTokens,
+  shortModel,
+  type DayRollup,
+  type ModelAgg,
+  type ReviewDayAgg,
+  type SessionAgg,
+  type TokenTotals,
+} from "./analytics-rollup";
+import { rollupInWorker } from "./audit-read-client";
+
+export { rollupAuditContents } from "./analytics-rollup";
 
 const AUDIT_DIR = stateDir("audit");
 const CACHE_DIR = stateDir("analytics-cache");
-// Bump when the rollup shape changes — stale disk caches recompute.
-const ROLLUP_VERSION = 10;
-
-interface TokenTotals {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-}
-
-interface ModelAgg extends TokenTotals {
-  turns: number;
-  costUsd: number;
-  /** Turns that reported a price. Models billed against a subscription pool
-   *  (the OpenAI accounts) report 0 per turn, so cost without this count
-   *  reads as "cheap" when it means "not billed by token". */
-  costedTurns: number;
-}
-
-interface SessionAgg {
-  kind: string;
-  turns: number;
-  output: number;
-  /** input + output + cache read + cache write. */
-  tokens: number;
-  costUsd: number;
-  errors: number;
-}
-
-/** Per-day PR-review telemetry from `review_*` audit events. `completed`
- *  (verdict/confidence/findings) only exists from 2026-07-28 on — earlier
- *  days legitimately roll up to zeros. */
-interface ReviewDayAgg {
-  completed: number;
-  updates: number;
-  verdicts: Record<string, number>;
-  confidenceSum: number;
-  confidenceN: number;
-  findings: number;
-  blocking: number;
-  withheld: number;
-  missedBugs: number;
-  repliesPositive: number;
-  repliesDismissive: number;
-}
-
-function emptyReviewAgg(): ReviewDayAgg {
-  return {
-    completed: 0,
-    updates: 0,
-    verdicts: {},
-    confidenceSum: 0,
-    confidenceN: 0,
-    findings: 0,
-    blocking: 0,
-    withheld: 0,
-    missedBugs: 0,
-    repliesPositive: 0,
-    repliesDismissive: 0,
-  };
-}
-
-interface DayRollup {
-  date: string;
-  turns: number;
-  errors: number;
-  cancelled: number;
-  durationMs: number;
-  oneshots: number;
-  tokens: TokenTotals;
-  costUsd: number;
-  costedTurns: number;
-  /** Turns recorded before per-step usage accounting landed (2026-08-14),
-   *  whose result event carries only the turn's LAST model request. They
-   *  undercount tokens and cost by the number of steps in the turn, measured
-   *  at ~7x. Their events have no `steps` field, which is how we tell. */
-  legacyUsageTurns: number;
-  byModel: Record<string, ModelAgg>;
-  /** Turns whose audit events carried no model (pre-2026-07-09 SDK-runner
-   *  days), keyed by session id — resolved against the session store's
-   *  `model` at compose time. */
-  unknownModel: Record<string, ModelAgg>;
-  bySession: Record<string, SessionAgg>;
-  review: ReviewDayAgg;
-}
-
-/** Strip an engine and upstream-provider prefix for aggregation. */
-function shortModel(model: string): string {
-  return (
-    model.replace(/^(?:pi|claude|codex|opencode)\/[^/]+\//, "") || "unknown"
-  );
-}
-
-function emptyTokens(): TokenTotals {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-}
-
-function emptyModelAgg(): ModelAgg {
-  return { turns: 0, costUsd: 0, costedTurns: 0, ...emptyTokens() };
-}
-
 /** Costs are summed from per-turn floats; round at the edge so the payload
  *  carries cents rather than 48.410000000000004. */
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export function rollupAuditContents(date: string, contents: string): DayRollup {
-  const rollup: DayRollup = {
-    date,
-    turns: 0,
-    errors: 0,
-    cancelled: 0,
-    durationMs: 0,
-    oneshots: 0,
-    tokens: emptyTokens(),
-    costUsd: 0,
-    costedTurns: 0,
-    legacyUsageTurns: 0,
-    byModel: {},
-    unknownModel: {},
-    bySession: {},
-    review: emptyReviewAgg(),
-  };
-  const promptModel = new Map<string, string>();
-  const eventSessionId = (e: Record<string, unknown>): string =>
-    String(
-      e.session_id ||
-        e.bks_session_id ||
-        (e.msg === "pi_turn" ? e.session : "") ||
-        "",
-    );
-  const sessionOf = (e: Record<string, unknown>): SessionAgg | null => {
-    const id = eventSessionId(e);
-    if (!id) return null;
-    return (rollup.bySession[id] ||= {
-      // A restart-reattached turn is still its base kind for analytics.
-      kind: String(e.run_kind || "?").replace(/-reattach$/, ""),
-      turns: 0,
-      output: 0,
-      tokens: 0,
-      costUsd: 0,
-      errors: 0,
-    });
-  };
+// ── Audit-day rollups ──
+// Computed by a worker (audit-read-worker.ts): a day's audit file
+// reaches 100 MB, and today's grows with every turn, so its size-keyed disk
+// cache always missed and every Home load re-read and re-parsed it here.
+// Finished days are remembered; today is recomputed at most every
+// TODAY_ROLLUP_TTL_MS, and concurrent requests share one computation.
 
-  const events: Record<string, unknown>[] = [];
-  for (const line of contents.split("\n")) {
-    if (!line) continue;
-    const relevant =
-      line.includes('"kind":"result"') ||
-      line.includes('"kind":"user_prompt"') ||
-      line.includes('"kind":"error"') ||
-      line.includes('"kind":"cancelled"') ||
-      line.includes('"kind":"session_turn_metric"') ||
-      line.includes('"msg":"pi_turn"') ||
-      line.includes('"msg":"pi_oneshot"') ||
-      line.includes('"msg":"opencode_oneshot"') ||
-      line.includes('"msg":"opencode_meridian_run"') ||
-      line.includes('"msg":"opencode_openai_run"') ||
-      line.includes('"msg":"review_');
-    if (!relevant) continue;
-    try {
-      events.push(JSON.parse(line));
-    } catch {}
-  }
+const TODAY_ROLLUP_TTL_MS = 2 * 60_000;
+const MAX_REMEMBERED_ROLLUPS = 120;
+const rememberedRollups = new Map<string, { at: number; rollup: DayRollup }>();
+const pendingRollups = new Map<string, Promise<DayRollup>>();
 
-  // Before the Pi-only cutover, the outer runner mirrored a generic terminal
-  // beside Pi's own attempt event. Pair attempts with the one logical turn
-  // metric and suppress those mirrors so mixed-format days do not double count.
-  const pendingPi = new Map<string, Record<string, unknown>[]>();
-  const pendingGeneric = new Map<string, Record<string, unknown>[]>();
-  const piLogicalMetrics = new Map<
-    Record<string, unknown>,
-    Record<string, unknown>[]
-  >();
-  const genericTerminalsToSkip = new Set<Record<string, unknown>>();
-  for (const e of events) {
-    const id = eventSessionId(e);
-    if (!id) continue;
-    if (e.msg === "pi_turn" && e.direction === "out" && !e.kind) {
-      const attempts = pendingPi.get(id) || [];
-      attempts.push(e);
-      pendingPi.set(id, attempts);
-    }
-    if ((e.kind === "result" || e.kind === "error") && pendingPi.has(id)) {
-      const terminals = pendingGeneric.get(id) || [];
-      terminals.push(e);
-      pendingGeneric.set(id, terminals);
-    }
-    if (e.kind === "session_turn_metric") {
-      const attempts = pendingPi.get(id) || [];
-      if (attempts.length) {
-        piLogicalMetrics.set(e, attempts);
-        for (const terminal of pendingGeneric.get(id) || [])
-          genericTerminalsToSkip.add(terminal);
-      }
-      pendingPi.delete(id);
-      pendingGeneric.delete(id);
-    }
-  }
-
-  const addUsage = (e: Record<string, unknown>, countAsTurn: boolean) => {
-    const input = Number(e.input_tokens) || 0;
-    const output = Number(e.output_tokens) || 0;
-    const cacheRead = Number(e.cache_read_input_tokens) || 0;
-    const cacheWrite = Number(e.cache_creation_input_tokens) || 0;
-    const cost = Number(e.total_cost_usd) || 0;
-    rollup.tokens.input += input;
-    rollup.tokens.output += output;
-    rollup.tokens.cacheRead += cacheRead;
-    rollup.tokens.cacheWrite += cacheWrite;
-    rollup.costUsd += cost;
-    if (cost > 0) rollup.costedTurns++;
-    const model = e.model
-      ? shortModel(String(e.model))
-      : promptModel.get(eventSessionId(e)) || "";
-    const m = model
-      ? (rollup.byModel[model] ||= emptyModelAgg())
-      : (rollup.unknownModel[eventSessionId(e)] ||= emptyModelAgg());
-    if (countAsTurn) m.turns++;
-    m.input += input;
-    m.output += output;
-    m.cacheRead += cacheRead;
-    m.cacheWrite += cacheWrite;
-    m.costUsd += cost;
-    if (cost > 0) m.costedTurns++;
-    const s = sessionOf(e);
-    if (s) {
-      s.output += output;
-      s.tokens += input + output + cacheRead + cacheWrite;
-      s.costUsd += cost;
-    }
-  };
-
-  for (const e of events) {
-    const isReviewEvt = String(e.msg || "").startsWith("review_");
-    if (isReviewEvt) {
-      const rv = rollup.review;
-      switch (String(e.msg || "")) {
-        case "review_completed": {
-          rv.completed++;
-          if (e.is_update) rv.updates++;
-          const verdict = String(e.verdict || "");
-          if (verdict) rv.verdicts[verdict] = (rv.verdicts[verdict] || 0) + 1;
-          if (typeof e.confidence === "number") {
-            rv.confidenceSum += e.confidence;
-            rv.confidenceN++;
-          }
-          rv.findings += Number(e.findings) || 0;
-          rv.blocking += Number(e.blocking) || 0;
-          break;
+async function cachedRollup(date: string): Promise<DayRollup> {
+  const today = new Date().toISOString().slice(0, 10);
+  const known = rememberedRollups.get(date);
+  if (known && (date < today || Date.now() - known.at < TODAY_ROLLUP_TTL_MS))
+    return known.rollup;
+  let pending = pendingRollups.get(date);
+  if (!pending) {
+    pending = rollupInWorker(date, AUDIT_DIR, CACHE_DIR)
+      .then((rollup) => {
+        rememberedRollups.delete(date);
+        rememberedRollups.set(date, { at: Date.now(), rollup });
+        while (rememberedRollups.size > MAX_REMEMBERED_ROLLUPS) {
+          const oldest = rememberedRollups.keys().next().value;
+          if (oldest === undefined) break;
+          rememberedRollups.delete(oldest);
         }
-        case "review_findings_withheld":
-          rv.withheld += Number(e.withheld) || 0;
-          break;
-        case "review_missed_bug":
-          rv.missedBugs++;
-          break;
-        case "review_reply_signal":
-          rv.repliesPositive += Number(e.positive) || 0;
-          rv.repliesDismissive += Number(e.dismissive) || 0;
-          break;
-      }
-      continue;
-    }
-    if (e.msg === "pi_oneshot" || e.msg === "opencode_oneshot") {
-      rollup.oneshots++;
-      continue;
-    }
-    if (
-      (e.msg === "opencode_meridian_run" || e.msg === "opencode_openai_run") &&
-      e.phase === "end"
-    ) {
-      rollup.durationMs += Number(e.duration_ms) || 0;
-      continue;
-    }
-    if (e.msg === "pi_turn" && e.direction === "out") {
-      // Every Pi attempt owns its model usage, including retries and utility
-      // calls. Only session_turn_metric below owns logical turn activity.
-      if (
-        e.input_tokens !== undefined ||
-        e.output_tokens !== undefined ||
-        e.cache_read_input_tokens !== undefined ||
-        e.cache_creation_input_tokens !== undefined
-      )
-        addUsage(e, true);
-      if (e.status === "cancelled") rollup.cancelled++;
-      continue;
-    }
-    const attempts = piLogicalMetrics.get(e);
-    const metricTime =
-      e.kind === "session_turn_metric" ? Date.parse(String(e.time || "")) : 0;
-    if (attempts || metricTime >= PI_USAGE_CUTOVER_MS) {
-      rollup.turns++;
-      rollup.durationMs += Number(e.duration_ms) || 0;
-      const terminalAttempt = attempts?.[attempts.length - 1] || e;
-      const s = sessionOf(terminalAttempt);
-      if (s) {
-        s.turns++;
-        if (e.outcome === "failed") s.errors++;
-      }
-      if (e.outcome === "failed") rollup.errors++;
-      continue;
-    }
-    if (genericTerminalsToSkip.has(e)) continue;
-    const s = sessionOf(e);
-    switch (String(e.kind || "")) {
-      // Some engines' result events carry no model — remember the turn's
-      // model from its user_prompt so those turns don't land in "unknown".
-      case "user_prompt":
-        if (e.model && (e.session_id || e.bks_session_id)) {
-          promptModel.set(
-            String(e.session_id || e.bks_session_id),
-            shortModel(String(e.model)),
-          );
-        }
-        break;
-      case "result":
-        rollup.turns++;
-        if (e.steps === undefined) rollup.legacyUsageTurns++;
-        addUsage(e, true);
-        if (s) s.turns++;
-        break;
-      case "error":
-        rollup.errors++;
-        if (s) s.errors++;
-        break;
-      case "cancelled":
-        rollup.cancelled++;
-        break;
-    }
+        return rollup;
+      })
+      .finally(() => pendingRollups.delete(date));
+    pendingRollups.set(date, pending);
   }
-  return rollup;
-}
-
-function rollupAuditDay(date: string): DayRollup {
-  const path = `${AUDIT_DIR}/audit-${date}.jsonl`;
-  return rollupAuditContents(
-    date,
-    existsSync(path) ? readFileSync(path, "utf8") : "",
-  );
-}
-
-/** Rollup with a per-day disk cache keyed on the source file's size. */
-function cachedRollup(date: string): DayRollup {
-  const src = `${AUDIT_DIR}/audit-${date}.jsonl`;
-  const size = existsSync(src) ? statSync(src).size : 0;
-  const cachePath = `${CACHE_DIR}/day-${date}.json`;
   try {
-    if (existsSync(cachePath)) {
-      const cached = JSON.parse(readFileSync(cachePath, "utf-8"));
-      if (cached.v === ROLLUP_VERSION && cached.size === size)
-        return cached.rollup;
-    }
-  } catch {}
-  const rollup = rollupAuditDay(date);
-  try {
-    mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(
-      cachePath,
-      JSON.stringify({ v: ROLLUP_VERSION, size, rollup }),
-    );
-  } catch (e) {
-    console.error("[analytics] rollup cache write failed:", e);
+    return await pending;
+  } catch (error) {
+    // A failed recompute serves the last rollup rather than nothing.
+    if (known) return known.rollup;
+    throw error;
   }
-  return rollup;
 }
 
 // ── Generic timestamped disk cache (gh fetches + composed summaries) ──
@@ -1353,7 +1047,7 @@ export async function buildAnalytics(
 
   const reviewByDate = new Map<string, ReviewDayAgg>();
   for (const date of dates) {
-    const r = cachedRollup(date);
+    const r = await cachedRollup(date);
     const engine = engineDays.get(date);
     reviewByDate.set(date, r.review || emptyReviewAgg());
     const sessionsByKind: Record<string, number> = {};
@@ -1862,7 +1556,7 @@ export async function buildHomeStats(
   const days: { date: string; bucket: HomeStatsBucket; ids: string[] }[] = [];
   for (let back = 0; back <= 14; back++) {
     const date = new Date(now - back * 86_400_000).toISOString().slice(0, 10);
-    const r = cachedRollup(date);
+    const r = await cachedRollup(date);
     days.push({
       date,
       bucket: {

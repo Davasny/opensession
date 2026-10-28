@@ -25,7 +25,7 @@
  */
 
 import { z } from "zod";
-import { buildAuditDigest, listAuditDates } from "./audit";
+import { buildAuditDigest, listAuditDates } from "./audit-read-client";
 import { createSdkMcpServer, tool } from "./inprocess-mcp";
 
 /** A date is a filename component here, so nothing but a plain ISO day. */
@@ -46,8 +46,10 @@ function yesterdayUtc(): string {
 }
 
 export interface AuditDigestDeps {
-  build: (date: string) => Record<string, unknown> | null;
-  dates: () => string[];
+  build: (
+    date: string,
+  ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+  dates: () => Promise<string[]> | string[];
 }
 
 /**
@@ -55,10 +57,10 @@ export interface AuditDigestDeps {
  * validation, the missing-log case and the size caps are testable without a
  * live audit directory (deps are injected in audit-mcp.test.ts).
  */
-export function auditDigestPayload(
+export async function auditDigestPayload(
   date: string | undefined,
   deps: AuditDigestDeps = { build: buildAuditDigest, dates: listAuditDates },
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const day = date?.trim() || yesterdayUtc();
   if (!DATE_RE.test(day)) {
     return {
@@ -67,13 +69,13 @@ export function auditDigestPayload(
     };
   }
 
-  const digest = deps.build(day);
+  const digest = await deps.build(day);
   if (!digest) {
     return {
       ok: false,
       date: day,
       error: `no audit log for ${day}`,
-      availableDates: deps.dates().slice(0, 7),
+      availableDates: (await deps.dates()).slice(0, 7),
     };
   }
 
@@ -127,7 +129,7 @@ export function createAuditMcpServer() {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(auditDigestPayload(date), null, 2),
+            text: JSON.stringify(await auditDigestPayload(date), null, 2),
           },
         ],
       }),

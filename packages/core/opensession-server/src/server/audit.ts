@@ -1,13 +1,6 @@
 import { createHash } from "node:crypto";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  unlinkSync,
-} from "node:fs";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { stateDir } from "./paths";
 
 // Structured audit log.
@@ -22,23 +15,16 @@ const AUDIT_DIR = stateDir("audit");
 // Match incident-agent's CloudWatch retention (400d) for the local files.
 const RETENTION_DAYS = 400;
 
-let initialized = false;
+let pruned = false;
 
-function ensureAuditDir(): void {
-  if (initialized) return;
-  initialized = true;
-  mkdirSync(AUDIT_DIR, { recursive: true });
-  pruneOldFiles();
-}
-
-function pruneOldFiles(): void {
+async function pruneOldFiles(): Promise<void> {
   const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
   try {
-    for (const file of readdirSync(AUDIT_DIR)) {
+    for (const file of await readdir(AUDIT_DIR)) {
       const m = file.match(/^audit-(\d{4}-\d{2}-\d{2})\.jsonl$/);
       if (!m) continue;
       if (new Date(`${m[1]}T00:00:00Z`).getTime() < cutoff) {
-        unlinkSync(`${AUDIT_DIR}/${file}`);
+        await unlink(`${AUDIT_DIR}/${file}`);
       }
     }
   } catch (e) {
@@ -49,38 +35,47 @@ function pruneOldFiles(): void {
 /**
  * Emit one audit event as a JSON line. Never throws — audit failures must not
  * take down the run they're observing (they do land in journald via stderr).
+ *
+ * The event is stamped now and queued; one async writer appends queued lines
+ * in batches, so no caller waits on the filesystem. This runs on the gateway
+ * thread for every turn, tool call and webhook, where a synchronous append
+ * stalled every request behind a slow disk.
  */
 export function audit(event: Record<string, unknown>): void {
-  try {
-    // bun test shares this module with the live audit paths — keep fake-run /
-    // FSM test events out of the real ~/.opensession-audit files (they feed
-    // the digest and Dreaming). No test asserts on audit output today.
-    if (process.env.NODE_ENV === "test") return;
-    ensureAuditDir();
-    const now = new Date();
-    const line = JSON.stringify({
-      time: now.toISOString(),
-      service: "opensession",
-      ...event,
-    });
-    appendFileSync(
-      `${AUDIT_DIR}/audit-${now.toISOString().slice(0, 10)}.jsonl`,
-      line + "\n",
-    );
-  } catch (e) {
-    console.error("[audit] write failed:", e);
-  }
+  auditAsync(event);
 }
 
 let pendingLines: Array<{ file: string; line: string }> = [];
 let flushing: Promise<void> | null = null;
+let exitHookInstalled = false;
 
-/**
- * audit() for hot paths on the gateway thread, such as a scripted run's
- * proxy, which audits every one of possibly tens of thousands of calls.
- * Events are stamped now and queued; one async writer appends them in
- * batches, so the caller never waits on the filesystem. Never throws.
- */
+/** Lines still queued when the process exits are written synchronously:
+ *  nothing is served any more, and a run host ends with process.exit. */
+function installExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.on("exit", () => {
+    if (!pendingLines.length) return;
+    try {
+      mkdirSync(AUDIT_DIR, { recursive: true });
+      for (const [file, text] of linesByFile(pendingLines.splice(0)))
+        appendFileSync(file, text);
+    } catch (e) {
+      console.error("[audit] exit flush failed:", e);
+    }
+  });
+}
+
+function linesByFile(
+  batch: Array<{ file: string; line: string }>,
+): Map<string, string> {
+  const byFile = new Map<string, string>();
+  for (const { file, line } of batch)
+    byFile.set(file, (byFile.get(file) ?? "") + line + "\n");
+  return byFile;
+}
+
+/** Same as audit(); kept for call sites that predate audit() being async. */
 export function auditAsync(event: Record<string, unknown>): void {
   if (process.env.NODE_ENV === "test") return;
   const now = new Date();
@@ -95,6 +90,7 @@ export function auditAsync(event: Record<string, unknown>): void {
     console.error("[audit] serialize failed:", e);
     return;
   }
+  installExitHook();
   pendingLines.push({
     file: `${AUDIT_DIR}/audit-${now.toISOString().slice(0, 10)}.jsonl`,
     line,
@@ -104,19 +100,25 @@ export function auditAsync(event: Record<string, unknown>): void {
   });
 }
 
+/** Resolves once every line queued so far is written. */
+export async function flushAudit(): Promise<void> {
+  while (flushing) await flushing;
+}
+
 async function flushPending(): Promise<void> {
   try {
     await mkdir(AUDIT_DIR, { recursive: true });
   } catch (e) {
     console.error("[audit] mkdir failed:", e);
   }
+  if (!pruned) {
+    pruned = true;
+    await pruneOldFiles();
+  }
   while (pendingLines.length) {
     const batch = pendingLines;
     pendingLines = [];
-    const byFile = new Map<string, string>();
-    for (const { file, line } of batch)
-      byFile.set(file, (byFile.get(file) ?? "") + line + "\n");
-    for (const [file, text] of byFile) {
+    for (const [file, text] of linesByFile(batch)) {
       try {
         await appendFile(file, text);
       } catch (e) {
@@ -187,11 +189,15 @@ export function summarizeText(
 
 // ── Read side (the in-app audit viewer, Settings → Audit log) ──
 
+/** The audit directory, for the read worker (audit-read-client.ts). */
+export function auditDir(): string {
+  return AUDIT_DIR;
+}
+
 /** Dates (YYYY-MM-DD, newest first) that have an audit file. */
-export function listAuditDates(): string[] {
-  ensureAuditDir();
+export async function listAuditDates(): Promise<string[]> {
   try {
-    return readdirSync(AUDIT_DIR)
+    return (await readdir(AUDIT_DIR))
       .map((f) => f.match(/^audit-(\d{4}-\d{2}-\d{2})\.jsonl$/)?.[1])
       .filter((d): d is string => !!d)
       .sort()
@@ -226,7 +232,7 @@ function eventType(e: Record<string, unknown>): string {
   return String(e.kind || e.msg || "event");
 }
 
-export function readAuditEvents(opts: {
+export interface AuditEventQuery {
   date: string;
   /** Case-insensitive substring across the raw line. */
   q?: string;
@@ -238,9 +244,15 @@ export function readAuditEvents(opts: {
   significantOnly?: boolean;
   offset?: number;
   limit?: number;
-}): AuditReadResult {
-  ensureAuditDir();
-  const path = `${AUDIT_DIR}/audit-${opts.date}.jsonl`;
+}
+
+/** Synchronous whole-file read: audit-read worker only. The gateway calls
+ *  readAuditEvents in audit-read-client.ts. */
+export function readAuditEventsIn(
+  dir: string,
+  opts: AuditEventQuery,
+): AuditReadResult {
+  const path = `${dir}/audit-${opts.date}.jsonl`;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date) || !existsSync(path)) {
     return { events: [], total: 0, types: [] };
   }
@@ -286,9 +298,11 @@ export function readAuditEvents(opts: {
  *  engine truncates as a large tool output — callers can pass `?section=` to
  *  fetch detail sections individually. Keep the field names stable — the
  *  automation prompt names them. */
-export function buildAuditDigest(date: string): Record<string, unknown> | null {
-  ensureAuditDir();
-  const path = `${AUDIT_DIR}/audit-${date}.jsonl`;
+export function buildAuditDigestIn(
+  dir: string,
+  date: string,
+): Record<string, unknown> | null {
+  const path = `${dir}/audit-${date}.jsonl`;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !existsSync(path)) return null;
   return buildAuditDigestFromLines(date, readFileSync(path, "utf-8"));
 }

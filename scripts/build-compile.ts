@@ -415,6 +415,10 @@ const WORKER_SIDECARS: Array<{ entry: string; name: string }> = [
     name: "code-flow-worker.js",
   },
   {
+    entry: "packages/core/opensession-server/src/server/audit-read-worker.ts",
+    name: "audit-read-worker.js",
+  },
+  {
     entry: "packages/core/opensession-server/src/server/session-list-worker.ts",
     name: "session-list-worker.js",
   },

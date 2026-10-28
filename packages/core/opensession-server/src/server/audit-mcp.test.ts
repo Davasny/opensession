@@ -26,9 +26,9 @@ const DIGEST = {
 };
 
 describe("auditDigestPayload", () => {
-  it("returns the digest for a valid date", () => {
+  it("returns the digest for a valid date", async () => {
     const d = deps(DIGEST);
-    const out = auditDigestPayload("2026-08-18", d);
+    const out = await auditDigestPayload("2026-08-18", d);
     expect(d.asked).toEqual(["2026-08-18"]);
     expect(out.ok).toBe(true);
     expect(out.totals).toEqual(DIGEST.totals);
@@ -36,15 +36,15 @@ describe("auditDigestPayload", () => {
     expect(out.truncated).toBeUndefined();
   });
 
-  it("defaults to yesterday (UTC) when no date is given", () => {
+  it("defaults to yesterday (UTC) when no date is given", async () => {
     const d = deps(DIGEST);
-    auditDigestPayload(undefined, d);
+    await auditDigestPayload(undefined, d);
     expect(d.asked).toEqual([
       new Date(Date.now() - 86_400_000).toISOString().slice(0, 10),
     ]);
   });
 
-  it("rejects malformed dates without reaching the log", () => {
+  it("rejects malformed dates without reaching the log", async () => {
     for (const bad of [
       "../../etc/passwd",
       "2026-08-18/../secret",
@@ -56,7 +56,7 @@ describe("auditDigestPayload", () => {
       "yesterday",
     ]) {
       const d = deps(DIGEST);
-      const out = auditDigestPayload(bad, d);
+      const out = await auditDigestPayload(bad, d);
       expect(out.ok).toBe(false);
       expect(String(out.error)).toContain("YYYY-MM-DD");
       // The rejected value must never have become a filename.
@@ -64,29 +64,29 @@ describe("auditDigestPayload", () => {
     }
   });
 
-  it("treats a blank date as an omitted one", () => {
+  it("treats a blank date as an omitted one", async () => {
     const d = deps(DIGEST);
-    expect(auditDigestPayload("  ", d).ok).toBe(true);
+    expect((await auditDigestPayload("  ", d)).ok).toBe(true);
     expect(d.asked).toEqual([
       new Date(Date.now() - 86_400_000).toISOString().slice(0, 10),
     ]);
   });
 
-  it("says so, with the days it does have, when there is no log", () => {
-    const out = auditDigestPayload("2020-01-01", deps(null));
+  it("says so, with the days it does have, when there is no log", async () => {
+    const out = await auditDigestPayload("2020-01-01", deps(null));
     expect(out.ok).toBe(false);
     expect(out.date).toBe("2020-01-01");
     expect(String(out.error)).toContain("no audit log for 2020-01-01");
     expect(out.availableDates).toEqual(["2026-08-18", "2026-08-17"]);
   });
 
-  it("caps the lists that grow with the day and says what it dropped", () => {
+  it("caps the lists that grow with the day and says what it dropped", async () => {
     const big = {
       ...DIGEST,
       papercuts: Array.from({ length: 90 }, (_, i) => ({ text: `p${i}` })),
       sessions: Array.from({ length: 60 }, (_, i) => ({ id: `os-${i}` })),
     };
-    const out = auditDigestPayload("2026-08-18", deps(big));
+    const out = await auditDigestPayload("2026-08-18", deps(big));
     expect(out.ok).toBe(true);
     expect((out.papercuts as unknown[]).length).toBe(40);
     expect((out.sessions as unknown[]).length).toBe(40);
@@ -97,7 +97,7 @@ describe("auditDigestPayload", () => {
     expect(String(out.truncatedNote)).toContain("Totals");
   });
 
-  it("drops detail sections when the capped digest is still outsized", () => {
+  it("drops detail sections when the capped digest is still outsized", async () => {
     const huge = {
       ...DIGEST,
       sessions: Array.from({ length: 40 }, (_, i) => ({
@@ -105,7 +105,7 @@ describe("auditDigestPayload", () => {
         firstPrompt: "x".repeat(4000),
       })),
     };
-    const out = auditDigestPayload("2026-08-18", deps(huge));
+    const out = await auditDigestPayload("2026-08-18", deps(huge));
     expect(JSON.stringify(out).length).toBeLessThan(120_000);
     expect(out.sessions).toEqual([]);
     expect(

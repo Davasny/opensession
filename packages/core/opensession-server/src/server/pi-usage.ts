@@ -13,6 +13,7 @@
  * OpenCode measurement or their audit rows.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { PI_USAGE_CUTOVER_MS } from "./analytics-rollup";
 import { shortModel } from "./model-usage";
 import { isNativeSessionId, stateDir } from "./paths";
 import { sessionUsage, type UsageDayRow } from "./session-kernel";
@@ -49,7 +50,7 @@ export interface MutableUsage {
 }
 const CACHE_DIR = () => stateDir("analytics-cache");
 const CACHE_VERSION = 1;
-export const PI_USAGE_CUTOVER_MS = Date.parse("2026-08-19T13:35:30Z");
+export { PI_USAGE_CUTOVER_MS };
 export const CUTOVER_DAY = "2026-08-19";
 /** The first whole UTC day the usage catalog counted. Earlier days come from
  * the retired scanner's per-day files. */
