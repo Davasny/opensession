@@ -13,6 +13,7 @@ import {
   gpuJobStatus,
   listGpuJobs,
   MAX_GPU_JOB_MINUTES,
+  MAX_GPU_MACHINES,
   sessionRepoGpuJobs,
   startGpuJob,
   stopGpuJob,
@@ -29,7 +30,7 @@ export function createGpuMcpServer(ctx: { sessionId: string; user?: string }) {
     tools: [
       tool(
         "run_gpu_job",
-        `Run work that needs an NVIDIA GPU (CUDA, Vulkan) on a GPU machine, from a session without one. Pass \`job\` to run one the repository declares in ${GPU_JOBS_FILE} (call with no arguments to list them), or \`command\` for any bash command, e.g. a single test. The session's work is checkpointed, uncommitted changes included, and landed on the session's own GPU machine (Modal, T4 or L4), which keeps its build cache between jobs and sleeps when idle. The command runs from the repository root with a read-only GitHub credential for the repository and its private build dependencies. It keeps running through Open Session restarts, and this session is woken with the exit code and the end of the output when it ends: start it, tell the person, and end your turn instead of polling. One job at a time per session.`,
+        `Run work that needs an NVIDIA GPU (CUDA, Vulkan) on a GPU machine, from a session without one. Pass \`job\` to run one the repository declares in ${GPU_JOBS_FILE} (call with no arguments to list them), or \`command\` for any bash command, e.g. a single test. The session's work is checkpointed, uncommitted changes included, and landed on one of the session's own GPU machines (Modal, T4 or L4), which keep their build cache between jobs and sleep when idle. The command runs from the repository root with a read-only GitHub credential for the repository and its private build dependencies. It keeps running through Open Session restarts, and this session is woken with the exit code and the end of the output when it ends: start it, tell the person, and end your turn instead of polling. Several jobs can run at once (up to ${MAX_GPU_MACHINES} per session), each on its own machine; a job reuses a free machine that ran the same GPU, and only a new machine starts without a build cache.`,
         {
           job: z
             .string()

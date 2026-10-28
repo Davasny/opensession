@@ -4,17 +4,21 @@
  * A session on this machine (or in a CPU Sandbox) keeps its workspace and
  * its agent where they are. When it needs a GPU (a repository's GPU test
  * suite, a GPU render), `run_gpu_job` (gpu-mcp.ts) checkpoints the session's
- * work, wakes or creates the session's GPU machine on Modal (keyed
- * `<session>--gpu`, like a Portal Sandbox's `<session>--portals`), lands the
- * checkpoint there, and starts the command detached inside the machine. The
+ * work, wakes or creates one of the session's GPU machines on Modal (keyed
+ * `<session>--gpu`, then `<session>--gpu-2` and so on, like a Portal
+ * Sandbox's `<session>--portals`), lands the checkpoint there, and starts
+ * the command detached inside the machine. Each machine runs one job at a
+ * time, so jobs started together run in parallel on separate machines. The
  * job writes its log and exit code to files in the machine, so a deploy or a
  * crash of this server does not stop it: the registry here is persisted and
  * reattached at boot. When the job ends, the session is woken with how it
  * ended and the tail of its output, exactly once.
  *
- * The machine is kept between jobs so builds stay incremental. The idle
- * timers (sandbox/idle.ts) put it to sleep a few minutes after the last job,
- * and archiving or deleting the session sleeps or destroys it.
+ * Machines are kept between jobs so builds stay incremental: a new job goes
+ * to a free machine that last ran on the same GPU, and a new machine is
+ * created only when every existing one is busy. The idle timers
+ * (sandbox/idle.ts) put each to sleep a few minutes after its last job, and
+ * archiving or deleting the session sleeps or destroys them.
  *
  * A repository declares its GPU jobs in `.agents/gpu-jobs.json`:
  *
@@ -43,25 +47,34 @@ export const GPU_JOB_PROVIDER = "modal" as const;
 export const GPU_JOBS_FILE = ".agents/gpu-jobs.json";
 export const DEFAULT_GPU_JOB_MINUTES = 60;
 export const MAX_GPU_JOB_MINUTES = 6 * 60;
+/** GPU machines one session may hold, which caps its parallel jobs. */
+export const MAX_GPU_MACHINES = 4;
 const POLL_MS = 15_000;
 const WAKE_TAIL_BYTES = 3000;
 const SAVED_LOG_BYTES = 512 * 1024;
 const KEEP_ENDED_MS = 7 * 24 * 60 * 60_000;
 const REMOTE_ROOT = "/tmp/opensession-gpu-jobs";
 
-export function gpuMachineSessionId(sessionId: string): string {
-  return `${sessionId}${GPU_MACHINE_SUFFIX}`;
+const GPU_MACHINE_PATTERN = /--gpu(?:-\d+)?$/;
+
+/** The provider session key of a session's GPU machine: `<session>--gpu`
+ *  for the first, `<session>--gpu-<n>` for the ones parallel jobs added. */
+export function gpuMachineSessionId(sessionId: string, slot = 1): string {
+  return slot > 1
+    ? `${sessionId}${GPU_MACHINE_SUFFIX}-${slot}`
+    : `${sessionId}${GPU_MACHINE_SUFFIX}`;
 }
 
-/** Whether a provider Sandbox id names a session's GPU job machine. */
+/** Whether a provider Sandbox id or session key names a GPU job machine. */
 export function isGpuJobMachine(sandboxId: string): boolean {
-  return sandboxId.endsWith(GPU_MACHINE_SUFFIX);
+  return GPU_MACHINE_PATTERN.test(sandboxId);
 }
 
-/** The session a GPU job machine belongs to (`md-<session>--gpu`). */
+/** The session a GPU job machine belongs to (`md-<session>--gpu[-n]`). */
 export function gpuMachineOwner(sandboxId: string): string | null {
-  if (!isGpuJobMachine(sandboxId)) return null;
-  const base = sandboxId.slice(0, -GPU_MACHINE_SUFFIX.length);
+  const match = GPU_MACHINE_PATTERN.exec(sandboxId);
+  if (!match) return null;
+  const base = sandboxId.slice(0, match.index);
   return base.startsWith("md-") ? base.slice(3) : base;
 }
 
@@ -186,7 +199,10 @@ export interface GpuJobRecord {
   endedAt?: string;
   exitCode?: number;
   error?: string;
-  /** The Sandbox id of the session's GPU machine once it is up. */
+  /** The provider session key of the GPU machine it runs on
+   *  (gpuMachineSessionId). Older records ran on the first machine. */
+  machine?: string;
+  /** The Sandbox id of that machine once it is up. */
   sandboxId?: string;
   /** Commit the job ran on, and whether it included uncommitted work. */
   commit?: string;
@@ -246,18 +262,62 @@ export async function listGpuJobs(sessionId: string): Promise<GpuJobRecord[]> {
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 }
 
-/** Whether a job is preparing or running on the session's GPU machine. */
+function isActive(job: GpuJobRecord): boolean {
+  return job.state === "preparing" || job.state === "running";
+}
+
+/** The GPU machine a job runs on (its provider session key). */
+export function gpuJobMachine(
+  job: Pick<GpuJobRecord, "machine" | "sessionId">,
+): string {
+  return job.machine || gpuMachineSessionId(job.sessionId);
+}
+
+/** Whether a job is preparing or running on any of the session's GPU
+ *  machines. */
 export function gpuJobActive(sessionId: string): boolean {
   for (const job of state.jobs.values())
-    if (
-      job.sessionId === sessionId &&
-      (job.state === "preparing" || job.state === "running")
-    )
-      return true;
+    if (job.sessionId === sessionId && isActive(job)) return true;
   return false;
 }
 
-/** Sessions that may hold a GPU machine (any job on record). */
+/**
+ * The machine a new job of this session goes to: a free one that last ran
+ * this GPU (its container needs no switch), else any free one, most recently
+ * used first (its build cache is warmest), else a new one. Null when every
+ * one of the MAX_GPU_MACHINES is busy. Synchronous, so a job recorded right
+ * after this call claims the machine before another start can pick it.
+ */
+export function pickGpuMachine(
+  jobs: Iterable<GpuJobRecord>,
+  sessionId: string,
+  gpu: SandboxGpu,
+): string | null {
+  const busy = new Set<string>();
+  const last = new Map<string, GpuJobRecord>();
+  for (const job of jobs) {
+    if (job.sessionId !== sessionId) continue;
+    const machine = gpuJobMachine(job);
+    if (isActive(job)) busy.add(machine);
+    const seen = last.get(machine);
+    if (!seen || seen.startedAt < job.startedAt) last.set(machine, job);
+  }
+  const free = [...last.entries()]
+    .filter(([machine]) => !busy.has(machine))
+    .sort(
+      ([, a], [, b]) =>
+        Number(b.gpu === gpu) - Number(a.gpu === gpu) ||
+        b.startedAt.localeCompare(a.startedAt),
+    );
+  if (free[0]) return free[0][0];
+  for (let slot = 1; slot <= MAX_GPU_MACHINES; slot++) {
+    const machine = gpuMachineSessionId(sessionId, slot);
+    if (!last.has(machine)) return machine;
+  }
+  return null;
+}
+
+/** Sessions that may hold GPU machines (any job on record). */
 export function sessionHasGpuMachine(sessionId: string): boolean {
   for (const job of state.jobs.values())
     if (job.sessionId === sessionId) return true;
@@ -296,10 +356,10 @@ export async function startGpuJob(
     return { error: "a Runner session's workspace cannot be checkpointed" };
   if (!session.repo || !session.worktreeDir)
     return { error: "this session has no repository workspace" };
-  if (gpuJobActive(session.id))
+  const machine = pickGpuMachine(state.jobs.values(), session.id, input.gpu);
+  if (!machine)
     return {
-      error:
-        "a GPU job is already running for this session; wait for it, or stop it with stop_gpu_job",
+      error: `this session already runs ${MAX_GPU_MACHINES} GPU jobs at once, one per GPU machine; wait for one to end, or stop one with stop_gpu_job`,
     };
   const minutes = Math.min(
     Math.max(1, input.timeoutMinutes),
@@ -313,6 +373,7 @@ export async function startGpuJob(
     command: input.command,
     gpu: input.gpu,
     state: "preparing",
+    machine,
     startedAt: new Date(now).toISOString(),
     deadlineAt: new Date(now + minutes * 60_000).toISOString(),
     ...(input.startedBy ? { startedBy: input.startedBy } : {}),
@@ -371,9 +432,9 @@ async function prepareAndLaunch(
   if (outcome.state === "skipped")
     job.note = `Ran on origin/${branch}: the workspace could not be checkpointed (${outcome.reason}), so uncommitted changes are not included.`;
 
-  // 2. The session's GPU machine: woken, created, or switched to this GPU.
+  // 2. The job's GPU machine: woken, created, or switched to this GPU.
   const provider = getSandboxProvider(GPU_JOB_PROVIDER);
-  const machineSession = gpuMachineSessionId(session.id);
+  const machineSession = gpuJobMachine(job);
   const existing = provider.machineFor?.(machineSession);
   const sandbox = await ensureSandboxWaitingForCapacity(provider, {
     sessionId: machineSession,
@@ -580,6 +641,12 @@ async function checkJob(job: GpuJobRecord): Promise<void> {
   if (probe.exitCode !== 0) return;
   const out = probe.stdout.trim();
   if (out === "running") {
+    // A stop that did not take (an older stop left the command running):
+    // stop it again; the next poll sees its exit file.
+    if (job.stopping) {
+      await killRemote(sandbox, job);
+      return;
+    }
     if (Date.now() > Date.parse(job.deadlineAt) + 120_000) {
       await killRemote(sandbox, job);
       await settle(job, { state: "timed_out" }, sandbox);
@@ -598,17 +665,22 @@ async function checkJob(job: GpuJobRecord): Promise<void> {
   );
 }
 
+/**
+ * Stop a job: every process in its session (wrap.sh is a session leader;
+ * `timeout` moves itself and the command into a process group of their
+ * own, so signalling wrap.sh's group alone leaves the command running), then
+ * an exit file if wrap.sh died before writing one, so the poll settles it.
+ */
 async function killRemote(sandbox: Sandbox, job: GpuJobRecord): Promise<void> {
   const dir = `${REMOTE_ROOT}/${job.id}`;
+  const script = [
+    `p=$(cat ${dir}/pid 2>/dev/null)`,
+    `signal() { local f s; for f in /proc/[0-9]*/stat; do s=$(cat "$f" 2>/dev/null) || continue; set -- \${s##*")"}; [ "$4" = "$p" ] && kill -"$SIG" "\${f//[^0-9]/}" 2>/dev/null; done; kill -"$SIG" -- -"$p" 2>/dev/null; true; }`,
+    `if test -n "$p"; then SIG=TERM signal; sleep 5; SIG=KILL signal; fi`,
+    `test -e ${dir}/exit || { echo 143 > ${dir}/exit.stop && mv -n ${dir}/exit.stop ${dir}/exit; }`,
+  ].join("\n");
   await sandbox
-    .exec(
-      [
-        "bash",
-        "-c",
-        `p=$(cat ${dir}/pid 2>/dev/null) && kill -TERM -- -"$p" 2>/dev/null; sleep 5; kill -KILL -- -"$p" 2>/dev/null; true`,
-      ],
-      { timeoutMs: 30_000 },
-    )
+    .exec(["bash", "-c", script], { timeoutMs: 30_000 })
     .catch(() => {});
 }
 
@@ -760,23 +832,51 @@ export async function stopGpuJob(
 
 // ── Machine lifecycle ────────────────────────────────────────────────────
 
-/** Sleep the session's GPU machine (archive, idle) unless a job runs. */
-export async function sleepGpuMachine(sessionId: string): Promise<boolean> {
-  await ensureLoaded();
-  if (gpuJobActive(sessionId)) return false;
-  const { getSandboxProvider } = await import("./sandbox");
-  const provider = getSandboxProvider(GPU_JOB_PROVIDER);
-  const id = provider.machineFor?.(gpuMachineSessionId(sessionId));
-  if (!id || !provider.pause) return false;
-  await provider.pause(id);
-  console.log(`[gpu-jobs] ${sessionId}: GPU machine ${id} asleep`);
-  return true;
+/** The session's GPU machines (provider session keys) with a job on
+ *  record, and the ones a job is preparing or running on. */
+function sessionMachines(sessionId: string): {
+  all: Set<string>;
+  busy: Set<string>;
+} {
+  const all = new Set<string>();
+  const busy = new Set<string>();
+  for (const job of state.jobs.values())
+    if (job.sessionId === sessionId) {
+      all.add(gpuJobMachine(job));
+      if (isActive(job)) busy.add(gpuJobMachine(job));
+    }
+  return { all, busy };
 }
 
-/** Destroy the session's GPU machine (the session was deleted). */
+/** Sleep the session's GPU machines (archive), or the one `sandboxId` names
+ *  (idle), skipping any a job runs on. Whether one was put to sleep. */
+export async function sleepGpuMachine(
+  sessionId: string,
+  sandboxId?: string,
+): Promise<boolean> {
+  await ensureLoaded();
+  const { getSandboxProvider } = await import("./sandbox");
+  const provider = getSandboxProvider(GPU_JOB_PROVIDER);
+  if (!provider.pause) return false;
+  const { all, busy } = sessionMachines(sessionId);
+  all.add(gpuMachineSessionId(sessionId));
+  let slept = false;
+  for (const machine of all) {
+    const id = provider.machineFor?.(machine);
+    if (!id || (sandboxId && id !== sandboxId)) continue;
+    if (busy.has(machine)) continue;
+    await provider.pause(id);
+    console.log(`[gpu-jobs] ${sessionId}: GPU machine ${id} asleep`);
+    slept = true;
+  }
+  return slept;
+}
+
+/** Destroy the session's GPU machines (the session was deleted). */
 export async function retireGpuMachine(sessionId: string): Promise<void> {
   await ensureLoaded();
   if (!sessionHasGpuMachine(sessionId)) return;
+  const machines = sessionMachines(sessionId).all;
   for (const job of state.jobs.values())
     if (job.sessionId === sessionId && !job.endedAt) {
       job.notified = true;
@@ -786,13 +886,16 @@ export async function retireGpuMachine(sessionId: string): Promise<void> {
       });
     }
   const { teardownRecordedSandbox } = await import("./session-sandbox");
-  const id = await teardownRecordedSandbox(gpuMachineSessionId(sessionId), {
-    provider: GPU_JOB_PROVIDER,
-  });
+  const ids = await Promise.all(
+    [...machines].map((machine) =>
+      teardownRecordedSandbox(machine, { provider: GPU_JOB_PROVIDER }),
+    ),
+  );
   for (const [jobId, job] of state.jobs)
     if (job.sessionId === sessionId) state.jobs.delete(jobId);
   await persist().catch(() => {});
-  if (id) console.log(`[gpu-jobs] ${sessionId}: GPU machine ${id} retired`);
+  for (const id of ids)
+    if (id) console.log(`[gpu-jobs] ${sessionId}: GPU machine ${id} retired`);
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────
@@ -817,16 +920,20 @@ export async function startGpuJobs(): Promise<void> {
   // before this restart sleeps on schedule instead of at the provider's
   // backstop. One whose job is still running is noted by the poll.
   const lastEnded = new Map<string, GpuJobRecord>();
-  for (const job of state.jobs.values())
-    if (job.sandboxId && job.endedAt) {
-      const seen = lastEnded.get(job.sessionId);
+  const busy = new Set<string>();
+  for (const job of state.jobs.values()) {
+    if (!job.sandboxId) continue;
+    if (isActive(job)) busy.add(job.sandboxId);
+    else if (job.endedAt) {
+      const seen = lastEnded.get(job.sandboxId);
       if (!seen || seen.endedAt! < job.endedAt)
-        lastEnded.set(job.sessionId, job);
+        lastEnded.set(job.sandboxId, job);
     }
+  }
   if (!lastEnded.size) return;
   const { noteSandboxActivity } = await import("./sandbox/idle");
   for (const job of lastEnded.values())
-    if (!gpuJobActive(job.sessionId))
+    if (!busy.has(job.sandboxId!))
       noteSandboxActivity(
         { sandboxId: job.sandboxId!, sessionId: job.sessionId },
         "agent",

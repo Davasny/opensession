@@ -5,7 +5,9 @@ import {
   gpuMachineSessionId,
   isGpuJobMachine,
   MAX_GPU_JOB_MINUTES,
+  MAX_GPU_MACHINES,
   parseRepoGpuJobs,
+  pickGpuMachine,
   type GpuJobRecord,
 } from "./gpu-jobs";
 
@@ -50,6 +52,63 @@ describe("GPU job machine ids", () => {
     expect(isGpuJobMachine("md-os-1")).toBe(false);
     expect(gpuMachineOwner("md-os-1--gpu")).toBe("os-1");
     expect(gpuMachineOwner("md-os-1--portals")).toBeNull();
+  });
+
+  test("parallel jobs' machines map back too", () => {
+    expect(gpuMachineSessionId("os-1", 1)).toBe("os-1--gpu");
+    expect(gpuMachineSessionId("os-1", 2)).toBe("os-1--gpu-2");
+    expect(isGpuJobMachine("md-os-1--gpu-2")).toBe(true);
+    expect(isGpuJobMachine("md-os-1--gpu-x")).toBe(false);
+    expect(gpuMachineOwner("md-os-1--gpu-12")).toBe("os-1");
+  });
+});
+
+describe("choosing a GPU machine for a new job", () => {
+  let at = 0;
+  const record = (
+    patch: Partial<GpuJobRecord> & Pick<GpuJobRecord, "state">,
+  ): GpuJobRecord => ({
+    id: `gj-${++at}`,
+    sessionId: "os-1",
+    title: "t",
+    command: "x",
+    gpu: "T4",
+    startedAt: new Date(Date.UTC(2026, 9, 28, 10, at)).toISOString(),
+    deadlineAt: "2026-10-28T23:00:00.000Z",
+    ...patch,
+  });
+
+  test("the first job gets the first machine", () => {
+    expect(pickGpuMachine([], "os-1", "T4")).toBe("os-1--gpu");
+  });
+
+  test("a job running on a machine sends the next one to a new machine", () => {
+    const jobs = [record({ state: "running" })];
+    expect(pickGpuMachine(jobs, "os-1", "T4")).toBe("os-1--gpu-2");
+    // Records from before machines were numbered ran on the first one.
+    expect(pickGpuMachine(jobs, "os-2", "T4")).toBe("os-2--gpu");
+  });
+
+  test("a free machine is reused, the one that ran this GPU first", () => {
+    const jobs = [
+      record({ state: "exited", machine: "os-1--gpu", gpu: "L4" }),
+      record({ state: "exited", machine: "os-1--gpu-2", gpu: "T4" }),
+      record({ state: "exited", machine: "os-1--gpu-3", gpu: "L4" }),
+      record({ state: "preparing", machine: "os-1--gpu-4", gpu: "T4" }),
+    ];
+    expect(pickGpuMachine(jobs, "os-1", "T4")).toBe("os-1--gpu-2");
+    // Of two free L4 machines, the most recently used.
+    expect(pickGpuMachine(jobs, "os-1", "L4")).toBe("os-1--gpu-3");
+  });
+
+  test("every machine busy: no machine", () => {
+    const jobs = Array.from({ length: MAX_GPU_MACHINES }, (_, i) =>
+      record({
+        state: "running",
+        machine: gpuMachineSessionId("os-1", i + 1),
+      }),
+    );
+    expect(pickGpuMachine(jobs, "os-1", "T4")).toBeNull();
   });
 });
 

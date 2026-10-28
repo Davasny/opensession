@@ -24,13 +24,14 @@ import { sandboxIdlePolicy } from "./config";
 /** Portal Sandboxes are keyed by `<session>--portals` at the provider
  *  (portal-sandbox.ts PORTAL_SANDBOX_SUFFIX). */
 const PORTAL_SUFFIX = "--portals";
-/** A session's GPU job machine (gpu-jobs.ts GPU_MACHINE_SUFFIX). It bills a
- *  GPU and runs only jobs, so only its jobs keep it awake: not the person
- *  chatting, not the session's other turns. */
-const GPU_SUFFIX = "--gpu";
+/** A session's GPU job machines, `<session>--gpu` and `<session>--gpu-<n>`
+ *  (gpu-jobs.ts gpuMachineSessionId). They bill a GPU and run only jobs, so
+ *  only their jobs keep them awake: not the person chatting, not the
+ *  session's other turns. */
+const GPU_PATTERN = /--gpu(?:-\d+)?$/;
 
 function jobsOnly(sandboxId: string): boolean {
-  return sandboxId.endsWith(GPU_SUFFIX);
+  return GPU_PATTERN.test(sandboxId);
 }
 
 export type SandboxActivityKind = "agent" | "human";
@@ -58,10 +59,10 @@ const humanBySession = (g.__opensessionSandboxIdleHuman ??= new Map());
 
 /** The session a provider-side session id belongs to. */
 export function idleSessionId(providerSessionId: string): string {
-  for (const suffix of [PORTAL_SUFFIX, GPU_SUFFIX])
-    if (providerSessionId.endsWith(suffix))
-      return providerSessionId.slice(0, -suffix.length);
-  return providerSessionId;
+  if (providerSessionId.endsWith(PORTAL_SUFFIX))
+    return providerSessionId.slice(0, -PORTAL_SUFFIX.length);
+  const gpu = GPU_PATTERN.exec(providerSessionId);
+  return gpu ? providerSessionId.slice(0, gpu.index) : providerSessionId;
 }
 
 /** Record activity on one Sandbox. `sessionId` may be the provider's
@@ -251,7 +252,10 @@ async function defaultSweep(): Promise<string[]> {
       // A session's GPU job machine is not on its record (gpu-jobs.ts).
       const gpu = await import("../gpu-jobs");
       if (gpu.isGpuJobMachine(sandboxId))
-        return stillIdle(sandboxId) && (await gpu.sleepGpuMachine(sessionId));
+        return (
+          stillIdle(sandboxId) &&
+          (await gpu.sleepGpuMachine(sessionId, sandboxId))
+        );
       const slept = await sleepModule.sleepSessionSandboxes(sessionId, {
         reason: "idle",
         sandboxId,
