@@ -17,6 +17,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { filterMcpServers, type McpScope } from "./runner-shared";
 import {
   readCachedTools,
+  refreshToolsCache,
   toolsCacheKey,
   writeCachedTools,
 } from "./mcp-tools-cache";
@@ -559,6 +560,8 @@ export async function createMcpRuntime(opts: {
       ms: Date.now() - started,
     });
   };
+  // Cached listings are read from memory; bring them up to date first.
+  if (entries.some((entry) => entry.cacheKey)) await refreshToolsCache();
   for (const entry of entries) {
     const started = Date.now();
     const cached = entry.cacheKey

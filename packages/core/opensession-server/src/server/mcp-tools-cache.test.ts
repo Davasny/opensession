@@ -137,3 +137,31 @@ describe("degradation", () => {
     expect(readCachedTools("acme", "h")).toBeUndefined();
   });
 });
+
+describe("in-memory cache", () => {
+  test("another process's write is picked up by a refresh, not by a read", async () => {
+    const { refreshToolsCache, flushToolsCache } =
+      await import("./mcp-tools-cache");
+    await flushToolsCache();
+    const hash = toolsCacheKey({ command: "npx" });
+    writeFileSync(
+      join(DIR, ".opensession-mcp-tools-cache.json"),
+      JSON.stringify({
+        version: 1,
+        servers: { acme: { hash, tools: TOOLS, at: Date.now() } },
+      }),
+    );
+    // Reads never touch the disk.
+    expect(readCachedTools("acme", hash)).toBeUndefined();
+    await refreshToolsCache();
+    expect(readCachedTools("acme", hash)).toEqual(TOOLS);
+  });
+
+  test("a refresh after this process's write keeps that write", async () => {
+    const { refreshToolsCache } = await import("./mcp-tools-cache");
+    const hash = toolsCacheKey({ command: "npx" });
+    writeCachedTools("acme", hash, TOOLS);
+    await refreshToolsCache();
+    expect(readCachedTools("acme", hash)).toEqual(TOOLS);
+  });
+});

@@ -36,9 +36,9 @@
  * Kill switch: OPENSESSION_MCP_TOOLS_CACHE=0 restores connect-on-build.
  */
 import { createHash } from "crypto";
-import { existsSync, readFileSync } from "fs";
+import { readFile as readFileAsync, stat } from "fs/promises";
 import { stateDir } from "./paths";
-import { writeJsonAtomic } from "./shared/atomic-write";
+import { writeFileAtomicAsync } from "./shared/atomic-write";
 
 export interface CachedToolCatalog {
   /** Hash of the config entry this listing was taken under. */
@@ -89,23 +89,98 @@ export function toolsCacheKey(cfg: unknown): string {
   return createHash("sha256").update(stable(cfg)).digest("hex").slice(0, 32);
 }
 
-function readFile(): CacheFile {
+/** The parsed file, kept in memory. The file holds every server's full tool
+ * listing (megabytes), and parsing it once per server per run, in the
+ * gateway and in every run host, was most of a run's startup work. Reads
+ * never touch the disk; refreshToolsCache() re-reads only a changed file. */
+const memo: {
+  path?: string;
+  file?: CacheFile;
+  mtimeMs?: number;
+  size?: number;
+  writes: Promise<void>;
+} = { writes: Promise.resolve() };
+
+function emptyFile(): CacheFile {
+  return { version: VERSION, servers: {} };
+}
+
+function parseFile(text: string): CacheFile {
   try {
-    const path = cachePath();
-    if (!existsSync(path)) return { version: VERSION, servers: {} };
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as CacheFile | null;
+    const parsed = JSON.parse(text) as CacheFile | null;
     if (
       !parsed ||
       parsed.version !== VERSION ||
       typeof parsed.servers !== "object"
-    ) {
-      return { version: VERSION, servers: {} };
-    }
+    )
+      return emptyFile();
     return { version: VERSION, servers: parsed.servers ?? {} };
   } catch {
     // A corrupt or unreadable cache is a cold cache, never an error.
-    return { version: VERSION, servers: {} };
+    return emptyFile();
   }
+}
+
+function readFile(): CacheFile {
+  const path = cachePath();
+  if (memo.path !== path || !memo.file) return emptyFile();
+  return memo.file;
+}
+
+/** Bring the in-memory cache up to date with the file, asynchronously.
+ *  Another process's write shows up here; this process's own writes are
+ *  already in memory. Call before reading a run's listings. */
+export async function refreshToolsCache(): Promise<void> {
+  if (!toolsCacheEnabled()) return;
+  await memo.writes;
+  const path = cachePath();
+  try {
+    const info = await stat(path);
+    if (
+      memo.path === path &&
+      memo.file &&
+      memo.mtimeMs === info.mtimeMs &&
+      memo.size === info.size
+    )
+      return;
+    const file = parseFile(await readFileAsync(path, "utf8"));
+    Object.assign(memo, {
+      path,
+      file,
+      mtimeMs: info.mtimeMs,
+      size: info.size,
+    });
+  } catch {
+    Object.assign(memo, {
+      path,
+      file: emptyFile(),
+      mtimeMs: undefined,
+      size: undefined,
+    });
+  }
+}
+
+/** Replace the cache in memory and write it in the background. */
+function saveFile(file: CacheFile): void {
+  const path = cachePath();
+  Object.assign(memo, { path, file });
+  const text = JSON.stringify(file);
+  memo.writes = memo.writes
+    .then(async () => {
+      await writeFileAtomicAsync(path, text, FILE_MODE);
+      const info = await stat(path);
+      // Our own write must not look like another process's change.
+      if (memo.path === path && memo.file === file)
+        Object.assign(memo, { mtimeMs: info.mtimeMs, size: info.size });
+    })
+    .catch(() => {
+      // Caching is an optimization; a failed write must never fail a run.
+    });
+}
+
+/** Resolves once every cache write so far reached the disk. Tests only. */
+export function flushToolsCache(): Promise<void> {
+  return memo.writes;
 }
 
 /**
@@ -137,27 +212,22 @@ export function writeCachedTools(
   now = Date.now(),
 ): void {
   if (!toolsCacheEnabled() || !Array.isArray(tools) || !tools.length) return;
-  try {
-    const file = readFile();
-    const prev = file.servers[server];
-    if (prev?.hash === hash && stable(prev.tools) === stable(tools)) {
-      // Same listing under the same config: only the timestamp would move,
-      // and refreshing it is what keeps a live server from expiring.
-      if (now - prev.at < DEFAULT_TTL_MS / 4) return;
-    }
-    file.servers[server] = { hash, tools, at: now };
-    writeJsonAtomic(cachePath(), file, true, FILE_MODE);
-  } catch {
-    // Caching is an optimization; a failed write must never fail a run.
+  const file = readFile();
+  const prev = file.servers[server];
+  if (prev?.hash === hash && stable(prev.tools) === stable(tools)) {
+    // Same listing under the same config: only the timestamp would move,
+    // and refreshing it is what keeps a live server from expiring.
+    if (now - prev.at < DEFAULT_TTL_MS / 4) return;
   }
+  saveFile({
+    version: VERSION,
+    servers: { ...file.servers, [server]: { hash, tools, at: now } },
+  });
 }
 
 /** Drop one server's entry (or the whole cache when no server is named). */
 export function forgetCachedTools(server?: string): void {
-  try {
-    const file = readFile();
-    if (server) delete file.servers[server];
-    else file.servers = {};
-    writeJsonAtomic(cachePath(), file, true, FILE_MODE);
-  } catch {}
+  const servers = server ? { ...readFile().servers } : {};
+  if (server) delete servers[server];
+  saveFile({ version: VERSION, servers });
 }
