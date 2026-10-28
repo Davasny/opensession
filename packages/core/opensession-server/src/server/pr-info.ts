@@ -15,7 +15,8 @@ import {
 } from "./config";
 import { $ } from "bun";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync } from "fs";
+import { coalescedWriter } from "./shared/coalesced-write";
 import { audited } from "./audit";
 import { PR_DIFF_CACHE_LIMITS, setBounded } from "./bounded-cache";
 import { registerMemoryProbe, totalChars } from "./memory-probes";
@@ -630,18 +631,21 @@ async function resolvePrNumber(
 
 loadPrDetailsSnapshot();
 
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
+// Debounced and written asynchronously: the snapshot only seeds the cache
+// after a restart, and a synchronous write stalled the gateway.
+const detailsWriter = coalescedWriter({
+  path: () => DETAILS_CACHE_FILE,
+  render: () => {
+    const cutoff = Date.now() - 7 * 24 * 3600_000; // drop long-dead branches
+    const obj: Record<string, { data: PrDetails | null; ts: number }> = {};
+    for (const [k, v] of cache) if (v.ts > cutoff) obj[k] = v;
+    return JSON.stringify(obj);
+  },
+  delayMs: 5_000,
+  label: "pr-details",
+});
 function schedulePersist() {
-  if (persistTimer) return;
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    try {
-      const cutoff = Date.now() - 7 * 24 * 3600_000; // drop long-dead branches
-      const obj: Record<string, { data: PrDetails | null; ts: number }> = {};
-      for (const [k, v] of cache) if (v.ts > cutoff) obj[k] = v;
-      writeFileSync(DETAILS_CACHE_FILE, JSON.stringify(obj));
-    } catch {}
-  }, 5_000);
+  detailsWriter.schedule();
 }
 
 // Caches are keyed by `<repo>\0<branch>` so the same branch name in different

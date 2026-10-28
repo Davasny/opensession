@@ -12,6 +12,7 @@ const {
   githubDeliveriesStore,
   loadGithubDeliveries,
   isGithubDeliveryProcessed,
+  flushGithubDeliveries,
   markGithubDeliveryProcessed,
   releaseGithubDelivery,
 } = await import("./webhook-deliveries");
@@ -36,9 +37,10 @@ describe("GitHub delivery replay protection", () => {
     expect(isGithubDeliveryProcessed(deliveryId)).toBe(true);
   });
 
-  test("persists delivery ids at the legacy Slack-store path and restores them after a reload", () => {
+  test("persists delivery ids at the legacy Slack-store path and restores them after a reload", async () => {
     const deliveryId = "github-delivery-persists";
     markGithubDeliveryProcessed(deliveryId);
+    await flushGithubDeliveries();
     expect(githubDeliveriesStore()).toBe(
       `${scratch}/.slack-sessions/github-deliveries.json`,
     );

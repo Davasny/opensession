@@ -17,14 +17,7 @@
  * Fails soft everywhere: no trufflehog binary, git errors, or a scan timeout
  * all return a skipped result and the review proceeds without the section.
  */
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { access, copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { audit } from "../../server/audit";
@@ -85,11 +78,16 @@ export function parseAddedLines(diff: string): Map<string, Set<number>> {
   return byFile;
 }
 
-function trufflehogBin(): string | null {
+async function trufflehogBin(): Promise<string | null> {
   const onPath = Bun.which("trufflehog");
   if (onPath) return onPath;
   const home = join(homedir(), "bin", "trufflehog");
-  return existsSync(home) ? home : null;
+  try {
+    await access(home);
+    return home;
+  } catch {
+    return null;
+  }
 }
 
 export async function runSecretScanCheck(opts: {
@@ -115,7 +113,7 @@ export async function runSecretScanCheck(opts: {
   const skip = (reason: string) =>
     done({ findings: [], checkedFiles: 0, skipped: reason });
 
-  const bin = opts.bin || trufflehogBin();
+  const bin = opts.bin || (await trufflehogBin());
   if (!bin) return skip("trufflehog not installed");
 
   const mb = await runCommand(
@@ -149,15 +147,17 @@ export async function runSecretScanCheck(opts: {
 
   // Snapshot the post-image of each changed file so the filesystem source scans
   // exactly the PR's content, keeping relative paths for mapping findings back.
-  const snapDir = mkdtempSync(join(tmpdir(), "os-review-secrets-"));
+  // Async throughout: this runs on the gateway for every reviewed PR, and a
+  // synchronous copy of up to MAX_FILES files stalled every request.
+  const snapDir = await mkdtemp(join(tmpdir(), "os-review-secrets-"));
   try {
     let copied = 0;
     for (const file of [...addedLines.keys()].slice(0, MAX_FILES)) {
       const src = join(opts.cwd, file);
       try {
-        if (!existsSync(src) || statSync(src).size > MAX_FILE_BYTES) continue;
-        mkdirSync(dirname(join(snapDir, file)), { recursive: true });
-        copyFileSync(src, join(snapDir, file));
+        if ((await stat(src)).size > MAX_FILE_BYTES) continue;
+        await mkdir(dirname(join(snapDir, file)), { recursive: true });
+        await copyFile(src, join(snapDir, file));
         copied++;
       } catch {}
     }
@@ -214,7 +214,7 @@ export async function runSecretScanCheck(opts: {
     }
     return done({ findings, checkedFiles: copied, skipped: "" });
   } finally {
-    rmSync(snapDir, { recursive: true, force: true });
+    await rm(snapDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

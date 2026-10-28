@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from "fs";
 import { statePath } from "../../server/paths";
-import { writeJsonAtomic } from "../../server/shared/atomic-write";
+import { coalescedWriter } from "../../server/shared/coalesced-write";
 
 export function githubDeliveriesStore(): string {
   return statePath(".slack-sessions/github-deliveries.json");
@@ -33,12 +33,23 @@ function pruneGithubDeliveries(now = Date.now()): void {
   }
 }
 
+// Rewritten after every delivery, so the write is async and coalesced: a
+// burst of webhooks produces one or two writes, none on the caller's stack.
+// A restart in the instant between admission and the write can let GitHub
+// redeliver that one event; the in-flight claim still dedupes it live.
+const deliveriesWriter = coalescedWriter({
+  path: githubDeliveriesStore,
+  render: () => JSON.stringify([...githubDeliveryExpiry]),
+  label: "github",
+});
+
 function persistGithubDeliveries(): void {
-  try {
-    writeJsonAtomic(githubDeliveriesStore(), [...githubDeliveryExpiry], false);
-  } catch (e) {
-    console.error("[github] Failed to persist webhook deliveries:", e);
-  }
+  deliveriesWriter.schedule();
+}
+
+/** Resolves once every processed delivery so far is on disk. */
+export function flushGithubDeliveries(): Promise<void> {
+  return deliveriesWriter.flush();
 }
 
 /**

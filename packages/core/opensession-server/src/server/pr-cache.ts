@@ -10,7 +10,7 @@
  * Live state parks on globalThis (same keys as before the extraction) so hot
  * reloads keep it.
  */
-import { chmodSync, readFileSync } from "fs";
+import { readFileSync } from "fs";
 import { statePath } from "./paths";
 import { githubLoginToPersonKey, githubLoginFor } from "./shared/user-mappings";
 import { configuredRepos, githubBotLogins } from "./config";
@@ -25,7 +25,7 @@ import {
   type BulkPr,
   type PrHostCapabilities,
 } from "./pr-host";
-import { writeJsonAtomic } from "./shared/atomic-write";
+import { coalescedWriter } from "./shared/coalesced-write";
 import {
   cachedReviewTeamLogins,
   fetchReviewTeamLogins,
@@ -255,31 +255,38 @@ export function loadPrCacheSnapshot(): void {
 }
 loadPrCacheSnapshot();
 
-function persistPrCache(data: Map<string, Map<string, PrInfo>>) {
-  try {
+// The snapshot is only read at boot. Writes are async and coalesced so a
+// burst of webhook write-throughs never blocks the gateway on the disk.
+const prCacheWriter = coalescedWriter({
+  path: prCacheFile,
+  render: () => {
     const obj: Record<string, Record<string, PrInfo>> = {};
-    for (const [repo, byBranch] of data)
+    for (const [repo, byBranch] of prCache.data)
       obj[repo] = Object.fromEntries(byBranch);
-    writeJsonAtomic(
-      prCacheFile(),
-      {
-        version: PR_CACHE_VERSION,
-        repos: obj,
-        recentLimits: Object.fromEntries(
-          prRepos().map((repo) => [repo.id, repo.recentLimit]),
-        ),
-        openLimits: Object.fromEntries(
-          prRepos().map((repo) => [repo.id, repo.openLimit]),
-        ),
-        probeEtags: Object.fromEntries(probeEtags),
-        lastFullRefresh: Object.fromEntries(lastFullRefresh),
-      },
-      false,
-    );
-    chmodSync(prCacheFile(), 0o600);
-  } catch (e) {
-    console.error("Failed to persist PR cache:", e);
-  }
+    return JSON.stringify({
+      version: PR_CACHE_VERSION,
+      repos: obj,
+      recentLimits: Object.fromEntries(
+        prRepos().map((repo) => [repo.id, repo.recentLimit]),
+      ),
+      openLimits: Object.fromEntries(
+        prRepos().map((repo) => [repo.id, repo.openLimit]),
+      ),
+      probeEtags: Object.fromEntries(probeEtags),
+      lastFullRefresh: Object.fromEntries(lastFullRefresh),
+    });
+  },
+  mode: 0o600,
+  label: "pr-cache",
+});
+
+function persistPrCache(): void {
+  prCacheWriter.schedule();
+}
+
+/** Resolves once the PR cache snapshot carries every change so far. */
+export function flushPrCacheSnapshot(): Promise<void> {
+  return prCacheWriter.flush();
 }
 
 /** Keep the repo-wide PR queue coherent after a human closes a PR in OS1. */
@@ -304,7 +311,7 @@ export function markCachedPrClosed(ghRepo: string, number: number): void {
       updatedAt: new Date().toISOString(),
     });
     prCache.ts = Date.now();
-    persistPrCache(prCache.data);
+    persistPrCache();
     return;
   }
 }
@@ -349,7 +356,7 @@ export function markCachedPrMerged(ghRepo: string, branch: string): void {
     updatedAt: new Date().toISOString(),
   });
   prCache.ts = Date.now();
-  persistPrCache(prCache.data);
+  persistPrCache();
 }
 
 /** Clear the cached draft flag after a PR is marked ready in OS1, so the
@@ -367,7 +374,7 @@ export function markCachedPrReady(ghRepo: string, branch: string): void {
     updatedAt: new Date().toISOString(),
   });
   prCache.ts = Date.now();
-  persistPrCache(prCache.data);
+  persistPrCache();
 }
 
 /**
@@ -397,7 +404,7 @@ export function markCachedPrReviewed(
   });
   byBranch.set(branch, applyCachedReview(pr, reviewer, event));
   prCache.ts = Date.now();
-  persistPrCache(prCache.data);
+  persistPrCache();
 }
 
 /**
@@ -423,7 +430,7 @@ export function markCachedPrReviewRequestsCleared(
   );
   byBranch.set(branch, { ...pr, reviewRequested: [] });
   prCache.ts = Date.now();
-  persistPrCache(prCache.data);
+  persistPrCache();
 }
 
 function applyCachedReview(
@@ -546,7 +553,7 @@ function schedulePrCachePersist() {
   if (prCachePersistTimer) return;
   prCachePersistTimer = setTimeout(() => {
     prCachePersistTimer = null;
-    persistPrCache(prCache.data);
+    persistPrCache();
   }, 5_000);
 }
 
@@ -1194,7 +1201,7 @@ async function refreshPrCacheInner(): Promise<Set<string>> {
       }
     }
     prCache = { data: next, ts: Date.now() };
-    if (freshRepos.size) persistPrCache(next);
+    if (freshRepos.size) persistPrCache();
     // A PR that just went MERGEABLE → CONFLICTING wakes the one session that
     // owns it. GitHub fires no webhook for a mergeability change, so this sweep
     // is where the event comes from (agents/github/pr-conflict.ts). Imported
