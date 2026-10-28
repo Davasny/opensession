@@ -165,9 +165,65 @@ interface Live {
   ending?: Promise<void>;
 }
 
+/** Runs by id, plus each session's run ids. The sidebar asks, for every
+ * session, whether it has a run going; the per-session index answers from
+ * that session's few runs instead of every run kept for a week. A run's
+ * session never changes, and its state is read live, so only set, delete
+ * and clear maintain the index. */
+class RunRegistry extends Map<string, ScriptRunRecord> {
+  private bySession = new Map<string, Set<string>>();
+
+  constructor(entries?: Iterable<[string, ScriptRunRecord]>) {
+    super();
+    if (entries) for (const [id, run] of entries) this.set(id, run);
+  }
+
+  override set(id: string, run: ScriptRunRecord): this {
+    const previous = super.get(id);
+    if (previous && previous.sessionId !== run.sessionId)
+      this.unindex(id, previous.sessionId);
+    super.set(id, run);
+    // Map's constructor calls set before this class's fields exist.
+    if (this.bySession) {
+      let ids = this.bySession.get(run.sessionId);
+      if (!ids) this.bySession.set(run.sessionId, (ids = new Set()));
+      ids.add(id);
+    }
+    return this;
+  }
+
+  override delete(id: string): boolean {
+    const run = super.get(id);
+    if (run) this.unindex(id, run.sessionId);
+    return super.delete(id);
+  }
+
+  override clear(): void {
+    this.bySession.clear();
+    super.clear();
+  }
+
+  /** The session's runs, in no particular order. */
+  forSession(sessionId: string): ScriptRunRecord[] {
+    const out: ScriptRunRecord[] = [];
+    for (const id of this.bySession.get(sessionId) ?? []) {
+      const run = super.get(id);
+      if (run) out.push(run);
+    }
+    return out;
+  }
+
+  private unindex(id: string, sessionId: string): void {
+    const ids = this.bySession.get(sessionId);
+    if (!ids) return;
+    ids.delete(id);
+    if (!ids.size) this.bySession.delete(sessionId);
+  }
+}
+
 const g = globalThis as any;
 const state: {
-  runs: Map<string, ScriptRunRecord>;
+  runs: RunRegistry;
   live: Map<string, Live>;
   loaded: boolean;
   loading?: Promise<void>;
@@ -181,7 +237,7 @@ const state: {
   revision: number;
   broadcastTimers: Map<string, ReturnType<typeof setTimeout>>;
 } = (g.__scriptRuns ??= {
-  runs: new Map(),
+  runs: new RunRegistry(),
   live: new Map(),
   loaded: false,
   deps: {},
@@ -221,7 +277,7 @@ export function __resetScriptRunsForTest(deps: ScriptRunDeps = {}): void {
   if (state.poll) clearInterval(state.poll);
   if (state.persistTimer) clearTimeout(state.persistTimer);
   for (const timer of state.broadcastTimers.values()) clearTimeout(timer);
-  state.runs = new Map();
+  state.runs = new RunRegistry();
   state.live = new Map();
   state.loaded = false;
   state.loading = undefined;
@@ -235,6 +291,11 @@ export function __resetScriptRunsForTest(deps: ScriptRunDeps = {}): void {
   state.broadcastTimers = new Map();
   g.__scriptRunsStarted = false;
 }
+
+// A state object left by an older module version (hot reload) holds a plain
+// Map; rebuild it so the session index exists.
+if (typeof (state.runs as Partial<RunRegistry>).forSession !== "function")
+  state.runs = new RunRegistry(state.runs);
 
 // ── Registry ───────────────────────────────────────────────────────────────
 
@@ -344,14 +405,14 @@ export async function listScriptRuns(
 /** Whether the session has a run still going, for its sidebar row. Reads
  *  the in-memory registry; false until it has loaded at boot. */
 export function sessionHasRunningScript(sessionId: string): boolean {
-  for (const run of state.runs.values())
-    if (run.sessionId === sessionId && run.state === "running") return true;
-  return false;
+  return state.runs
+    .forSession(sessionId)
+    .some((run) => run.state === "running");
 }
 
 function sessionRuns(sessionId: string): ScriptRunSummary[] {
-  return [...state.runs.values()]
-    .filter((run) => run.sessionId === sessionId)
+  return state.runs
+    .forSession(sessionId)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .map(summarizeScriptRun);
 }
@@ -1079,7 +1140,7 @@ export async function __waitForScriptRunForTest(
 export function __simulateRestartForTest(): void {
   for (const live of state.live.values()) live.relayServer?.stop(true);
   if (state.poll) clearInterval(state.poll);
-  state.runs = new Map();
+  state.runs = new RunRegistry();
   state.live = new Map();
   state.loaded = false;
   state.loading = undefined;
