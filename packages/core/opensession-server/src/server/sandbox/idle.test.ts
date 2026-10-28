@@ -51,6 +51,7 @@ describe("two idle timers", () => {
     );
     noteSessionHumanActivity("g1", t0 + 4 * MIN);
     expect(idleSessionId("g1--gpu")).toBe("g1");
+    expect(idleSessionId("g1--gpu-3")).toBe("g1");
     // The session's own turn keeps running; the GPU machine still sleeps.
     const d = deps({ busy: () => true });
     expect(await sweepIdleSandboxes({ ...d.value, now: t0 + 4 * MIN })).toEqual(
