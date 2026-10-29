@@ -42,6 +42,15 @@ export interface OS1ShellBridge {
   organizations?: unknown;
   updates?: unknown;
   voiceAudio?: NativeVoiceAudioBridge;
+  /** A PNG data URL of this window's pixels inside `rect` (CSS pixels from
+   *  the window's top left). The desktop app only; it can see framed
+   *  cross-origin pages, which a web page cannot. */
+  capturePage?: (rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => Promise<string | null>;
   dictation?: {
     start(
       id: string,

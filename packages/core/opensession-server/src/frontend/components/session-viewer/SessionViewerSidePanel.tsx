@@ -140,6 +140,7 @@ export function SessionViewerSidePanel({
           portals.pinnedPortal ? (
             <PortalPane
               target={portals.pinnedPortal}
+              commentSessionId={changes.sessionId}
               onClose={portals.onClosePinnedPortal}
               onExpand={portals.onExpandPinnedPortal}
             />

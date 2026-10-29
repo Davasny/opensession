@@ -84,6 +84,9 @@ contextBridge.exposeInMainWorld("os1", {
   // window stays where it is, so the click routed the app to the right session
   // behind whatever the person was actually looking at.
   focusWindow: () => ipcRenderer.send("os1:focus-window"),
+  // A screenshot of this window inside rect (CSS pixels), for a Browser tab
+  // comment: the page cannot read a framed cross-origin page's pixels.
+  capturePage: (rect) => ipcRenderer.invoke("os1:capture-page", rect),
   organizations: {
     inlineAdd: true,
     list: () => ipcRenderer.invoke("os1:organizations-list"),

@@ -8,6 +8,7 @@ import {
 import {
   getKeptFrame,
   hideKeptFrame,
+  keptFrameElement,
   keptFrameStepped,
   loadKeptFrame,
   showKeptFrame,
@@ -27,10 +28,12 @@ import { useFrameLocation } from "../hooks/useFrameLocation";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { PageLoader } from "../ui/page-loader";
+import { BrowserAnnotationLayer } from "./BrowserAnnotationLayer";
 import {
   IconArrowUpRight,
   IconChevronLeft,
   IconChevronRight,
+  IconMessage,
   IconRestore,
 } from "./icons";
 
@@ -72,6 +75,8 @@ interface BrowserPaneProps {
    * (another tab, another session) finds it where it was. See kept-frames.ts.
    */
   keepAliveKey?: string;
+  /** The session a comment on this page goes to; enables Annotate. */
+  commentSessionId?: string;
 }
 
 /**
@@ -97,6 +102,7 @@ function OwnedBrowserPane({
   openWindowName,
   allow,
   sandbox,
+  commentSessionId,
 }: BrowserPaneProps) {
   // The frame's own navigation is cross-origin and invisible to us, so the
   // address bar tracks what this pane loaded (the given URL, or one typed in)
@@ -107,6 +113,7 @@ function OwnedBrowserPane({
   const [reloadNonce, setReloadNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const [history, setHistory] = useState(() => freshFrameHistory(0));
+  const [annotating, setAnnotating] = useState(false);
   const frameRef = useRef<HTMLIFrameElement>(null);
   useFrameFocus(
     frameRef,
@@ -151,9 +158,19 @@ function OwnedBrowserPane({
         leading={leading}
         actions={actions}
         openWindowName={openWindowName}
+        annotating={commentSessionId ? annotating : undefined}
+        onAnnotate={setAnnotating}
       />
       <div className="relative min-h-0 flex-1 bg-white">
         {loading ? <BrowserLoading name={name} /> : null}
+        {commentSessionId && annotating ? (
+          <BrowserAnnotationLayer
+            sessionId={commentSessionId}
+            url={reported ?? address}
+            frame={() => frameRef.current}
+            onExit={() => setAnnotating(false)}
+          />
+        ) : null}
         <iframe
           key={`${address}#${reloadNonce}`}
           ref={frameRef}
@@ -183,8 +200,10 @@ function KeptBrowserPane({
   allow,
   sandbox,
   keepAliveKey: key,
+  commentSessionId,
 }: BrowserPaneProps & { keepAliveKey: string }) {
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
+  const [annotating, setAnnotating] = useState(false);
   const read = () => getKeptFrame(key);
   const frame = useSyncExternalStore(subscribeKeptFrames, read, read);
   useLayoutEffect(() => {
@@ -196,19 +215,33 @@ function KeptBrowserPane({
     showKeptFrame(key, { url, name, title: frameTitle, allow, sandbox }, slot);
   }, [key, slot, url, name, frameTitle, allow, sandbox]);
 
+  const address = frame?.url === url ? (frame.location ?? frame.address) : url;
+
   return (
     <div className={BROWSER_PANE}>
       <BrowserToolbar
         name={name}
-        address={frame?.url === url ? (frame.location ?? frame.address) : url}
+        address={address}
         history={frame?.url === url ? frame.history : undefined}
         onLoad={(next) => loadKeptFrame(key, next)}
         onStep={(delta, length) => keptFrameStepped(key, delta, length)}
         leading={leading}
         actions={actions}
         openWindowName={openWindowName}
+        annotating={commentSessionId ? annotating : undefined}
+        onAnnotate={setAnnotating}
       />
-      <div ref={setSlot} className="min-h-0 flex-1 bg-white" />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={setSlot} className="min-h-0 flex-1 bg-white" />
+        {commentSessionId && annotating ? (
+          <BrowserAnnotationLayer
+            sessionId={commentSessionId}
+            url={address}
+            frame={() => keptFrameElement(key)}
+            onExit={() => setAnnotating(false)}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -237,6 +270,8 @@ function BrowserToolbar({
   leading,
   actions,
   openWindowName = "_blank",
+  annotating,
+  onAnnotate,
 }: {
   name: string;
   address: string;
@@ -250,6 +285,9 @@ function BrowserToolbar({
   leading?: ReactNode;
   actions?: ReactNode;
   openWindowName?: string;
+  /** Annotate mode, or undefined when this page takes no comments. */
+  annotating?: boolean;
+  onAnnotate?: (on: boolean) => void;
 }) {
   const [shown, setShown] = useState(address);
   const [draft, setDraft] = useState(address);
@@ -325,6 +363,19 @@ function BrowserToolbar({
           }
         }}
       />
+      {annotating !== undefined ? (
+        <Button
+          variant={annotating ? "soft" : "ghost"}
+          size="md"
+          icon={<IconMessage size={16} />}
+          onClick={() => onAnnotate?.(!annotating)}
+          aria-pressed={annotating}
+          aria-label={
+            annotating ? `Stop annotating ${name}` : `Annotate ${name}`
+          }
+          title={annotating ? "Stop annotating" : "Annotate"}
+        />
+      ) : null}
       <Button
         variant="ghost"
         size="md"

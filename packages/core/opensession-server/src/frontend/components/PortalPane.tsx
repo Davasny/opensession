@@ -9,9 +9,12 @@ export function PortalPane({
   onExpand,
   onClose,
   keepAliveKey,
+  commentSessionId,
 }: {
   target: PortalTarget;
   keepAliveKey?: string;
+  /** Where a comment on the page goes; enables Annotate. */
+  commentSessionId?: string;
   onExpand?: () => void;
   onClose?: () => void;
 }) {
@@ -23,6 +26,7 @@ export function PortalPane({
       openWindowName={`portal-${target.sessionId}-${target.key}`}
       allow="clipboard-read; clipboard-write; fullscreen"
       keepAliveKey={keepAliveKey}
+      commentSessionId={commentSessionId}
       sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
       leading={
         <span

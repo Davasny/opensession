@@ -36,3 +36,37 @@ export async function submitImageRegionComment(
   if (!handler) throw new Error("That session is no longer open");
   await handler(request);
 }
+
+/** A comment made outside the transcript (a Browser tab page) that goes to
+ *  the chat as its own message, with any screenshot beside it. */
+export interface PageCommentRequest {
+  sessionId: string;
+  text: string;
+  files: File[];
+}
+
+type PageCommentHandler = (request: PageCommentRequest) => Promise<void>;
+
+const pageHandlers = new Map<string, PageCommentHandler>();
+
+export function registerPageCommentHandler(
+  sessionId: string,
+  handler: PageCommentHandler,
+): () => void {
+  pageHandlers.set(sessionId, handler);
+  return () => {
+    if (pageHandlers.get(sessionId) === handler) pageHandlers.delete(sessionId);
+  };
+}
+
+export function canCommentOnPage(sessionId?: string): boolean {
+  return Boolean(sessionId && pageHandlers.has(sessionId));
+}
+
+export async function submitPageComment(
+  request: PageCommentRequest,
+): Promise<void> {
+  const handler = pageHandlers.get(request.sessionId);
+  if (!handler) throw new Error("That session is no longer open");
+  await handler(request);
+}

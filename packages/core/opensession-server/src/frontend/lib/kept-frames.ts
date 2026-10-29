@@ -214,3 +214,10 @@ export function resetKeptFrames() {
   clock = 0;
   commit([]);
 }
+
+/** The iframe a kept frame is showing, from KeptFrameLayer's markup. */
+export function keptFrameElement(key: string): HTMLIFrameElement | null {
+  return document.querySelector<HTMLIFrameElement>(
+    `[data-kept-frame="${CSS.escape(key)}"] iframe`,
+  );
+}

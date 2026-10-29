@@ -37,10 +37,13 @@ type PreviewSurface =
 export function SessionPreviewSurface({
   surface,
   frameScope,
+  commentSessionId,
 }: {
   surface: PreviewSurface;
   /** Keeps the page loaded across tab and session switches; see BrowserPane. */
   frameScope?: string;
+  /** Where a comment on the page goes; see BrowserAnnotationLayer. */
+  commentSessionId?: string;
 }) {
   switch (surface.kind) {
     case "portal":
@@ -49,6 +52,7 @@ export function SessionPreviewSurface({
           <PortalPane
             target={surface.target}
             keepAliveKey={frameScope && keptFrameKey("portal", frameScope)}
+            commentSessionId={commentSessionId}
           />
         </div>
       );
@@ -62,6 +66,7 @@ export function SessionPreviewSurface({
             name="Browser"
             frameTitle="Browser"
             keepAliveKey={frameScope && keptFrameKey("staging", frameScope)}
+            commentSessionId={commentSessionId}
             allow="clipboard-read; clipboard-write; fullscreen; autoplay"
             sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
           />
@@ -74,6 +79,7 @@ export function SessionPreviewSurface({
           url={surface.url}
           shareLink={surface.shareLink}
           keepAliveKey={frameScope && keptFrameKey("staging", frameScope)}
+          commentSessionId={commentSessionId}
         />
       );
   }
@@ -85,7 +91,11 @@ function SessionStagingPane({
   url,
   shareLink,
   keepAliveKey,
-}: SessionStagingPaneProps & { keepAliveKey?: string }) {
+  commentSessionId,
+}: SessionStagingPaneProps & {
+  keepAliveKey?: string;
+  commentSessionId?: string;
+}) {
   if (deployment?.embeddable) {
     // This deploy opts into being framed by this app (its CSP frame-ancestors
     // names our origin), so we embed it inline. When the deploy's session
@@ -101,6 +111,7 @@ function SessionStagingPane({
           url={url}
           name="Preview environment"
           keepAliveKey={keepAliveKey}
+          commentSessionId={commentSessionId}
           frameTitle="Preview environment"
           allow="camera; microphone; display-capture; fullscreen; autoplay; clipboard-write"
           leading={

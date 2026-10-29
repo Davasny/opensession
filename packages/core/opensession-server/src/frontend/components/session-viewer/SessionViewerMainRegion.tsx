@@ -708,6 +708,7 @@ export function SessionViewerMainRegion({
         <SessionPreviewSurface
           surface={{ kind: "portal", target: portalTarget }}
           frameScope={frameScope}
+          commentSessionId={session.id}
         />
       ) : showDesktop ? (
         // The Sandbox desktop, full-width like a Portal. Mounted only while
@@ -719,6 +720,7 @@ export function SessionViewerMainRegion({
         <SessionPreviewSurface
           surface={{ kind: "browser", url: browserTab.url }}
           frameScope={frameScope}
+          commentSessionId={session.id}
         />
       ) : showStaging && browserTab ? (
         <SessionPreviewSurface
@@ -729,6 +731,7 @@ export function SessionViewerMainRegion({
             shareLink,
           }}
           frameScope={frameScope}
+          commentSessionId={session.id}
         />
       ) : showAssets ? (
         // The session's scratch assets, full-width (same component

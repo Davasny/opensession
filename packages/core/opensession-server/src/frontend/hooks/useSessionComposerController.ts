@@ -19,7 +19,9 @@ import { foregroundFileComposerOpen, hasDraggedFiles } from "../lib/file-drag";
 import { cropImageRegionFile } from "../lib/image-region-comment";
 import {
   registerImageRegionCommentHandler,
+  registerPageCommentHandler,
   type ImageRegionCommentRequest,
+  type PageCommentRequest,
 } from "../lib/image-region-comment-registry";
 import { splitAttachments } from "../lib/images";
 import type { FileAttachment } from "../lib/images";
@@ -472,11 +474,30 @@ export function useImageRegionComposer({
       if (!sent) throw new Error("Could not send this comment");
     };
   });
+  const pageCommentRef = useRef<(request: PageCommentRequest) => Promise<void>>(
+    async () => {},
+  );
+  useLayoutEffect(() => {
+    pageCommentRef.current = async (request) => {
+      if (request.sessionId !== sessionId)
+        throw new Error("That session changed");
+      const staged = await splitAttachments(request.files);
+      const sent = await handleSend(request.text, undefined, staged.images);
+      if (!sent) throw new Error("Could not send this comment");
+    };
+  });
   useEffect(() => {
     if (noEngine) return;
-    return registerImageRegionCommentHandler(sessionId, (request) =>
+    const dropImage = registerImageRegionCommentHandler(sessionId, (request) =>
       imageRegionCommentRef.current(request),
     );
+    const dropPage = registerPageCommentHandler(sessionId, (request) =>
+      pageCommentRef.current(request),
+    );
+    return () => {
+      dropImage();
+      dropPage();
+    };
   }, [noEngine, sessionId]);
 }
 

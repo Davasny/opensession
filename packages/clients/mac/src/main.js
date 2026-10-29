@@ -15,6 +15,7 @@ const {
   dialog,
   screen,
   net,
+  webFrameMain,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -25,6 +26,7 @@ const { NativeVoiceAudio } = require("./native-voice-audio");
 const { VoiceAudioBridge } = require("./voice-audio-bridge");
 const { MacKeychainReview } = require("./mac-keychain-ui");
 const { LocalFolders } = require("./local-folders");
+const { FRAME_INSPECT_SCRIPT, captureRect } = require("./frame-inspect");
 const macKeychainReview = new MacKeychainReview({
   dialog,
   context: (target) => {
@@ -1057,6 +1059,20 @@ function createWindow(initialURL = null, initialAccountID = null) {
   createdWindow.webContents.on("did-navigate-in-page", () => {
     rememberWindowAccountUrl(createdWindow);
   });
+  // Pages the app frames (its Browser and Portal tabs) answer the app's
+  // inspect requests, so a comment on one can name its element
+  // (frame-inspect.js). Only the app's own direct frames get the responder.
+  createdWindow.webContents.on(
+    "did-frame-finish-load",
+    (_event, isMainFrame, frameProcessId, frameRoutingId) => {
+      if (isMainFrame || createdWindow.isDestroyed()) return;
+      const contents = createdWindow.webContents;
+      const frame = webFrameMain.fromId(frameProcessId, frameRoutingId);
+      if (!frame || frame.parent !== contents.mainFrame) return;
+      if (!inWindow(contents.mainFrame.url)) return;
+      frame.executeJavaScript(FRAME_INSPECT_SCRIPT).catch(() => {});
+    },
+  );
   // Pinch and wheel zoom land in the renderer, so the level has to be read back
   // a tick later; the View menu's roles are picked up by saveWindowState.
   createdWindow.webContents.on("zoom-changed", () => {
@@ -1706,6 +1722,18 @@ app.whenReady().then(async () => {
   ipcMain.on("os1:organizations-manage", (e) => {
     if (!fromActiveOrganizationPicker(e)) return;
     showSetup("app", eventWindow(e));
+  });
+
+  // A screenshot for a Browser tab comment. The web app cannot read a framed
+  // cross-origin page's pixels; the window it lives in can. Only the app's
+  // own top frame may ask, and only for its own window.
+  ipcMain.handle("os1:capture-page", async (e, raw) => {
+    if (e.senderFrame !== e.sender.mainFrame) return null;
+    if (!inWindow(e.senderFrame?.url ?? "")) return null;
+    const rect = captureRect(raw, e.sender.getZoomFactor());
+    if (!rect) return null;
+    const image = await e.sender.capturePage(rect).catch(() => null);
+    return image && !image.isEmpty() ? image.toDataURL() : null;
   });
 
   ipcMain.handle("os1:dictation-start", (e, id, sampleRate, language) => {
