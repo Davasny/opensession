@@ -148,8 +148,10 @@ mock.module("./api", () => ({
   fetchLinearUser: async () => null,
 }));
 
+let validToken: string | null = "synthetic-token";
+
 mock.module("./oauth", () => ({
-  getValidToken: async () => "synthetic-token",
+  getValidToken: async () => validToken,
 }));
 
 mock.module("../../server/agent-runner", () => ({
@@ -319,6 +321,7 @@ async function waitForAssignmentSettled(id: string) {
 
 beforeEach(() => {
   prRepo = { ghRepo: "acme/linear-repo", host: "github" };
+  validToken = "synthetic-token";
   credentialCalls.length = 0;
   prCredentialEnv = { GH_TOKEN: "synthetic-installation-token" };
   activeSessions.clear();
@@ -632,6 +635,25 @@ test("prompted recovery by a known agent-session id uses that file and transcrip
     ),
   ).toBe(true);
   expect(activeSessions.get(id)?.sessionKey).toBe(key);
+});
+
+test("a prompted turn with no usable token is retried instead of dropped", async () => {
+  const id = "78787878-7878-4878-8878-787878787878";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  expect(runCalls).toHaveLength(0);
+
+  validToken = null;
+  const dropped = await handleAgentSession(prompted(id), {});
+  expect(dropped.status).toBe(503);
+  expect(await dropped.json()).toMatchObject({ retryable: true });
+  expect(runCalls).toHaveLength(0);
+
+  // Linear redelivers once authorization is restored: the same prompt runs.
+  validToken = "synthetic-token";
+  await handleAgentSession(prompted(id), {});
+  await waitFor(() => runCalls.length === 1, "retried prompted run");
 });
 
 test("an ended session's late save and late cleanup cannot touch its replacement", async () => {

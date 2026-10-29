@@ -1072,6 +1072,17 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
             }
           },
         });
+      } else {
+        // Returning 200 would make Linear drop this prompt for good: with no
+        // usable token nothing was queued or posted. A retryable status lets
+        // Linear redeliver once the token refresh/authorization succeeds.
+        console.error(
+          `[linear] No usable token for org ${organizationId}; retrying prompt for ${agentSession.id}`,
+        );
+        return Response.json(
+          { error: "Not authorized", retryable: true },
+          { status: 503 },
+        );
       }
     } else {
       console.log(`[linear] No active session found for ${agentSession.id}`);
