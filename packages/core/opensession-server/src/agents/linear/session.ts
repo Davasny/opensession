@@ -32,6 +32,7 @@ import {
 import { createAgentActivity } from "./api";
 import type { LinearTokens } from "./oauth";
 import { getValidToken } from "./oauth";
+import type { LinearStartMode } from "./start-mode";
 import {
   isAgentSessionFileKey,
   isLinearSessionTerminal,
@@ -70,6 +71,15 @@ const PHASES = [
  */
 export type SessionPhase = (typeof PHASES)[number];
 
+/** Durable claim for the one automatic turn a plan/implement assignment starts. */
+export interface LinearAssignmentStart {
+  mode: Exclude<LinearStartMode, "ask">;
+  status: "pending" | "dispatched" | "completed" | "failed" | "cancelled";
+  claimedAt: string;
+  settledAt?: string;
+  noticeAt?: string;
+}
+
 /**
  * The fields kept in `<branch>.json`. Saves take a Partial of this and
  * startup hydration spreads the whole record into the live session, so every
@@ -101,6 +111,10 @@ export interface StoredSession {
   greetingPostedAt?: string;
   /** Stable timestamp for the transcript greeting. */
   greetingAt?: string;
+  /** Locked for this assignment so a config change cannot re-route it. */
+  startMode?: LinearStartMode;
+  /** One automatic assignment turn, claimed before the runner starts. */
+  assignmentStart?: LinearAssignmentStart;
   updatedAt?: string;
 }
 
@@ -119,6 +133,8 @@ export interface ActiveSession extends StoredSession {
   /** Set once this exact session was ended/dismissed. A late run completion
    *  must not revive its file or touch a replacement. */
   ended?: boolean;
+  /** A stop signal arrived before the runner had an abort controller. */
+  stopRequested?: boolean;
   /** Set by endLinearSession when `worktreeDir` was still empty because the
    *  created flow was mid-setup. That flow removes the checkout once it knows
    *  the real path; end cannot remove a path it never saw. */
@@ -310,6 +326,8 @@ function storedFromFile(
       typeof raw.ownsWorktree === "boolean" ? raw.ownsWorktree : undefined,
     greetingPostedAt: raw.greetingPostedAt ?? undefined,
     greetingAt: raw.greetingAt ?? undefined,
+    startMode: raw.startMode ?? undefined,
+    assignmentStart: raw.assignmentStart ?? undefined,
     updatedAt: raw.updatedAt,
   };
 }
@@ -533,6 +551,8 @@ export async function persistActiveSession(
       ownsWorktree: session.ownsWorktree,
       greetingPostedAt: session.greetingPostedAt,
       greetingAt: session.greetingAt,
+      startMode: session.startMode,
+      assignmentStart: session.assignmentStart,
     },
     live,
   );

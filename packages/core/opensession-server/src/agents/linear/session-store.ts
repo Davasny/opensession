@@ -6,6 +6,7 @@
  * directory is resolved per call so a test or dev instance that repoints HOME /
  * OPENSESSION_STATE_DIR sees its own store.
  */
+import { rm } from "node:fs/promises";
 import { agentSessionSourceDirectory } from "../../server/agent-session-source";
 import { writeJsonAtomicAsync } from "../../server/shared/atomic-write";
 
@@ -20,6 +21,7 @@ const AGENT_SESSION_KEY_PREFIX = "agent~";
  *  (which reads files directly in the store directory) never mistakes one for
  *  a session. */
 const TERMINAL_DIR = ".ended";
+const STOPPED_DIR = ".stopped";
 
 export function linearSessionDirectory(): string {
   return agentSessionSourceDirectory("linear");
@@ -112,6 +114,45 @@ export async function isLinearSessionTerminal(
 ): Promise<boolean> {
   const path = terminalPath(linearSessionId);
   return !!path && (await Bun.file(path).exists());
+}
+
+function stoppedPath(linearSessionId: string): string | null {
+  let key: string;
+  try {
+    key = linearSessionFileKey(linearSessionId);
+  } catch {
+    return null;
+  }
+  return `${linearSessionDirectory()}/${STOPPED_DIR}/${key}`;
+}
+
+/** A stop that arrived before the assignment claimed its one turn. This is
+ *  durable even when no session file exists yet (stop during initial API work). */
+export async function markLinearAssignmentStopped(
+  linearSessionId: string,
+  stoppedAt = new Date().toISOString(),
+): Promise<void> {
+  const path = stoppedPath(linearSessionId);
+  if (!path)
+    throw new Error(
+      `Cannot record assignment stop for invalid Linear session id ${JSON.stringify(linearSessionId)}`,
+    );
+  await writeJsonAtomicAsync(path, { linearSessionId, stoppedAt });
+}
+
+export async function isLinearAssignmentStopped(
+  linearSessionId: string,
+): Promise<boolean> {
+  const path = stoppedPath(linearSessionId);
+  return !!path && (await Bun.file(path).exists());
+}
+
+/** An explicit human prompt clears the stop and may continue the session. */
+export async function clearLinearAssignmentStopped(
+  linearSessionId: string,
+): Promise<void> {
+  const path = stoppedPath(linearSessionId);
+  if (path) await rm(path, { force: true });
 }
 
 // One write chain per file, shared by the Linear loop and the gateway's

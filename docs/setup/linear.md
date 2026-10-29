@@ -37,6 +37,7 @@ to load the agent.
 | `LINEAR_CLIENT_ID`         | OAuth                        | Linear OAuth app client ID                                                               |
 | `LINEAR_CLIENT_SECRET`     | OAuth                        | authorization-code exchange and token refresh                                            |
 | `LINEAR_WEBHOOK_SECRET`    | webhooks                     | HMAC secret; unset or empty rejects every webhook with 401                               |
+| `LINEAR_START_MODE`        | optional assignment start    | `ask`, `plan`, or `implement`; overrides `integrations.linear.startMode`                 |
 | `ENABLE_LINEAR_AGENT`      | loading the agent            | optional env override; only the literal `true` enables, and any other set value disables |
 | `LINEAR_API_KEY`           | current Settings enable gate | the Linear session agent does not read it                                                |
 | `OPENSESSION_INGRESS_BASE` | optional global override     | public origin used by the default OAuth callback URL                                     |
@@ -46,6 +47,14 @@ The agent is off by default. If `ENABLE_LINEAR_AGENT` is unset, enable it with
 `integrations.linear.enabled: true` in `~/.opensession/config.json`; the env flag
 wins when present. See [boot guards](integrations-misc.md#boot-guards).
 Restart Open Session after changing the flag or credentials.
+
+Assignments default to `ask`, which keeps the existing greeting. Set
+`integrations.linear.startMode` to `plan` (recommended) to start the planning
+interview as soon as the issue is assigned, or to `implement` to explicitly
+opt into starting implementation and moving the issue to **In Progress**
+without a reply. `LINEAR_START_MODE` overrides the config value. Unknown values
+warn and fall back to `ask`. Planning still waits for approval and moves the
+issue to **Ready**; implementation remains gated by the existing workflow.
 
 The current Settings form marks `LINEAR_API_KEY` as required before its switch
 can be enabled, even though the Linear agent runtime does not use that key.
@@ -103,8 +112,9 @@ Consumed events (`packages/core/opensession-server/src/agents/linear/index.ts`
 and `handlers.ts`):
 
 - `AgentSessionEvent` / `AgentSession`:
-  - `created` prepares the default repo, persists the session, links its Open
-    Session viewer, and asks for plan, implement, or another instruction.
+  - `created` prepares the default repo, persists the session, files its
+    workspace, and starts work according to `startMode`: `ask` posts the
+    legacy greeting, while `plan` and `implement` start one automatic turn.
   - `prompted` runs planning, implementation, or a free-form coding turn.
     `signal: "stop"` cancels the current engine run.
   - Planning completion posts a `# Implementation Plan` issue comment, moves

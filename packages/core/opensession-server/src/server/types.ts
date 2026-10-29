@@ -460,6 +460,14 @@ export interface LinearSessionFile {
   ownsWorktree?: boolean;
   greetingPostedAt?: string;
   greetingAt?: string;
+  startMode?: "ask" | "plan" | "implement";
+  assignmentStart?: {
+    mode: "plan" | "implement";
+    status: "pending" | "dispatched" | "completed" | "failed" | "cancelled";
+    claimedAt: string;
+    settledAt?: string;
+    noticeAt?: string;
+  };
   /** Pi engine session id (see SlackSessionFile.piSessionId). */
   piSessionId?: string | null;
 }

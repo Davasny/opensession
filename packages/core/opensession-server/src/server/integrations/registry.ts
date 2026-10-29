@@ -124,6 +124,11 @@ export const INTEGRATIONS: IntegrationSpec[] = [
       },
       { name: "LINEAR_CLIENT_ID", description: "OAuth app client id" },
       { name: "LINEAR_CLIENT_SECRET", description: "OAuth app client secret" },
+      {
+        name: "LINEAR_START_MODE",
+        description:
+          'assignment start mode: "ask" (legacy), "plan" (recommended), or "implement"',
+      },
     ],
     links: [
       {

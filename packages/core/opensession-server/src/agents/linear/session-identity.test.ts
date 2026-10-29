@@ -23,6 +23,8 @@ const activityCalls: Array<{ sessionId: string; content: any }> = [];
 const linkCalls: Array<{ sessionId: string; urls: string[] }> = [];
 const workspaceCalls: Array<Record<string, unknown>> = [];
 const transcriptCalls: Array<{ sessionId: string; entry: any }> = [];
+const movedStatuses: Array<{ issueId: string; status: string }> = [];
+let runResult = "";
 let createGate: Promise<void> | null = null;
 let runGate: Promise<void> | null = null;
 let apiGate: Promise<void> | null = null;
@@ -34,6 +36,10 @@ let transcriptFailures = 0;
 let transcriptUnavailable = false;
 let elicitationGate: Promise<void> | null = null;
 let elicitationStarted: (() => void) | null = null;
+let moveGate: Promise<void> | null = null;
+let moveStarted: (() => void) | null = null;
+let thoughtGate: Promise<void> | null = null;
+let thoughtStarted: (() => void) | null = null;
 
 mock.module("../../server/worktree", () => ({
   createWorktree: async (branch: string) => {
@@ -72,6 +78,16 @@ mock.module("./api", () => ({
       elicitationStarted = null;
       if (gate) await gate;
     }
+    if (
+      content.type === "thought" &&
+      String(content.body).includes("Starting planning")
+    ) {
+      const gate = thoughtGate;
+      thoughtGate = null;
+      thoughtStarted?.();
+      thoughtStarted = null;
+      if (gate) await gate;
+    }
   },
   updateAgentSession: async (
     token: string,
@@ -102,7 +118,20 @@ mock.module("./api", () => ({
     };
   },
   issueHasPlan: async () => issueHasPlanResult,
-  moveToStatus: async () => true,
+  moveToStatus: async (
+    token: string,
+    issueId: string,
+    teamId: string,
+    status: string,
+  ) => {
+    movedStatuses.push({ issueId, status });
+    const gate = moveGate;
+    moveGate = null;
+    moveStarted?.();
+    moveStarted = null;
+    if (gate) await gate;
+    return true;
+  },
   postComment: async () => true,
   fetchLinearUser: async () => null,
 }));
@@ -122,7 +151,7 @@ mock.module("../../server/agent-runner", () => ({
     yield {
       type: "done",
       sessionId: `engine-${String(opts.cwd)}`,
-      result: "",
+      result: runResult,
     };
   },
 }));
@@ -266,6 +295,15 @@ async function waitFor(check: () => boolean, label: string) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
+async function waitForAssignmentSettled(id: string) {
+  await waitFor(() => {
+    const status = activeSessions.get(id)?.assignmentStart?.status;
+    return (
+      status === "completed" || status === "failed" || status === "cancelled"
+    );
+  }, "assignment settlement");
+}
+
 beforeEach(() => {
   activeSessions.clear();
   processedSessions.clear();
@@ -278,6 +316,9 @@ beforeEach(() => {
   linkCalls.length = 0;
   workspaceCalls.length = 0;
   transcriptCalls.length = 0;
+  movedStatuses.length = 0;
+  runResult = "";
+  delete process.env.LINEAR_START_MODE;
   createGate = null;
   runGate = null;
   apiGate = null;
@@ -289,6 +330,10 @@ beforeEach(() => {
   transcriptUnavailable = false;
   elicitationGate = null;
   elicitationStarted = null;
+  moveGate = null;
+  moveStarted = null;
+  thoughtGate = null;
+  thoughtStarted = null;
   mkdirSync(SESSION_DIR, { recursive: true });
 });
 
@@ -296,6 +341,7 @@ afterEach(() => {
   activeSessions.clear();
   processedSessions.clear();
   (globalThis as any).__linearEndedAgentSessions?.clear();
+  delete process.env.LINEAR_START_MODE;
 });
 
 test("reassigning the same issue/title starts a new identity, file and worktree", async () => {
@@ -604,6 +650,49 @@ test("an end during deferred initial API setup leaves no worktree behind", async
   ).toEqual([]);
 });
 
+test("stop during deferred initial API setup prevents later autostart", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "12121212-1212-4212-8212-121212121212";
+  let release!: () => void;
+  let reached!: () => void;
+  apiGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const apiReached = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  apiGateStarted = reached;
+
+  const pendingCreate = handleAgentSession(webhook("created", id), {});
+  await apiReached;
+  await handleAgentSession(
+    webhook("prompted", id, {
+      agentActivity: { signal: "stop", content: { type: "prompt", body: "" } },
+    }),
+    {},
+  );
+  release();
+  const response = await pendingCreate;
+  await response.json();
+  await awaitReady(id);
+  await Bun.sleep(10);
+
+  expect(runCalls).toEqual([]);
+  expect(activeSessions.get(id)?.assignmentStart).toBeUndefined();
+  expect(
+    await import("./session-store").then((m) =>
+      m.isLinearAssignmentStopped(id),
+    ),
+  ).toBe(true);
+
+  activeSessions.clear();
+  processedSessions.clear();
+  const replay = await handleAgentSession(webhook("created", id), {});
+  await replay.json();
+  await Bun.sleep(10);
+  expect(runCalls).toEqual([]);
+});
+
 test("a duplicate created finishes a failed workspace/transcript setup without another run", async () => {
   const id = "01010101-0101-4101-8101-010101010101";
   const key = linearSessionFileKey(id);
@@ -695,7 +784,429 @@ test("parallel setup retries share one greeting activity", async () => {
   expect(createdBranches).toEqual([BRANCH]);
 });
 
+test("ask mode keeps the greeting and starts no assignment run", async () => {
+  const id = "04040404-0404-4404-8404-040404040404";
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+
+  expect(runCalls).toEqual([]);
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toHaveLength(1);
+  expect(
+    transcriptCalls.filter((call) => call.entry.type === "assistant"),
+  ).toHaveLength(1);
+  expect(activeSessions.get(id)?.startMode).toBe("ask");
+  expect(activeSessions.get(id)?.assignmentStart).toBeUndefined();
+});
+
+test("plan mode starts planning, skips the greeting and keeps the Ready gate", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  runResult = "Plan body PLANNING_COMPLETE";
+  const id = "05050505-0505-4505-8505-050505050505";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await waitForAssignmentSettled(id);
+
+  expect(runCalls).toHaveLength(1);
+  expect(String(runCalls[0]?.prompt)).toContain("PLANNING");
+  expect(runCalls[0]).toMatchObject({
+    promptEntryText: `Start planning for ${ISSUE.identifier}`,
+  });
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toHaveLength(1);
+  expect(
+    transcriptCalls.filter((call) => call.entry.type === "assistant"),
+  ).toEqual([]);
+  expect(movedStatuses).toContainEqual({
+    issueId: ISSUE.id,
+    status: "Ready",
+  });
+  expect(activeSessions.get(id)?.phase).toBe("awaiting_implementation");
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    mode: "plan",
+    status: "completed",
+  });
+});
+
+test("implement mode is explicit opt-in, moves In Progress and skips the greeting", async () => {
+  process.env.LINEAR_START_MODE = "implement";
+  const id = "06060606-0606-4606-8606-060606060606";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await waitForAssignmentSettled(id);
+
+  expect(runCalls).toHaveLength(1);
+  expect(String(runCalls[0]?.prompt)).toContain("IMPLEMENTATION");
+  expect(runCalls[0]).toMatchObject({
+    promptEntryText: `Start implementation for ${ISSUE.identifier}`,
+  });
+  expect(movedStatuses).toContainEqual({
+    issueId: ISSUE.id,
+    status: "In Progress",
+  });
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toEqual([]);
+  expect(
+    transcriptCalls.filter((call) => call.entry.type === "assistant"),
+  ).toEqual([]);
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    mode: "implement",
+    status: "completed",
+  });
+});
+
+test("a completed assignment is not launched again after restart", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "07070707-0707-4707-8707-070707070707";
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await waitForAssignmentSettled(id);
+  expect(runCalls).toHaveLength(1);
+
+  activeSessions.clear();
+  processedSessions.clear();
+  const replay = await handleAgentSession(webhook("created", id), {});
+  await replay.json();
+  await Bun.sleep(10);
+
+  expect(runCalls).toHaveLength(1);
+  expect(readStored(linearSessionFileKey(id)).assignmentStart).toMatchObject({
+    mode: "plan",
+    status: "completed",
+  });
+});
+
+test("stop during setup prevents the assignment run", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "08080808-0808-4808-8808-080808080808";
+  let release!: () => void;
+  createGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await handleAgentSession(webhook("created", id), {});
+  await handleAgentSession(
+    webhook("prompted", id, {
+      agentActivity: { signal: "stop", content: { type: "prompt", body: "" } },
+    }),
+    {},
+  );
+  release();
+  await awaitReady(id);
+
+  expect(runCalls).toEqual([]);
+  expect(activeSessions.get(id)?.assignmentStart).toBeUndefined();
+});
+
+test("concurrent duplicate created during an assignment run starts only one turn", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a";
+  let release!: () => void;
+  runGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await handleAgentSession(webhook("created", id), {});
+  await waitFor(() => runCalls.length === 1, "assignment run");
+  const duplicate = await handleAgentSession(webhook("created", id), {});
+  expect(await duplicate.json()).toMatchObject({ skipped: true });
+  release();
+  await awaitReady(id);
+  await waitForAssignmentSettled(id);
+
+  expect(runCalls).toHaveLength(1);
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    mode: "plan",
+    status: "completed",
+  });
+});
+
+test("a setup failure retry starts the assignment once after setup succeeds", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  workspaceFailures = 1;
+  const id = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  expect(runCalls).toEqual([]);
+
+  processedSessions.delete(id);
+  const retried = await handleAgentSession(webhook("created", id), {});
+  await retried.json();
+  await awaitReady(id);
+  await waitForAssignmentSettled(id);
+
+  expect(runCalls).toHaveLength(1);
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    mode: "plan",
+    status: "completed",
+  });
+});
+
+test("a completed plan waits for approval before implementation", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  runResult = "Plan body PLANNING_COMPLETE";
+  const id = "0d0d0d0d-0d0d-4d0d-8d0d-0d0d0d0d0d0d";
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await waitForAssignmentSettled(id);
+  expect(activeSessions.get(id)?.phase).toBe("awaiting_implementation");
+  expect(runCalls).toHaveLength(1);
+
+  runResult = "";
+  await handleAgentSession(prompted(id, "go ahead"), {});
+  await waitFor(() => runCalls.length === 2, "approval implementation run");
+  expect(movedStatuses).toContainEqual({
+    issueId: ISSUE.id,
+    status: "In Progress",
+  });
+});
+
+test("a replay ACKs after dispatch without waiting for the model turn", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "11111111-2222-4333-8444-555555555555";
+  const key = linearSessionFileKey(id);
+  writeStored(key, {
+    branch: BRANCH,
+    linearSessionId: id,
+    issueId: ISSUE.id,
+    issueIdentifier: ISSUE.identifier,
+    issueTitle: ISSUE.title,
+    issueUrl: ISSUE.url,
+    worktreeDir: `${worktreeRoot}/${BRANCH}`,
+    phase: "awaiting_direction",
+    startMode: "plan",
+    workspaceId: "ws-linear-test",
+    greetingPostedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  let release!: () => void;
+  runGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const replay = await handleAgentSession(webhook("created", id), {});
+  expect(await replay.json()).toMatchObject({ reused: true });
+  expect(runCalls).toHaveLength(1);
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    mode: "plan",
+    status: "dispatched",
+  });
+
+  release();
+  await waitForAssignmentSettled(id);
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    status: "completed",
+  });
+});
+
+test("an uncertain assignment claim reports needs-retry without running", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c";
+  const key = linearSessionFileKey(id);
+  writeStored(key, {
+    branch: BRANCH,
+    linearSessionId: id,
+    issueId: ISSUE.id,
+    issueIdentifier: ISSUE.identifier,
+    issueTitle: ISSUE.title,
+    issueUrl: ISSUE.url,
+    worktreeDir: `${worktreeRoot}/${BRANCH}`,
+    phase: "planning",
+    startMode: "plan",
+    workspaceId: "ws-linear-test",
+    greetingPostedAt: new Date().toISOString(),
+    assignmentStart: {
+      mode: "plan",
+      status: "dispatched",
+      claimedAt: new Date().toISOString(),
+    },
+    updatedAt: new Date().toISOString(),
+  });
+
+  const response = await handleAgentSession(webhook("created", id), {});
+  expect(await response.json()).toMatchObject({ reused: true });
+  await Bun.sleep(10);
+
+  expect(runCalls).toEqual([]);
+  expect(
+    activityCalls.filter(
+      (call) =>
+        call.content.type === "response" &&
+        String(call.content.body).includes("interrupted"),
+    ),
+  ).toHaveLength(1);
+  expect(readStored(key).assignmentStart).toMatchObject({
+    status: "dispatched",
+    noticeAt: expect.any(String),
+  });
+});
+
+test("assignment status and thought side effects wait for the claimed guard", async () => {
+  process.env.LINEAR_START_MODE = "implement";
+  const id = "0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e";
+  let release!: () => void;
+  let reached!: () => void;
+  moveGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const moveReached = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  moveStarted = reached;
+
+  await handleAgentSession(webhook("created", id), {});
+  await moveReached;
+  const session = activeSessions.get(id)!;
+  session.claudeSessionId = "engine-existing";
+  issueStatus = "In Progress";
+  issueHasPlanResult = true;
+
+  const duplicate = await handleAgentSession(webhook("created", id), {});
+  expect(await duplicate.json()).toMatchObject({ skipped: true });
+  const prompt = handleAgentSession(prompted(id), {});
+  const issueUpdate = handleIssueUpdate(
+    {
+      action: "update",
+      type: "Issue",
+      organizationId: "org-1",
+      data: {
+        id: ISSUE.id,
+        identifier: ISSUE.identifier,
+        title: ISSUE.title,
+        description: ISSUE.description,
+        url: ISSUE.url,
+        stateId: "in-progress",
+      },
+      updatedFrom: { stateId: "todo" },
+    },
+    {},
+  );
+  await issueUpdate;
+  expect(runCalls).toEqual([]);
+  expect(
+    movedStatuses.filter((move) => move.status === "In Progress"),
+  ).toHaveLength(1);
+
+  release();
+  await awaitReady(id);
+  await prompt;
+  await waitForAssignmentSettled(id);
+  expect(runCalls).toHaveLength(1);
+  expect(
+    movedStatuses.filter((move) => move.status === "In Progress"),
+  ).toHaveLength(1);
+});
+
+test("ending during a pending claim never starts the runner or revives the file", async () => {
+  process.env.LINEAR_START_MODE = "implement";
+  const id = "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f";
+  const key = linearSessionFileKey(id);
+  let release!: () => void;
+  let reached!: () => void;
+  moveGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const moveReached = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  moveStarted = reached;
+
+  await handleAgentSession(webhook("created", id), {});
+  await moveReached;
+  await handleAgentSession(webhook("ended", id), {});
+  release();
+  await Bun.sleep(20);
+
+  expect(runCalls).toEqual([]);
+  expect(existsSync(storedPath(key))).toBe(false);
+});
+
+test("stop during a pending claim cancels the assignment without a runner", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "10101010-1010-4010-8010-101010101010";
+  const key = linearSessionFileKey(id);
+  let release!: () => void;
+  let reached!: () => void;
+  thoughtGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const thoughtReached = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  thoughtStarted = reached;
+
+  await handleAgentSession(webhook("created", id), {});
+  await thoughtReached;
+  await handleAgentSession(
+    webhook("prompted", id, {
+      agentActivity: { signal: "stop", content: { type: "prompt", body: "" } },
+    }),
+    {},
+  );
+  release();
+  await Bun.sleep(20);
+
+  expect(runCalls).toEqual([]);
+  expect(readStored(key).assignmentStart).toMatchObject({
+    status: "cancelled",
+  });
+});
+
+test("stop after the runner returns cancels instead of completing the assignment", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  const id = "13131313-1313-4313-8313-131313131313";
+  let release!: () => void;
+  runGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await handleAgentSession(webhook("created", id), {});
+  await waitFor(() => runCalls.length === 1, "assignment runner");
+  await handleAgentSession(
+    webhook("prompted", id, {
+      agentActivity: { signal: "stop", content: { type: "prompt", body: "" } },
+    }),
+    {},
+  );
+  release();
+  await waitForAssignmentSettled(id);
+
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    mode: "plan",
+    status: "cancelled",
+  });
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toEqual([]);
+});
+
+test("an assignment error is not silently retried", async () => {
+  process.env.LINEAR_START_MODE = "plan";
+  runResult = "Error: synthetic failure";
+  const id = "09090909-0909-4909-8909-090909090909";
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await waitForAssignmentSettled(id);
+
+  expect(runCalls).toHaveLength(1);
+  expect(activeSessions.get(id)?.assignmentStart).toMatchObject({
+    mode: "plan",
+    status: "failed",
+  });
+  processedSessions.delete(id);
+  await handleAgentSession(webhook("created", id), {});
+  await Bun.sleep(10);
+  expect(runCalls).toHaveLength(1);
+});
+
 test("ending during a slow worktree create removes the checkout and skips the greeting", async () => {
+  process.env.LINEAR_START_MODE = "plan";
   const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   let release!: () => void;
   createGate = new Promise<void>((resolve) => {
@@ -721,6 +1232,7 @@ test("ending during a slow worktree create removes the checkout and skips the gr
     activityCalls.filter((call) => call.content.type === "elicitation"),
   ).toEqual([]);
   expect(existsSync(storedPath(linearSessionFileKey(id)))).toBe(false);
+  expect(runCalls).toEqual([]);
 });
 
 test("a delayed duplicate created does not replace an in-flight live session", async () => {
