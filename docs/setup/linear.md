@@ -128,11 +128,19 @@ For a non-shared default repo, worktrees live at
 `<paths.worktreesDir>/<wtPrefix>-<branch>`. `paths.worktreesDir` defaults to
 `~/.opensession/worktrees` and can be overridden by
 `OPENSESSION_WORKTREES_DIR`. The branch is based on the first two words of the
-issue title plus its issue identifier.
+issue title plus its issue identifier. Reassigning an issue regenerates that
+branch; when the previous branch still exists it gets a `-2`, `-3`, … suffix so
+the new agent session starts in its own worktree.
 
-Session metadata is stored under `~/.linear-sessions/`. On startup, Open Session
-restores files updated within the last seven days when they have a Linear
-session ID and either an engine session ID or the `awaiting_direction` phase.
-Older files remain on disk but are not restored. An interrupted background turn
-is not restarted automatically; a later prompt can continue the restored
-session.
+Session metadata is stored under `~/.linear-sessions/`. Current files are named
+after the Linear agent-session id, with the generated branch recorded inside the
+file; files written before that change remain named after the branch. This keeps
+two agent sessions on the same issue (same generated branch) separate: their
+Open Session ids, transcripts, worktrees and external links are distinct. Ending
+a session records a terminal marker under `~/.linear-sessions/.ended/` before
+removing its file, so a webhook replay after a restart cannot start a new run
+for the ended id. On startup, Open Session restores files updated within the
+last seven days when they have a Linear session ID and either an engine session
+ID or the `awaiting_direction` phase. Older files remain on disk but are not
+restored. An interrupted background turn is not restarted automatically; a
+later prompt can continue the restored session.

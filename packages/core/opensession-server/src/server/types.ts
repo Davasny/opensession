@@ -342,6 +342,9 @@ export interface UnifiedSession {
   slackOrigin?: SlackSessionOrigin;
   // Source-specific
   linearIssue?: { identifier: string; title: string; url?: string };
+  /** The Linear agent-session id that owns this row. The row id is derived
+   *  from it for current sessions and from the branch for legacy files. */
+  linearSessionId?: string;
   slackThread?: { channel: string; threadTs: string };
   /** The MCP allowlist this session was created with, copied from its file.
    *  Read by `sessionMcpScopeSource` (session-run-inputs.ts) as the "session"

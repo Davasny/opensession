@@ -25,22 +25,27 @@
  * paths read that slot (slack handlers pass session.claudeSessionId). The
  * slack loop's in-memory session is updated too so a thread reply arriving
  * before its next disk load doesn't resurrect the stale id.
+ *
+ * The patch itself is async and runs under the same per-file write chain as the
+ * owning loop's save/delete (session-store.ts), so a session save cannot
+ * overwrite an engine id this sync just wrote, and a cleanup cannot be undone
+ * by a late patch.
  */
 
-import { existsSync, readFileSync } from "fs";
-import { writeJsonAtomic } from "./shared/atomic-write";
-import { statePath } from "./paths";
+import { readFile } from "node:fs/promises";
+import { writeJsonAtomicAsync } from "./shared/atomic-write";
 import { publishSessionChange } from "./session-cache";
 import {
   activeSessions as slackActiveSessions,
   getSessionKey as slackSessionKey,
   SESSION_DIR as SLACK_SESSION_DIR,
 } from "../agents/slack/state";
+import {
+  isLinearSessionTerminal,
+  linearSessionDirectory,
+  withSessionStoreWrite,
+} from "../agents/linear/session-store";
 import type { UnifiedSession } from "./types";
-
-// statePath: isolated under OPENSESSION_STATE_DIR for dev/demo instances,
-// $HOME when unset (production, unchanged) — see sessions.ts's store block.
-const LINEAR_SESSION_DIR = statePath(".linear-sessions");
 
 export interface EngineSessionPatch {
   engineSessionId?: string;
@@ -51,44 +56,70 @@ export interface EngineSessionPatch {
   model?: string;
 }
 
-function patchFile(
+async function patchFile(
   path: string,
   patch: EngineSessionPatch,
   activityField: string,
-): boolean {
-  if (!existsSync(path)) return false;
-  try {
-    const data = JSON.parse(readFileSync(path, "utf-8"));
-    let changed = false;
-    if (
-      patch.engineSessionId &&
-      data.claudeSessionId !== patch.engineSessionId
-    ) {
-      data.claudeSessionId = patch.engineSessionId;
-      changed = true;
+  expectedLinearSessionId?: string,
+): Promise<boolean> {
+  return withSessionStoreWrite(path, async () => {
+    let text: string;
+    try {
+      text = await readFile(path, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+      console.error(`[agent-session-sync] failed to read ${path}:`, error);
+      return false;
     }
-    if (patch.piSessionId) {
-      if (data.piSessionId !== patch.piSessionId) {
-        data.piSessionId = patch.piSessionId;
+    try {
+      const data = JSON.parse(text);
+      if (
+        expectedLinearSessionId &&
+        data.linearSessionId &&
+        data.linearSessionId !== expectedLinearSessionId
+      ) {
+        console.warn(
+          `[agent-session-sync] refusing to patch ${path}: owned by ${data.linearSessionId}, not ${expectedLinearSessionId}`,
+        );
+        return false;
+      }
+      if (
+        expectedLinearSessionId &&
+        (await isLinearSessionTerminal(expectedLinearSessionId))
+      ) {
+        return false;
+      }
+      let changed = false;
+      if (
+        patch.engineSessionId &&
+        data.claudeSessionId !== patch.engineSessionId
+      ) {
+        data.claudeSessionId = patch.engineSessionId;
         changed = true;
       }
-      if (data.claudeSessionId !== patch.piSessionId) {
-        data.claudeSessionId = patch.piSessionId;
+      if (patch.piSessionId) {
+        if (data.piSessionId !== patch.piSessionId) {
+          data.piSessionId = patch.piSessionId;
+          changed = true;
+        }
+        if (data.claudeSessionId !== patch.piSessionId) {
+          data.claudeSessionId = patch.piSessionId;
+          changed = true;
+        }
+      }
+      if (patch.model && data.model !== patch.model) {
+        data.model = patch.model;
         changed = true;
       }
+      if (!changed) return false;
+      data[activityField] = new Date().toISOString();
+      await writeJsonAtomicAsync(path, data);
+      return true;
+    } catch (e) {
+      console.error(`[agent-session-sync] failed to patch ${path}:`, e);
+      return false;
     }
-    if (patch.model && data.model !== patch.model) {
-      data.model = patch.model;
-      changed = true;
-    }
-    if (!changed) return false;
-    data[activityField] = new Date().toISOString();
-    writeJsonAtomic(path, data);
-    return true;
-  } catch (e) {
-    console.error(`[agent-session-sync] failed to patch ${path}:`, e);
-    return false;
-  }
+  });
 }
 
 /**
@@ -96,10 +127,13 @@ function patchFile(
  * session. No-op for other sources and for empty patches. Returns true when
  * anything was actually written.
  */
-export function syncAgentSessionEngine(
-  session: Pick<UnifiedSession, "id" | "source" | "branch" | "slackThread">,
+export async function syncAgentSessionEngine(
+  session: Pick<
+    UnifiedSession,
+    "id" | "source" | "branch" | "slackThread" | "linearSessionId"
+  >,
   patch: EngineSessionPatch,
-): boolean {
+): Promise<boolean> {
   if (!patch.engineSessionId && !patch.piSessionId && !patch.model)
     return false;
 
@@ -116,13 +150,12 @@ export function syncAgentSessionEngine(
     if (session.branch)
       files.add(`${SLACK_SESSION_DIR}/${session.branch}.json`);
     let wrote = false;
-    for (const f of files) wrote = patchFile(f, patch, "lastActivity") || wrote;
-    // The list index and the catalog projection learn source files only from
-    // targeted publishes; without one a cold rebuild would still show the
-    // dead engine session this write just replaced.
-    if (wrote) void publishSessionChange(session.id);
+    for (const f of files)
+      wrote = (await patchFile(f, patch, "lastActivity")) || wrote;
 
     // The loop's live copy, so an in-flight thread doesn't fork the old id.
+    // Updated before the publish wait, as before, so the loop never observes
+    // the stale engine id while the index refresh runs.
     if (session.slackThread?.channel) {
       const live = slackActiveSessions.get(
         slackSessionKey(
@@ -138,17 +171,29 @@ export function syncAgentSessionEngine(
         if (patch.model) live.model = patch.model;
       }
     }
+
+    // The list index and the catalog projection learn source files only from
+    // targeted publishes; without one a cold rebuild would still show the
+    // dead engine session this write just replaced.
+    if (wrote) await publishSessionChange(session.id);
     return wrote;
   }
 
   if (session.source === "linear") {
-    if (!session.branch) return false;
-    const wrote = patchFile(
-      `${LINEAR_SESSION_DIR}/${session.branch}.json`,
+    // The unified id is `linear-<store file key>`: the Linear agent-session id
+    // for current files, the branch for legacy ones. Patching by branch would
+    // write into the previous agent session's file when an issue is
+    // reassigned, because the generated branch is stable across assignments.
+    if (!session.id.startsWith("linear-")) return false;
+    const key = session.id.slice("linear-".length);
+    if (!key || key.includes("/") || key.includes("\\")) return false;
+    const wrote = await patchFile(
+      `${linearSessionDirectory()}/${key}.json`,
       patch,
       "updatedAt",
+      session.linearSessionId,
     );
-    if (wrote) void publishSessionChange(session.id);
+    if (wrote) await publishSessionChange(session.id);
     return wrote;
   }
 

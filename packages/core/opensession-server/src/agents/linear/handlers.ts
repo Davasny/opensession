@@ -3,7 +3,6 @@
  */
 import { linearEmailToGithubUsername } from "../../server/shared/user-mappings";
 import { personaName } from "../../server/config";
-import { worktreePathFor } from "../../server/worktree";
 import {
   createAgentActivity,
   fetchLinearUser,
@@ -28,17 +27,22 @@ import {
   processedSessions,
   buildParticipantSections,
   createPrWithAttribution,
-  createWorktree,
-  deleteSessionFile,
-  deleteWorktree,
+  createSessionWorktree,
+  deleteWorktreeIfUnused,
+  endLinearSession,
+  findStoredSessionForAgentSession,
   formatConversationHistory,
   generateBranchName,
+  latestSessionForIssue,
+  linearSessionFileKey,
+  linearUnifiedSessionId,
   loadSessionInfo,
   opensessionSessionUrl,
+  persistActiveSession,
   runAgentHeadless,
-  saveSessionInfo,
   type ActiveSession,
 } from "./session";
+import { isLinearSessionTerminal } from "./session-store";
 
 // --- Webhook types ---
 
@@ -93,6 +97,50 @@ const inFlightPrompts: Set<string> = ((
   globalThis as any
 ).__linearInFlightPrompts ??= new Set<string>());
 
+// Agent-session ids already ended in this process. A delayed `created`
+// delivery for one of them must not mint a worktree or record after cleanup.
+const endedAgentSessions: Map<string, number> = ((
+  globalThis as any
+).__linearEndedAgentSessions ??= new Map<string, number>());
+const ENDED_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+function isEndedAgentSession(id: string): boolean {
+  const at = endedAgentSessions.get(id);
+  if (at === undefined) return false;
+  if (Date.now() - at > ENDED_SESSION_TTL_MS) {
+    endedAgentSessions.delete(id);
+    return false;
+  }
+  return true;
+}
+
+// Per-issue serialization for worktree creation. Branch names are generated
+// from title + identifier, so two concurrent `created` deliveries for one
+// issue would otherwise resolve the same branch.
+const issueCreationChains: Map<string, Promise<unknown>> = ((
+  globalThis as any
+).__linearIssueCreationChains ??= new Map<string, Promise<unknown>>());
+
+async function withIssueCreationLock<T>(
+  issueId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = issueCreationChains.get(issueId) ?? Promise.resolve();
+  const next = previous.catch(() => {}).then(fn);
+  const queued = next.then(
+    () => {},
+    () => {},
+  );
+  issueCreationChains.set(issueId, queued);
+  try {
+    return await next;
+  } finally {
+    if (issueCreationChains.get(issueId) === queued) {
+      issueCreationChains.delete(issueId);
+    }
+  }
+}
+
 // --- Issue status change → auto-implement ---
 
 export async function handleIssueUpdate(
@@ -123,25 +171,25 @@ export async function handleIssueUpdate(
     return Response.json({ ok: true });
   }
 
-  // Check for existing session
-  let existingSession: ActiveSession | undefined;
-  for (const [, session] of activeSessions) {
-    if (
-      session.issueIdentifier === issue.identifier ||
-      session.issueId === issue.id
-    ) {
-      existingSession = session;
-      break;
-    }
-  }
+  // Check for existing session. When a reassigned issue has more than one live
+  // record (old and new agent session), drive the newest one; terminal records
+  // are never resumed.
+  let existingSession = latestSessionForIssue(issue);
 
   if (!existingSession) {
     const branch = generateBranchName(details.title, issue.identifier);
     const diskSession = await loadSessionInfo(branch);
-    if (diskSession?.claudeSessionId) {
+    // A legacy branch-named file is adopted only when it records a Linear
+    // agent-session id and has no terminal marker. A file without an id, with
+    // another id, or one already ended is not this issue's current session.
+    if (
+      diskSession?.linearSessionId &&
+      diskSession.claudeSessionId &&
+      !(await isLinearSessionTerminal(diskSession.linearSessionId))
+    ) {
       existingSession = {
         ...diskSession,
-        branch,
+        sessionKey: branch,
         accessToken,
         issueTitle: details.title,
         issueIdentifier: issue.identifier,
@@ -158,10 +206,16 @@ export async function handleIssueUpdate(
             : "working",
         issueCreator: diskSession.issueCreator || details.creator || null,
       };
-      if (diskSession.linearSessionId) {
-        activeSessions.set(diskSession.linearSessionId, existingSession);
-      }
+      activeSessions.set(diskSession.linearSessionId, existingSession);
     }
+  }
+
+  if (
+    existingSession &&
+    (await isLinearSessionTerminal(existingSession.linearSessionId))
+  ) {
+    activeSessions.delete(existingSession.linearSessionId);
+    existingSession = undefined;
   }
 
   if (!existingSession) {
@@ -219,20 +273,7 @@ export async function handleIssueUpdate(
 
         existingSession!.claudeSessionId = claudeSessionId;
 
-        await saveSessionInfo(existingSession!.branch, {
-          claudeSessionId,
-          issueIdentifier: issue.identifier,
-          issueTitle: details.title,
-          worktreeDir: existingSession!.worktreeDir,
-          linearSessionId: existingSession!.linearSessionId,
-          phase: existingSession!.phase,
-          issueId: existingSession!.issueId,
-          issueUrl: existingSession!.issueUrl,
-          participants: existingSession!.participants,
-          lastActiveUser: existingSession!.lastActiveUser,
-          issueCreator: existingSession!.issueCreator,
-          model: existingSession!.model,
-        });
+        if (!(await persistActiveSession(existingSession!))) return;
 
         if (
           result?.includes("IMPLEMENTATION_COMPLETE") &&
@@ -301,18 +342,36 @@ export async function handleAgentSession(
     const prompt = webhook.agentActivity.content.body;
     console.log(`[linear] Prompt from Linear: ${prompt.substring(0, 50)}...`);
 
-    let session = activeSessions.get(agentSession.id);
+    if (await isLinearSessionTerminal(agentSession.id)) {
+      console.log(
+        `[linear] Ignoring prompt for ended agent session ${agentSession.id}`,
+      );
+      return Response.json({ ok: true, ended: true });
+    }
 
-    // Recover from disk
+    let session = activeSessions.get(agentSession.id);
+    if (session?.ended) {
+      activeSessions.delete(agentSession.id);
+      session = undefined;
+    }
+
+    // Recover from disk. The record must belong to THIS agent session: a
+    // branch match alone is not enough, because a reassigned issue generates
+    // the same branch and the previous session's transcript must not be
+    // resumed under the new id.
     if (!session) {
-      const branch = await generateBranchName(
+      const branch = generateBranchName(
         agentSession.issue.title,
         agentSession.issue.identifier,
       );
-      const diskSession = await loadSessionInfo(branch);
-      if (diskSession) {
+      const stored = await findStoredSessionForAgentSession(
+        agentSession.id,
+        branch,
+      );
+      if (stored && !(await isLinearSessionTerminal(agentSession.id))) {
+        const unifiedId = linearUnifiedSessionId(stored.key);
         console.log(
-          `[linear] Recovered session from disk for branch: ${branch}`,
+          `[linear] Recovered session ${stored.key} for agent session ${agentSession.id}`,
         );
         // Older sessions may predate external links — idempotent by url
         getValidToken(organizationId, tokens)
@@ -321,7 +380,7 @@ export async function handleAgentSession(
               updateAgentSession(t, agentSession.id, {
                 addedExternalUrls: [
                   {
-                    url: opensessionSessionUrl(branch),
+                    url: opensessionSessionUrl(unifiedId),
                     label: `Open in ${personaName()}`,
                   },
                 ],
@@ -330,22 +389,38 @@ export async function handleAgentSession(
           })
           .catch(() => {});
         session = {
-          ...diskSession,
-          branch,
+          ...stored.session,
+          sessionKey: stored.key,
           accessToken: "",
           issueTitle: agentSession.issue.title,
           issueId: agentSession.issue.id,
           issueDescription: agentSession.issue.description || "",
           issueUrl: agentSession.issue.url,
           teamId: "",
-          linearSessionId: agentSession.id,
           planningConversation: [],
         };
         activeSessions.set(agentSession.id, session);
+      } else {
+        console.log(
+          `[linear] No owned session record for ${agentSession.id} (branch ${branch}); not reusing another agent session`,
+        );
       }
     }
 
     if (session) {
+      // A `created` webhook registers its session before the (slow) worktree
+      // setup finishes. Wait for the real path instead of running in a guess.
+      if (session.ready) await session.ready.catch(() => {});
+      if (!session.worktreeDir) {
+        const token = await getValidToken(organizationId, tokens);
+        if (token) {
+          await createAgentActivity(token, agentSession.id, {
+            type: "error",
+            body: `This session could not be prepared. Reassign the issue to retry.`,
+          }).catch(() => {});
+        }
+        return Response.json({ ok: true, unavailable: true });
+      }
       if (!session.participants) session.participants = [];
 
       const accessToken = await getValidToken(organizationId, tokens);
@@ -526,20 +601,9 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
 
             s.claudeSessionId = claudeSessionId;
 
-            await saveSessionInfo(s.branch, {
-              claudeSessionId,
-              issueIdentifier: s.issueIdentifier,
-              issueTitle: s.issueTitle,
-              worktreeDir: s.worktreeDir,
-              linearSessionId: s.linearSessionId,
-              phase: s.phase,
-              issueId: s.issueId,
-              issueUrl: s.issueUrl,
-              participants: s.participants,
-              lastActiveUser: s.lastActiveUser,
-              issueCreator: s.issueCreator,
-              model: s.model,
-            });
+            // Persist only while this exact session is still live. An ended or
+            // replaced session's late completion must not revive its record.
+            if (!(await persistActiveSession(s))) return;
 
             if (result) {
               if (
@@ -559,20 +623,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
                 s.planningConversation = [];
                 s.phase = "awaiting_implementation";
 
-                await saveSessionInfo(s.branch, {
-                  claudeSessionId: s.claudeSessionId,
-                  issueIdentifier: s.issueIdentifier,
-                  issueTitle: s.issueTitle,
-                  worktreeDir: s.worktreeDir,
-                  linearSessionId: s.linearSessionId,
-                  phase: s.phase,
-                  issueId: s.issueId,
-                  issueUrl: s.issueUrl,
-                  participants: s.participants,
-                  lastActiveUser: s.lastActiveUser,
-                  issueCreator: s.issueCreator,
-                  model: s.model,
-                });
+                if (!(await persistActiveSession(s))) return;
 
                 await createAgentActivity(accessToken, agentSession.id, {
                   type: "elicitation",
@@ -636,21 +687,30 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     return Response.json({ ok: true });
   }
 
-  // Dismissed/ended — cleanup
+  // Dismissed/ended — cleanup only what THIS agent session owns
   if (action === "dismissed" || action === "ended") {
     console.log(
       `[linear] Session ${action} for issue: ${agentSession.issue.identifier}`,
     );
-    const branch = await generateBranchName(
+    endedAgentSessions.set(agentSession.id, Date.now());
+    const branch = generateBranchName(
       agentSession.issue.title,
       agentSession.issue.identifier,
     );
     try {
-      deleteWorktree(branch);
-      await deleteSessionFile(branch);
-      activeSessions.delete(agentSession.id);
+      const ended = await endLinearSession(agentSession.id, branch);
+      if (ended.removed && ended.branch && !ended.cleanupDeferred) {
+        // Never remove a checkout another live agent session is using. New
+        // assignments resolve a unique branch, so this only guards shared or
+        // legacy sessions that still point at the same one.
+        await deleteWorktreeIfUnused(ended.branch, agentSession.id);
+      }
     } catch (e) {
-      console.log(`[linear] Could not delete worktree ${branch}: ${e}`);
+      console.error(
+        `[linear] Could not clean up session ${agentSession.id}:`,
+        e,
+      );
+      return Response.json({ error: "Cleanup failed" }, { status: 500 });
     }
     return Response.json({ ok: true });
   }
@@ -662,6 +722,35 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
 
   const sessionId = agentSession.id;
   if (processedSessions.has(sessionId)) {
+    return Response.json({ ok: true, skipped: true });
+  }
+  if (isEndedAgentSession(sessionId)) {
+    console.log(
+      `[linear] Ignoring created event for already-ended session ${sessionId}`,
+    );
+    return Response.json({ ok: true, skipped: true });
+  }
+  if (await isLinearSessionTerminal(sessionId)) {
+    endedAgentSessions.set(sessionId, Date.now());
+    console.log(
+      `[linear] Ignoring created event for durably ended session ${sessionId}`,
+    );
+    return Response.json({ ok: true, skipped: true });
+  }
+  // Never replace a live in-memory session with a disk snapshot. A delayed
+  // redelivery (after the processedSessions TTL) can land while a run is in
+  // flight; that session object owns the engine id and abort controller.
+  if (activeSessions.has(sessionId)) {
+    return Response.json({ ok: true, skipped: true });
+  }
+  // The terminal check yielded. Re-check and claim the intake synchronously:
+  // two concurrent deliveries can both pass the checks above while this await
+  // is pending, and only one may proceed to create a worktree.
+  if (
+    processedSessions.has(sessionId) ||
+    isEndedAgentSession(sessionId) ||
+    activeSessions.has(sessionId)
+  ) {
     return Response.json({ ok: true, skipped: true });
   }
   processedSessions.add(sessionId);
@@ -677,19 +766,83 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     `[linear] New session for issue: ${issue.identifier} - ${issue.title}`,
   );
 
-  await createAgentActivity(accessToken, agentSession.id, {
-    type: "thought",
-    body: MESSAGES.starting,
-  });
+  const desiredBranch = generateBranchName(issue.title, issue.identifier);
+  let sessionKey: string;
+  try {
+    sessionKey = linearSessionFileKey(sessionId);
+  } catch (e) {
+    console.error(
+      `[linear] Rejecting invalid agent session id ${sessionId}:`,
+      e,
+    );
+    return Response.json({ error: "Invalid session id" }, { status: 400 });
+  }
+
+  // Duplicate delivery after a restart: the agent-session-keyed record is the
+  // idempotency marker. Reuse its worktree and identity instead of creating a
+  // second session for the same Linear agent session.
+  const existing = await findStoredSessionForAgentSession(
+    sessionId,
+    desiredBranch,
+  );
+  if (
+    isEndedAgentSession(sessionId) ||
+    activeSessions.has(sessionId) ||
+    (await isLinearSessionTerminal(sessionId))
+  ) {
+    return Response.json({ ok: true, skipped: true });
+  }
+  if (existing?.session.worktreeDir) {
+    const reused: ActiveSession = {
+      ...existing.session,
+      sessionKey: existing.key,
+      accessToken,
+      issueDescription: issue.description || "",
+      teamId: "",
+      // Disk records have one; a legacy record that omits it still needs a
+      // freshness signal before another record can be picked as newest.
+      updatedAt: existing.session.updatedAt || new Date().toISOString(),
+      planningConversation: [],
+    };
+    activeSessions.set(sessionId, reused);
+    updateAgentSession(accessToken, sessionId, {
+      addedExternalUrls: [
+        {
+          url: opensessionSessionUrl(linearUnifiedSessionId(existing.key)),
+          label: `Open in ${personaName()}`,
+        },
+      ],
+    }).catch(() => {});
+    console.log(
+      `[linear] Reused existing session ${existing.key} for agent session ${sessionId}`,
+    );
+    return Response.json({
+      ok: true,
+      reused: true,
+      branch: reused.branch,
+    });
+  }
 
   const { teamId } = await getIssueStatus(accessToken, issue.id);
   const issueDetails = await getIssueDetails(accessToken, issue.id);
 
-  const branch = await generateBranchName(issue.title, issue.identifier);
-  const worktreeDir = worktreePathFor(branch);
+  // An end can arrive while the Linear API calls above are in flight, before
+  // this session is registered. Re-fence before any worktree is created.
+  if (
+    isEndedAgentSession(sessionId) ||
+    activeSessions.has(sessionId) ||
+    (await isLinearSessionTerminal(sessionId))
+  ) {
+    return Response.json({ ok: true, skipped: true });
+  }
+
+  let finishReady: () => void = () => {};
+  const ready = new Promise<void>((resolve) => {
+    finishReady = resolve;
+  });
 
   const session: ActiveSession = {
-    branch,
+    branch: desiredBranch,
     claudeSessionId: null,
     accessToken,
     issueTitle: issue.title,
@@ -698,46 +851,66 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     issueDescription: issue.description || "",
     issueUrl: issue.url,
     teamId,
-    worktreeDir,
-    linearSessionId: agentSession.id,
+    // Filled in from createSessionWorktree's real path before any run.
+    worktreeDir: "",
+    linearSessionId: sessionId,
+    sessionKey,
     phase: "awaiting_direction",
+    ready,
+    updatedAt: new Date().toISOString(),
     planningConversation: [],
     participants: [],
     lastActiveUser: null,
     issueCreator: issueDetails.creator,
   };
-  activeSessions.set(agentSession.id, session);
+  activeSessions.set(sessionId, session);
 
   (async () => {
     try {
-      await createWorktree(
-        branch,
-        issue.identifier,
-        issue.title,
-        issue.description || "",
-        issue.url,
-      );
-
-      await saveSessionInfo(branch, {
-        claudeSessionId: null,
-        issueIdentifier: issue.identifier,
-        issueTitle: issue.title,
-        worktreeDir,
-        linearSessionId: agentSession.id,
-        phase: session.phase,
-        issueId: issue.id,
-        issueUrl: issue.url,
-        participants: session.participants,
-        lastActiveUser: session.lastActiveUser,
-        issueCreator: session.issueCreator,
-        model: session.model,
+      await createAgentActivity(accessToken, sessionId, {
+        type: "thought",
+        body: MESSAGES.starting,
       });
 
+      const created = await withIssueCreationLock(issue.id, () =>
+        createSessionWorktree(desiredBranch),
+      );
+      session.branch = created.branch;
+      session.worktreeDir = created.worktreeDir;
+
+      // Ended while the worktree was being created: endLinearSession could not
+      // remove a path that did not exist yet. Clean it up now, before any
+      // record or greeting, so a slow create cannot leak a checkout.
+      const cleanupOwnCheckout = async () => {
+        if (created.ownsWorktree)
+          await deleteWorktreeIfUnused(created.branch, sessionId);
+      };
+      if (session.cleanupCreatedWorktree) {
+        session.cleanupCreatedWorktree = false;
+        await cleanupOwnCheckout();
+        return;
+      }
+      if (session.ended || activeSessions.get(sessionId) !== session) return;
+
+      if (!(await persistActiveSession(session))) {
+        // An end can land after the API fence but before the session is
+        // registered. The save refuses then; remove only the checkout this
+        // create just made.
+        await cleanupOwnCheckout();
+        return;
+      }
+      if (
+        session.ended ||
+        activeSessions.get(sessionId) !== session ||
+        (await isLinearSessionTerminal(sessionId))
+      )
+        return;
+
       // Link the Linear session to the web UI session viewer
-      updateAgentSession(accessToken, agentSession.id, {
+      updateAgentSession(accessToken, sessionId, {
         addedExternalUrls: [
           {
-            url: opensessionSessionUrl(branch),
+            url: opensessionSessionUrl(linearUnifiedSessionId(sessionKey)),
             label: `Open in ${personaName()}`,
           },
         ],
@@ -749,18 +922,27 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
       ).replaceAll("$ISSUE_TITLE", issue.title);
 
       // The greeting asks for direction (plan/implement/other) → elicitation
-      await createAgentActivity(accessToken, agentSession.id, {
+      await createAgentActivity(accessToken, sessionId, {
         type: "elicitation",
         body: greeting,
       });
     } catch (e) {
+      // An ended session's setup failure is not worth an activity; cleanup ran
+      // (or the created path above found no worktree to remove).
+      if (session.ended || (await isLinearSessionTerminal(sessionId))) return;
       console.error(`[linear] Error in session creation:`, e);
-      await createAgentActivity(accessToken, agentSession.id, {
+      // Leave no empty session that would answer the next prompt.
+      if (activeSessions.get(sessionId) === session)
+        activeSessions.delete(sessionId);
+      await createAgentActivity(accessToken, sessionId, {
         type: "error",
         body: `${MESSAGES.error} Failed to initialize: ${e}`,
       });
+    } finally {
+      session.ready = undefined;
+      finishReady();
     }
   })();
 
-  return Response.json({ ok: true, branch });
+  return Response.json({ ok: true, branch: desiredBranch });
 }

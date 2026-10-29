@@ -698,12 +698,15 @@ async function getFileMtimeAsync(path: string): Promise<string> {
  *  scanned slack/linear source owns them. Each group says why. */
 const SIDECAR_SOURCE_OWNED = new Set<string>([
   // The row's own identity. The unified id is minted by the scan
-  // ("slack-<file>" / "linear-<branch>"), and source/isRunning/transcriptPath
+  // ("slack-<file>" / "linear-<store file key>"), and source/isRunning/transcriptPath
   // are computed there — no stored file gets a say in them.
   "id",
   "source",
   "isRunning",
   "transcriptPath",
+  // The Linear agent-session id that owns the record. A sidecar may carry
+  // natively owned extras, never a different owner.
+  "linearSessionId",
   // Engine linkage and the model driving it. A run on a slack/linear session
   // persists these back into the OWNING agent's session file
   // (syncAgentSessionEngine, agent-session-sync.ts), which is exactly what the
@@ -907,7 +910,9 @@ export function isAgentSessionId(sessionId: string): boolean {
 
 type AgentSessionRef = { kind: AgentSessionKind; file: string };
 
-/** The agent-owned source file behind a `slack-` or `linear-` id. */
+/** The agent-owned source file behind a `slack-` or `linear-` id. The suffix
+ *  is the store file key; for Linear that is the agent-session id on current
+ *  files and the branch on legacy ones. */
 function agentSessionSource(sessionId: string): AgentSessionRef | undefined {
   const kind = sessionId.startsWith("slack-")
     ? "slack"
@@ -982,6 +987,7 @@ async function agentSourceRowAsync(
         () => observed.mtime,
       )
     : linearSessionRowFromData(
+        agentSessionSourceKey(observed.file),
         observed.data as LinearSessionFile,
         () => observed.mtime,
       );
@@ -1017,7 +1023,11 @@ export function linearSessionSourceRow(
   sidecar?: NativeSessionFile | null,
 ): UnifiedSession {
   return applySidecarExtras(
-    linearSessionRowFromData(source.data, () => source.mtime),
+    linearSessionRowFromData(
+      agentSessionSourceKey(source.file),
+      source.data,
+      () => source.mtime,
+    ),
     sidecar,
   );
 }
@@ -1028,14 +1038,21 @@ function linearSessionRow(file: string): UnifiedSession | null {
   const data = readJsonSafe<LinearSessionFile>(path);
   if (!data) return null;
   return overlaySidecarExtras(
-    linearSessionRowFromData(data, () => getFileMtime(path)),
+    linearSessionRowFromData(agentSessionSourceKey(file), data, () =>
+      getFileMtime(path),
+    ),
   );
 }
 
 /** The row a Linear session file projects to, before its sidecar overlay.
+ * `fileKey` is the store file's basename, which is the unified identity: the
+ * Linear agent-session id for current files, the branch for legacy ones. It is
+ * deliberately not `data.branch`, because a reassigned issue reuses the branch
+ * while the new agent session must get its own row and transcript.
  * `fileMtime` is the file's own clock: its creation time, and its activity
  * when the file records none. */
 function linearSessionRowFromData(
+  fileKey: string,
   data: LinearSessionFile,
   fileMtime: () => string,
 ): UnifiedSession {
@@ -1047,18 +1064,19 @@ function linearSessionRowFromData(
       rawName.split("@")[0].slice(1)
     : rawName;
 
+  const branch = data.branch || fileKey;
   const title = data.issueIdentifier
-    ? `${data.issueIdentifier}: ${data.issueTitle || data.branch}`
-    : data.branch;
+    ? `${data.issueIdentifier}: ${data.issueTitle || branch}`
+    : branch;
 
-  const id = `linear-${data.branch}`;
+  const id = `linear-${fileKey}`;
   const archived = isArchivedId(id);
 
   return {
     id,
     claudeSessionId: data.claudeSessionId,
     source: "linear",
-    branch: data.branch,
+    branch,
     worktreeDir: data.worktreeDir || null,
     createdBy: startedBy,
     startedBy,
@@ -1070,10 +1088,13 @@ function linearSessionRowFromData(
     linearIssue: data.issueIdentifier
       ? {
           identifier: data.issueIdentifier,
-          title: data.issueTitle || data.branch,
+          title: data.issueTitle || branch,
           url: data.issueUrl,
         }
       : undefined,
+    // The owning Linear agent-session id. Current ids equal `fileKey`; this
+    // field is for consumers that need the id itself (ownership checks).
+    linearSessionId: data.linearSessionId || undefined,
     model: data.model,
     // Same pi-slot mapping as the slack scan (agent-session-sync writes it).
     piSessionId: data.piSessionId || undefined,
@@ -1733,11 +1754,12 @@ async function removeSessionArtifacts(session: UnifiedSession): Promise<void> {
       break;
     }
     case "linear": {
-      // ID format: linear-{branch}
-      const branch = session.id.replace(/^linear-/, "");
-      const path = `${LINEAR_SESSIONS_DIR}/${branch}.json`;
+      // ID format: linear-{store file key} — the Linear agent-session id for
+      // current files, the branch for legacy ones. It is always the basename.
+      const key = session.id.replace(/^linear-/, "");
+      const path = `${LINEAR_SESSIONS_DIR}/${key}.json`;
       if (existsSync(path)) unlinkSync(path);
-      await mirrorAgentSessionSource("linear", `${branch}.json`, {
+      await mirrorAgentSessionSource("linear", `${key}.json`, {
         source: null,
         observedAt: Date.now(),
       });

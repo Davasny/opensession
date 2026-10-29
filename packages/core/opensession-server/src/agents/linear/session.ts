@@ -3,7 +3,7 @@
  */
 import {
   completeAgentSessionCatalogSources,
-  agentSessionSourceDirectory,
+  agentSessionSourceKey,
 } from "../../server/agent-session-catalog";
 import { STRIPE_CONFIRM_TOOLS } from "../../server/runner-shared";
 import { shouldPersistModelSwitch } from "../../server/run-events";
@@ -15,13 +15,15 @@ import {
   productName,
 } from "../../server/config";
 import { getDefaultModel, toPiModel } from "../../server/models";
-import { writeJsonAtomic } from "../../server/shared/atomic-write";
+import { writeJsonAtomicAsync } from "../../server/shared/atomic-write";
 import { publishSessionChange } from "../../server/session-cache";
 import {
   createWorktree as createRepoWorktree,
   removeWorktree,
+  resolveUniqueBranch,
+  sharedCheckoutForNewSessions,
 } from "../../server/worktree";
-import { unlinkSync } from "fs";
+import { rm } from "fs/promises";
 import { homeDir } from "../../server/paths";
 import {
   gitIdentityFor,
@@ -30,8 +32,18 @@ import {
 import { createAgentActivity } from "./api";
 import type { LinearTokens } from "./oauth";
 import { getValidToken } from "./oauth";
+import {
+  isAgentSessionFileKey,
+  isLinearSessionTerminal,
+  linearSessionFilePath,
+  linearSessionFileKey,
+  linearSessionIdFromFileKey,
+  linearUnifiedSessionId,
+  markLinearSessionTerminal,
+  withSessionStoreWrite,
+} from "./session-store";
 
-const SESSION_DIR = agentSessionSourceDirectory("linear");
+export { linearSessionFileKey, linearUnifiedSessionId } from "./session-store";
 
 /** Sessions with no activity for this long aren't restored on startup. */
 const STALE_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -84,10 +96,23 @@ export interface StoredSession {
 
 /** A stored session plus the parts that only exist while the process runs. */
 export interface ActiveSession extends StoredSession {
+  /** The store file this session is persisted in. Current files are keyed by
+   *  the Linear agent-session id; legacy files are keyed by branch. */
+  sessionKey: string;
   accessToken: string;
   issueDescription: string;
   teamId: string;
   abortController?: AbortController;
+  /** A `created` webhook's worktree/setup promise. Prompts arriving before the
+   *  worktree exists wait on it instead of guessing a path. */
+  ready?: Promise<void>;
+  /** Set once this exact session was ended/dismissed. A late run completion
+   *  must not revive its file or touch a replacement. */
+  ended?: boolean;
+  /** Set by endLinearSession when `worktreeDir` was still empty because the
+   *  created flow was mid-setup. That flow removes the checkout once it knows
+   *  the real path; end cannot remove a path it never saw. */
+  cleanupCreatedWorktree?: boolean;
   planningConversation: Array<{
     role: "agent" | "user";
     content: string;
@@ -175,16 +200,35 @@ export function generateBranchName(
   return branch;
 }
 
-export async function createWorktree(
-  branch: string,
-  _ticketId: string,
-  _title: string,
-  _description: string,
-  _url: string,
-): Promise<string> {
-  const worktreeDir = await createRepoWorktree(branch, defaultRepo().id);
-  console.log(`[linear] Created worktree: ${branch}`);
-  return worktreeDir;
+/**
+ * Create the isolated checkout for a new Linear agent session and return the
+ * branch and path that actually exist. A reassigned issue regenerates the same
+ * branch, so an isolated repo gets a unique suffix instead of reusing (or
+ * failing on) the previous session's branch. A shared-checkout repo keeps its
+ * one live checkout by design; `createRepoWorktree` returns that path.
+ */
+export async function createSessionWorktree(
+  desiredBranch: string,
+): Promise<{ branch: string; worktreeDir: string; ownsWorktree: boolean }> {
+  const repo = defaultRepo();
+  const shared = sharedCheckoutForNewSessions(repo);
+  let branch = shared
+    ? desiredBranch
+    : await resolveUniqueBranch(desiredBranch, repo.id);
+  try {
+    const worktreeDir = await createRepoWorktree(branch, repo.id);
+    console.log(`[linear] Created worktree: ${branch} at ${worktreeDir}`);
+    return { branch, worktreeDir, ownsWorktree: !shared };
+  } catch (error) {
+    // Two creates for the same ticket can resolve the same name. Re-resolve
+    // once now that the first attempt may have registered the branch.
+    if (shared) throw error;
+    const retry = await resolveUniqueBranch(branch, repo.id);
+    if (retry === branch) throw error;
+    const worktreeDir = await createRepoWorktree(retry, repo.id);
+    console.log(`[linear] Created worktree: ${retry} at ${worktreeDir}`);
+    return { branch: retry, worktreeDir, ownsWorktree: true };
+  }
 }
 
 // --- Session persistence ---
@@ -214,7 +258,7 @@ function emptyStored(branch: string): StoredSession {
  * there is no engine session id: once a turn has run, direction was given.
  */
 function storedFromFile(
-  branch: string,
+  sessionKey: string,
   raw: Record<string, any>,
 ): StoredSession {
   const claudeSessionId = raw.claudeSessionId ?? null;
@@ -227,7 +271,10 @@ function storedFromFile(
         : "working";
 
   return {
-    branch,
+    // Current files carry the branch inside a key that is the agent-session id;
+    // legacy files are named after the branch and often omit the field.
+    branch:
+      typeof raw.branch === "string" && raw.branch ? raw.branch : sessionKey,
     claudeSessionId,
     issueIdentifier: raw.issueIdentifier ?? "",
     issueTitle: raw.issueTitle ?? "",
@@ -244,40 +291,15 @@ function storedFromFile(
   };
 }
 
-/**
- * Merge a patch over the stored session: named fields move, everything else
- * keeps what is on disk. A key left out (or explicitly undefined) is a
- * deliberate "keep the stored value", not a miscounted argument slot.
- */
-export async function saveSessionInfo(
-  branch: string,
-  patch: Partial<StoredSession>,
-): Promise<void> {
-  const defined = Object.fromEntries(
-    Object.entries(patch).filter(([, v]) => v !== undefined),
-  ) as Partial<StoredSession>;
-
-  const existing = await loadSessionInfo(branch);
-  const data: StoredSession = {
-    ...emptyStored(branch),
-    ...(existing || {}),
-    ...defined,
-    branch,
-    updatedAt: new Date().toISOString(),
-  };
-  writeJsonAtomic(`${SESSION_DIR}/${branch}.json`, data);
-  // The list index and the catalog projection learn this file only from a
-  // targeted publish; the gateway never lists the directory.
-  await publishSessionChange(`linear-${branch}`);
-}
-
-export async function loadSessionInfo(
-  branch: string,
+async function readStoredFile(
+  sessionKey: string,
 ): Promise<StoredSession | null> {
+  const path = linearSessionFilePath(sessionKey);
+  if (!path) return null;
   try {
-    const file = Bun.file(`${SESSION_DIR}/${branch}.json`);
+    const file = Bun.file(path);
     if (await file.exists()) {
-      return storedFromFile(branch, JSON.parse(await file.text()));
+      return storedFromFile(sessionKey, JSON.parse(await file.text()));
     }
     return null;
   } catch {
@@ -285,19 +307,304 @@ export async function loadSessionInfo(
   }
 }
 
-export async function deleteSessionFile(branch: string): Promise<void> {
-  try {
-    unlinkSync(`${SESSION_DIR}/${branch}.json`);
-    console.log(`[linear] Deleted session file: ${SESSION_DIR}/${branch}.json`);
-  } catch {
-    // File might not exist
-  }
-  await publishSessionChange(`linear-${branch}`);
+/**
+ * Merge a patch over the stored session: named fields move, everything else
+ * keeps what is on disk. A key left out (or explicitly undefined) is a
+ * deliberate "keep the stored value", not a miscounted argument slot.
+ *
+ * The file is keyed by `sessionKey` (agent-session id for current sessions,
+ * branch for legacy ones), never by `patch.branch`: two agent sessions on the
+ * same issue share a branch but must never share a file. A write that would
+ * relabel an existing file with a different agent-session id is refused, so a
+ * late run cannot take over the store record of a replacement.
+ */
+export async function saveSessionInfo(
+  sessionKey: string,
+  patch: Partial<StoredSession>,
+  isLive?: () => boolean,
+): Promise<boolean> {
+  const path = linearSessionFilePath(sessionKey);
+  if (!path) return false;
+  const defined = Object.fromEntries(
+    Object.entries(patch).filter(([, v]) => v !== undefined),
+  ) as Partial<StoredSession>;
+
+  let wrote = false;
+  await withSessionStoreWrite(path, async () => {
+    // Liveness is re-checked INSIDE the per-file write lock: an end that runs
+    // between the caller's pre-check and this queued write must win, not be
+    // undone by a late save recreating the record.
+    if (isLive && !isLive()) return;
+    const existing = await readStoredFile(sessionKey);
+    const keyOwner = linearSessionIdFromFileKey(sessionKey);
+    if (
+      keyOwner &&
+      defined.linearSessionId &&
+      defined.linearSessionId !== keyOwner
+    ) {
+      console.warn(
+        `[linear] Refusing to write agent session ${defined.linearSessionId} into ${sessionKey}`,
+      );
+      return;
+    }
+    if (
+      existing?.linearSessionId &&
+      defined.linearSessionId &&
+      existing.linearSessionId !== defined.linearSessionId
+    ) {
+      console.warn(
+        `[linear] Refusing to relabel session file ${sessionKey} from ${existing.linearSessionId} to ${defined.linearSessionId}`,
+      );
+      return;
+    }
+    const owner =
+      defined.linearSessionId ||
+      existing?.linearSessionId ||
+      keyOwner ||
+      undefined;
+    if (owner && (await isLinearSessionTerminal(owner))) {
+      console.warn(
+        `[linear] Refusing to write ended Linear session ${owner} (${sessionKey})`,
+      );
+      return;
+    }
+    const data: StoredSession = {
+      ...emptyStored(isAgentSessionFileKey(sessionKey) ? "" : sessionKey),
+      ...(existing || {}),
+      ...defined,
+      updatedAt: new Date().toISOString(),
+    };
+    if (!data.branch) data.branch = sessionKey;
+    await writeJsonAtomicAsync(path, data);
+    wrote = true;
+  });
+  if (!wrote) return false;
+  // The list index and the catalog projection learn this file only from a
+  // targeted publish; the gateway never lists the directory.
+  await publishSessionChange(linearUnifiedSessionId(sessionKey));
+  return true;
 }
 
-export function deleteWorktree(branch: string): void {
-  void removeWorktree(branch, defaultRepo().id);
+export async function loadSessionInfo(
+  sessionKey: string,
+): Promise<StoredSession | null> {
+  return readStoredFile(sessionKey);
+}
+
+export interface StoredSessionLocation {
+  /** The store file key, not the branch. */
+  key: string;
+  session: StoredSession;
+}
+
+/**
+ * The stored session an incoming Linear agent-session id may operate on.
+ * Current sessions are keyed by that id. A legacy `<branch>.json` is accepted
+ * only when its recorded `linearSessionId` matches exactly; a branch match
+ * with a different (or missing) id is the old collision and must never be
+ * adopted. An unknown id therefore starts clean instead of inheriting the
+ * previous agent session's transcript.
+ */
+export async function findStoredSessionForAgentSession(
+  linearSessionId: string,
+  branch: string,
+): Promise<StoredSessionLocation | null> {
+  let key = "";
+  try {
+    key = linearSessionFileKey(linearSessionId);
+  } catch {
+    key = "";
+  }
+  if (key) {
+    const stored = await loadSessionInfo(key);
+    if (stored?.linearSessionId === linearSessionId)
+      return { key, session: stored };
+  }
+  if (branch) {
+    const stored = await loadSessionInfo(branch);
+    if (stored?.linearSessionId === linearSessionId)
+      return { key: branch, session: stored };
+  }
+  return null;
+}
+
+/**
+ * Remove the record this agent session owns. With an expected id, a file that
+ * belongs to a different session is left alone. Returns whether the record is
+ * gone (a missing file counts as gone, since there is nothing left to revive).
+ */
+export async function deleteSessionFile(
+  sessionKey: string,
+  expectedLinearSessionId?: string,
+): Promise<boolean> {
+  const path = linearSessionFilePath(sessionKey);
+  if (!path) return false;
+  const keyOwner = linearSessionIdFromFileKey(sessionKey);
+  if (
+    expectedLinearSessionId &&
+    keyOwner &&
+    keyOwner !== expectedLinearSessionId
+  ) {
+    console.warn(
+      `[linear] Refusing to delete session file ${sessionKey}: keyed by ${keyOwner}, not ${expectedLinearSessionId}`,
+    );
+    return false;
+  }
+  let gone = false;
+  await withSessionStoreWrite(path, async () => {
+    const existing = await readStoredFile(sessionKey);
+    if (!existing) {
+      // A missing file counts as gone; an unreadable one is left for its owner
+      // rather than guessed at.
+      gone = !(await Bun.file(path).exists());
+      return;
+    }
+    if (
+      expectedLinearSessionId &&
+      existing.linearSessionId !== expectedLinearSessionId
+    ) {
+      console.warn(
+        `[linear] Refusing to delete session file ${sessionKey}: owned by ${existing.linearSessionId || "(no id)"}, not ${expectedLinearSessionId}`,
+      );
+      return;
+    }
+    await rm(path, { force: true });
+    gone = true;
+  });
+  if (gone) {
+    console.log(`[linear] Deleted session file: ${path}`);
+    await publishSessionChange(linearUnifiedSessionId(sessionKey));
+  }
+  return gone;
+}
+
+/**
+ * Persist this exact live session. False when it was ended or replaced while a
+ * run was in flight: its late completion must not recreate the record or write
+ * into the replacement's file.
+ */
+export async function persistActiveSession(
+  session: ActiveSession,
+): Promise<boolean> {
+  const live = () =>
+    !session.ended && activeSessions.get(session.linearSessionId) === session;
+  if (!live()) return false;
+  const wrote = await saveSessionInfo(
+    session.sessionKey,
+    {
+      branch: session.branch,
+      claudeSessionId: session.claudeSessionId,
+      issueIdentifier: session.issueIdentifier,
+      issueTitle: session.issueTitle,
+      worktreeDir: session.worktreeDir,
+      linearSessionId: session.linearSessionId,
+      phase: session.phase,
+      issueId: session.issueId,
+      issueUrl: session.issueUrl,
+      participants: session.participants,
+      lastActiveUser: session.lastActiveUser,
+      issueCreator: session.issueCreator,
+      model: session.model,
+    },
+    live,
+  );
+  if (wrote) session.updatedAt = new Date().toISOString();
+  return wrote;
+}
+
+export interface EndedLinearSession {
+  /** True when this agent session owned a live or stored record. Cleanup of
+   *  its worktree is only safe behind this flag. */
+  owned: boolean;
+  branch: string | null;
+  /** True when the store record was removed (or was already absent). */
+  removed: boolean;
+  /** True when setup had not produced a worktree yet; the created flow owns
+   *  cleanup once it learns the real path. */
+  cleanupDeferred: boolean;
+}
+
+/**
+ * End one agent session without touching any other session that reused its
+ * issue or branch. The stored record is located by agent-session id, so an old
+ * session's cleanup can never delete a replacement's file.
+ */
+export async function endLinearSession(
+  linearSessionId: string,
+  generatedBranch: string,
+): Promise<EndedLinearSession> {
+  const active = activeSessions.get(linearSessionId);
+  if (active) {
+    active.ended = true;
+    if (!active.worktreeDir) active.cleanupCreatedWorktree = true;
+    if (active.abortController) {
+      active.abortController.abort();
+      active.abortController = undefined;
+    }
+  }
+  // Durable terminal state lands before the record/worktree disappear, so a
+  // webhook replay after a restart cannot resurrect this id. A failed write is
+  // an error: cleanup must not be silently reported as accepted.
+  await markLinearSessionTerminal(linearSessionId);
+  const stored = await findStoredSessionForAgentSession(
+    linearSessionId,
+    generatedBranch,
+  );
+  const key = active?.sessionKey ?? stored?.key;
+  const branch = active?.branch ?? stored?.session.branch ?? null;
+  const removed = key ? await deleteSessionFile(key, linearSessionId) : false;
+  activeSessions.delete(linearSessionId);
+  return {
+    owned: !!active || !!stored,
+    branch,
+    removed,
+    cleanupDeferred: !!active?.cleanupCreatedWorktree,
+  };
+}
+
+/** Remove a checkout only when no other live session moved onto its branch. */
+export async function deleteWorktreeIfUnused(
+  branch: string,
+  ownerLinearSessionId: string,
+): Promise<boolean> {
+  const inUse = [...activeSessions.entries()].some(
+    ([id, session]) =>
+      id !== ownerLinearSessionId &&
+      !session.ended &&
+      session.branch === branch,
+  );
+  if (inUse) return false;
+  await removeWorktree(branch, defaultRepo().id);
   console.log(`[linear] Deleted worktree: ${branch}`);
+  return true;
+}
+
+/**
+ * The live session to drive for an issue: newest first, terminal records
+ * excluded. `updatedAt` is maintained on every successful persist, so a new
+ * assignment is never mistaken for the previous session on the same issue.
+ */
+export function latestSessionForIssue(
+  issue: { id: string; identifier: string },
+  sessions: Iterable<ActiveSession> = activeSessions.values(),
+): ActiveSession | undefined {
+  let best: ActiveSession | undefined;
+  let bestAt = Number.NEGATIVE_INFINITY;
+  for (const session of sessions) {
+    if (session.ended) continue;
+    if (
+      session.issueId !== issue.id &&
+      session.issueIdentifier !== issue.identifier
+    )
+      continue;
+    const parsed = Date.parse(session.updatedAt || "");
+    const updatedAt = Number.isFinite(parsed) ? parsed : 0;
+    if (!best || updatedAt > bestAt) {
+      best = session;
+      bestAt = updatedAt;
+    }
+  }
+  return best;
 }
 
 // --- Action activity streaming ---
@@ -306,8 +613,8 @@ export function deleteWorktree(branch: string): void {
 export const OPENSESSION_UI_BASE =
   process.env.OPENSESSION_UI_BASE || configuredServer().publicBaseUrl;
 
-export function opensessionSessionUrl(branch: string): string {
-  return `${OPENSESSION_UI_BASE}/session/${encodeURIComponent(`linear-${branch}`)}`;
+export function opensessionSessionUrl(unifiedSessionId: string): string {
+  return `${OPENSESSION_UI_BASE}/session/${encodeURIComponent(unifiedSessionId)}`;
 }
 
 /** Compact action row for a tool call: { action: "Read", parameter: "src/foo.ts" }. */
@@ -477,11 +784,13 @@ export async function runAgentHeadless(
       // session and re-drives turns from Linear events.
       journal: { kind: "linear" },
       // Transcript v2: key this run's store appends on the unified session id
-      // the UI knows this session by (sessions.ts scanLinearSessions:
-      // `linear-<branch>`). Map-only — journal/resume/run-state semantics are
-      // untouched (see RunAgentOpts.transcriptSessionId).
-      transcriptSessionId: session?.branch
-        ? `linear-${session.branch}`
+      // the UI knows this session by. That id is derived from the store file
+      // key (agent-session id for current sessions, branch for legacy files),
+      // never from the branch, which a reassigned issue reuses. Map-only —
+      // journal/resume/run-state semantics are untouched (see
+      // RunAgentOpts.transcriptSessionId).
+      transcriptSessionId: session
+        ? linearUnifiedSessionId(session.sessionKey)
         : undefined,
       // Money-moving Stripe tools need the per-call human confirmation the
       // interactive runner provides; this path has no approval card, so they
@@ -637,13 +946,14 @@ export async function loadActiveSessionsOnStartup(
     let skippedStale = 0;
     for (const { file, data } of sources) {
       try {
-        const branch = file.replace(".json", "");
-        const stored = storedFromFile(branch, data);
+        const sessionKey = agentSessionSourceKey(file);
+        const stored = storedFromFile(sessionKey, data);
 
         if (
           stored &&
           stored.linearSessionId &&
-          (stored.claudeSessionId || stored.phase === "awaiting_direction")
+          (stored.claudeSessionId || stored.phase === "awaiting_direction") &&
+          !(await isLinearSessionTerminal(stored.linearSessionId))
         ) {
           // Don't resurrect long-idle sessions — a week without a run means the
           // ticket moved on without us; the file stays on disk for manual resume.
@@ -658,6 +968,7 @@ export async function loadActiveSessionsOnStartup(
           // supplied here.
           const session: ActiveSession = {
             ...stored,
+            sessionKey,
             accessToken,
             issueDescription: "",
             teamId: "",
@@ -667,7 +978,7 @@ export async function loadActiveSessionsOnStartup(
           activeSessions.set(stored.linearSessionId, session);
 
           console.log(
-            `[linear] Restored session: ${branch} (Claude: ${stored.claudeSessionId}, Linear: ${stored.linearSessionId})`,
+            `[linear] Restored session: ${stored.branch} from ${sessionKey} (Claude: ${stored.claudeSessionId}, Linear: ${stored.linearSessionId})`,
           );
         }
       } catch (e) {

@@ -197,7 +197,7 @@ describe("session list sources", () => {
     const sync = read("agent-session-sync.ts");
     expect(sync.match(/publishSessionChange\(session\.id\)/g)?.length).toBe(2);
     expect(read("../agents/linear/session.ts")).toContain(
-      "await publishSessionChange(`linear-${branch}`)",
+      "await publishSessionChange(linearUnifiedSessionId(sessionKey))",
     );
     expect(read("../agents/slack/handlers.ts")).toContain(
       "await publishSessionChange(",

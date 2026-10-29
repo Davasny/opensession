@@ -24,7 +24,9 @@ export function agentSessionSourceDirectory(kind: AgentSessionKind): string {
   return statePath(kind === "slack" ? ".slack-sessions" : ".linear-sessions");
 }
 
-/** The catalog key of a source file: its basename without `.json`. */
+/** The catalog key of a source file: its basename without `.json`. For Linear
+ *  this is the agent-session id on current files and the branch on legacy
+ *  ones. */
 export function agentSessionSourceKey(file: string): string {
   return file.endsWith(".json") ? file.slice(0, -".json".length) : file;
 }

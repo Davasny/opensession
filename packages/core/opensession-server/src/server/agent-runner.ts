@@ -299,7 +299,7 @@ export interface RunAgentOpts {
   /** Run-lifetime cancellation predicate threaded through engine retries. */
   shouldCancel?: () => boolean;
   /**
-   * Unified session id (e.g. `linear-<branch>`) for the transcript-v2 oc→
+   * Unified session id (e.g. `linear-<store file key>`) for the transcript-v2 oc→
    * unified map ONLY (pi-transcript.ts recordEngineSessionOwner) — lets loop
    * runs whose journal is deliberately kind-only (no crash journal; the loop
    * re-drives its own turns) still key their store appends on their unified
