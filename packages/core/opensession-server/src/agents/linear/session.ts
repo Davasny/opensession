@@ -23,6 +23,7 @@ import {
   resolveUniqueBranch,
   sharedCheckoutForNewSessions,
   repoForPathOrNull,
+  worktreeHeadBranch,
 } from "../../server/worktree";
 import { githubServiceCredentialEnv } from "../../server/github-app";
 import { rm } from "fs/promises";
@@ -120,6 +121,9 @@ export interface StoredSession {
   /** Linear agent-activity ids whose prompted turn was already claimed. A
    *  webhook redelivered after a restart must not run the same message twice. */
   processedPromptIds?: string[];
+  /** The pull request this session opened. Reused by a later implementation
+   *  turn so a retry never opens a second PR. */
+  prUrl?: string;
   updatedAt?: string;
 }
 
@@ -338,6 +342,7 @@ function storedFromFile(
           (id: unknown): id is string => typeof id === "string",
         )
       : undefined,
+    prUrl: typeof raw.prUrl === "string" && raw.prUrl ? raw.prUrl : undefined,
     updatedAt: raw.updatedAt,
   };
 }
@@ -564,6 +569,7 @@ export async function persistActiveSession(
       startMode: session.startMode,
       assignmentStart: session.assignmentStart,
       processedPromptIds: session.processedPromptIds,
+      prUrl: session.prUrl,
     },
     live,
   );
@@ -932,6 +938,40 @@ export async function runAgentHeadless(
 
 // --- PR creation ---
 
+export interface PrCreateResult {
+  url: string | null;
+  /** Short, safe explanation when no URL was produced. Fixed messages only:
+   *  gh's raw output stays in the server log, never in a Linear timeline. */
+  reason?: string;
+}
+
+/** Classify gh's failure text into a short explanation safe to show. */
+function describeGhFailure(stderr: string): string {
+  const text = stderr.toLowerCase();
+  if (text.includes("already exists"))
+    return "a pull request already exists for this branch";
+  if (
+    /not logged in|authentication|bad credentials|gh_token|http 401/.test(text)
+  )
+    return "GitHub authentication failed";
+  if (/no commits between|no commits/.test(text))
+    return "the branch has no commits to open a pull request from";
+  if (
+    /not been pushed|no upstream|does not have any commits|publish/.test(text)
+  )
+    return "the branch has not been pushed";
+  return "gh pr create failed";
+}
+
+/**
+ * Open (or recover) the pull request for this session's checkout.
+ *
+ * Idempotent by construction: an open PR for the worktree's actual head branch
+ * is returned as-is, and a create that exits non-zero is checked against
+ * GitHub before being reported as a failure (gh creates the PR first and can
+ * fail afterwards on a reviewer request). A reviewer request failure is
+ * logged but never hides an already-created PR.
+ */
 export async function createPrWithAttribution(
   worktreeDir: string,
   issueIdentifier: string,
@@ -939,7 +979,7 @@ export async function createPrWithAttribution(
   issueTitle: string,
   participants: Participant[],
   reviewer?: string | null,
-): Promise<string | null> {
+): Promise<PrCreateResult> {
   let participantsLine = "";
   if (participants.length > 0) {
     const names = participants.map((p) => p.name).join(", ");
@@ -959,22 +999,87 @@ ${participantsLine ? `\n${participantsLine}\n` : ""}
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
 
+  // The agent can switch branches inside its worktree, and gh targets HEAD:
+  // look up the branch that actually exists, not the session's original claim.
+  const branch = worktreeHeadBranch(worktreeDir);
+
   try {
     const repo = repoForPathOrNull(worktreeDir);
     if (!repo?.ghRepo || repo.host === "codestorage") {
       console.error(
         "[linear] Cannot create PR: worktree has no registered GitHub repository",
       );
-      return null;
+      return {
+        url: null,
+        reason: "this workspace has no registered GitHub repository",
+      };
     }
     const credentialEnv = await githubServiceCredentialEnv(repo.ghRepo);
     if (!credentialEnv.GH_TOKEN) {
       console.error(
         `[linear] Cannot create PR: GitHub App credential unavailable for ${repo.ghRepo}`,
       );
-      return null;
+      return {
+        url: null,
+        reason: `GitHub credentials are unavailable for ${repo.ghRepo}`,
+      };
     }
-    const args = [
+
+    const runGh = async (args: string[]) => {
+      const proc = Bun.spawn(args, {
+        cwd: worktreeDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          ...credentialEnv,
+          // Never let an interactive prompt wedge an unattended turn.
+          GH_PROMPT_DISABLED: "1",
+          PATH: `${homeDir()}/.cargo/bin:${homeDir()}/.bun/bin:${homeDir()}/.local/bin:${homeDir()}/bin:${homeDir()}/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+          HOME: homeDir(),
+        },
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { stdout, stderr, exitCode };
+    };
+
+    const findOpenPr = async (): Promise<string | null> => {
+      if (!branch) return null;
+      const result = await runGh([
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        repo.ghRepo,
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "url",
+        "--limit",
+        "1",
+      ]);
+      if (result.exitCode !== 0) return null;
+      try {
+        const rows = JSON.parse(result.stdout);
+        if (Array.isArray(rows) && typeof rows[0]?.url === "string")
+          return rows[0].url;
+      } catch {}
+      return null;
+    };
+
+    const existing = await findOpenPr();
+    if (existing) {
+      console.log(`[linear] Reusing existing PR for ${branch}: ${existing}`);
+      return { url: existing };
+    }
+
+    const created = await runGh([
       "gh",
       "pr",
       "create",
@@ -982,36 +1087,53 @@ ${participantsLine ? `\n${participantsLine}\n` : ""}
       `${issueIdentifier}: ${issueTitle}`,
       "--body",
       prBody,
-    ];
+    ]);
+    if (created.exitCode !== 0) {
+      // gh may have opened the PR and then failed on a later step (reviewer
+      // request, network). Ask GitHub before reporting a failure.
+      const recovered = await findOpenPr();
+      if (recovered) {
+        console.log(
+          `[linear] Recovered PR after gh failure for ${branch}: ${recovered}`,
+        );
+        return { url: recovered };
+      }
+      console.error(`[linear] Failed to create PR: ${created.stderr}`);
+      return { url: null, reason: describeGhFailure(created.stderr) };
+    }
+
+    const urlMatch = created.stdout.match(/https:\/\/github\.com\/[^\s]+/);
+    const url = urlMatch ? urlMatch[0] : created.stdout.trim();
+    if (!url) {
+      console.error("[linear] gh pr create returned no pull request URL");
+      return {
+        url: null,
+        reason: "gh did not return a pull request URL",
+      };
+    }
+
     if (reviewer) {
-      args.push("--reviewer", reviewer);
-    }
-    const proc = Bun.spawn(args, {
-      cwd: worktreeDir,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {
-        ...process.env,
-        ...credentialEnv,
-        PATH: `${homeDir()}/.cargo/bin:${homeDir()}/.bun/bin:${homeDir()}/.local/bin:${homeDir()}/bin:${homeDir()}/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
-        HOME: homeDir(),
-      },
-    });
-
-    const output = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
-
-    if (exitCode !== 0) {
-      console.error(`[linear] Failed to create PR: ${stderr}`);
-      return null;
+      // Requesting a reviewer is secondary: a rejected login or a transient
+      // GitHub error must not turn a created PR into a reported failure.
+      const added = await runGh([
+        "gh",
+        "pr",
+        "edit",
+        url,
+        "--add-reviewer",
+        reviewer,
+      ]);
+      if (added.exitCode !== 0) {
+        console.warn(
+          `[linear] Created ${url} but could not request reviewer ${reviewer}: ${added.stderr.trim().slice(0, 200)}`,
+        );
+      }
     }
 
-    const urlMatch = output.match(/https:\/\/github\.com\/[^\s]+/);
-    return urlMatch ? urlMatch[0] : output.trim();
+    return { url };
   } catch (e) {
     console.error(`[linear] Error creating PR: ${e}`);
-    return null;
+    return { url: null, reason: "the pull request command failed" };
   }
 }
 

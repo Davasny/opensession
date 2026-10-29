@@ -16,8 +16,39 @@ import { join } from "node:path";
 
 const worktreeRoot = "/synthetic-worktrees";
 let prRepo: { ghRepo: string; host: string } | undefined;
+let headBranch: string | null = "fix-the-eng1";
 const credentialCalls: string[] = [];
 let prCredentialEnv: Record<string, string> = {};
+const realSpawn = Bun.spawn;
+let ghResponses: Array<{ stdout?: string; stderr?: string; code?: number }> =
+  [];
+let ghCalls: Array<{ args: string[]; opts: any }> = [];
+
+function mockGh(
+  responses: Array<{ stdout?: string; stderr?: string; code?: number }>,
+) {
+  ghResponses = responses.map((response) => ({ ...response }));
+  ghCalls = [];
+  return spyOn(Bun, "spawn").mockImplementation(((
+    args: string[],
+    opts: Record<string, unknown>,
+  ) => {
+    ghCalls.push({ args, opts });
+    const spec = ghResponses.shift() ?? {};
+    return realSpawn(
+      [
+        "/bin/sh",
+        "-c",
+        'printf %s "$1"; printf %s "$2" >&2; exit "$3"',
+        "sh",
+        spec.stdout ?? "",
+        spec.stderr ?? "",
+        String(spec.code ?? 0),
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    ) as any;
+  }) as any);
+}
 const createdBranches: string[] = [];
 const removedBranches: string[] = [];
 const usedBranches = new Set<string>();
@@ -47,6 +78,7 @@ let thoughtStarted: (() => void) | null = null;
 mock.module("../../server/worktree", () => ({
   repoForPathOrNull: (cwd: string) =>
     cwd.startsWith(`${worktreeRoot}/`) ? prRepo : undefined,
+  worktreeHeadBranch: () => headBranch,
   createWorktree: async (branch: string) => {
     const gate = createGate;
     createGate = null;
@@ -322,6 +354,9 @@ async function waitForAssignmentSettled(id: string) {
 
 beforeEach(() => {
   prRepo = { ghRepo: "acme/linear-repo", host: "github" };
+  headBranch = "fix-the-eng1";
+  ghResponses = [];
+  ghCalls = [];
   validToken = "synthetic-token";
   credentialCalls.length = 0;
   prCredentialEnv = { GH_TOKEN: "synthetic-installation-token" };
@@ -365,18 +400,8 @@ afterEach(() => {
 });
 
 test("automatic PR creation passes fresh repository App credentials to gh", async () => {
-  const proc = Bun.spawn(
-    [
-      "/bin/sh",
-      "-c",
-      "printf 'https://github.com/acme/linear-repo/pull/42\\n'",
-    ],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  const spawn = spyOn(Bun, "spawn").mockReturnValue(proc);
+  const url = "https://github.com/acme/linear-repo/pull/42";
+  const spawn = mockGh([{ stdout: "[]" }, { stdout: `${url}\n` }, {}]);
   const oldToken = process.env.GH_TOKEN;
   process.env.GH_TOKEN = "unrelated-host-token";
   try {
@@ -386,7 +411,7 @@ test("automatic PR creation passes fresh repository App credentials to gh", asyn
       GIT_CONFIG_KEY_0: "credential.helper",
       GIT_CONFIG_VALUE_0: "synthetic-helper",
     };
-    const url = await createPrWithAttribution(
+    const result = await createPrWithAttribution(
       `${worktreeRoot}/task`,
       "ENG-1",
       ISSUE.url,
@@ -394,25 +419,39 @@ test("automatic PR creation passes fresh repository App credentials to gh", asyn
       [],
       "reviewer",
     );
-    expect(url).toBe("https://github.com/acme/linear-repo/pull/42");
+    expect(result).toEqual({ url });
     expect(credentialCalls).toEqual(["acme/linear-repo"]);
-    expect(spawn).toHaveBeenCalledWith(
-      [
-        "gh",
-        "pr",
-        "create",
-        "--title",
-        "ENG-1: Fix the bug",
-        "--body",
-        expect.any(String),
-        "--reviewer",
-        "reviewer",
-      ],
-      expect.objectContaining({
-        cwd: `${worktreeRoot}/task`,
-        env: expect.objectContaining(prCredentialEnv),
-      }),
-    );
+    expect(ghCalls).toHaveLength(3);
+    expect(ghCalls[0]!.args.slice(0, 4)).toEqual([
+      "gh",
+      "pr",
+      "list",
+      "--repo",
+    ]);
+    expect(ghCalls[0]!.args).toContain(headBranch!);
+    expect(ghCalls[1]!.args.slice(0, 4)).toEqual([
+      "gh",
+      "pr",
+      "create",
+      "--title",
+    ]);
+    expect(ghCalls[1]!.args).not.toContain("--reviewer");
+    expect(ghCalls[2]!.args).toEqual([
+      "gh",
+      "pr",
+      "edit",
+      url,
+      "--add-reviewer",
+      "reviewer",
+    ]);
+    for (const call of ghCalls) {
+      expect(call.opts).toEqual(
+        expect.objectContaining({
+          cwd: `${worktreeRoot}/task`,
+          env: expect.objectContaining(prCredentialEnv),
+        }),
+      );
+    }
   } finally {
     spawn.mockRestore();
     if (oldToken === undefined) delete process.env.GH_TOKEN;
@@ -420,19 +459,83 @@ test("automatic PR creation passes fresh repository App credentials to gh", asyn
   }
 });
 
+test("automatic PR creation reuses an existing open PR", async () => {
+  const url = "https://github.com/acme/linear-repo/pull/7";
+  const spawn = mockGh([{ stdout: JSON.stringify([{ url }]) }]);
+  try {
+    const result = await createPrWithAttribution(
+      `${worktreeRoot}/task`,
+      "ENG-1",
+      ISSUE.url,
+      ISSUE.title,
+      [],
+    );
+    expect(result).toEqual({ url });
+    expect(ghCalls).toHaveLength(1);
+    expect(ghCalls[0]!.args.slice(0, 2)).toEqual(["gh", "pr"]);
+    expect(ghCalls[0]!.args[2]).toBe("list");
+  } finally {
+    spawn.mockRestore();
+  }
+});
+
+test("automatic PR creation recovers a PR that gh created before failing", async () => {
+  const url = "https://github.com/acme/linear-repo/pull/8";
+  const spawn = mockGh([
+    { stdout: "[]" },
+    { code: 1, stderr: "failed to add reviewers: HTTP 422" },
+    { stdout: JSON.stringify([{ url }]) },
+  ]);
+  try {
+    const result = await createPrWithAttribution(
+      `${worktreeRoot}/task`,
+      "ENG-1",
+      ISSUE.url,
+      ISSUE.title,
+      [],
+    );
+    expect(result).toEqual({ url });
+    expect(ghCalls).toHaveLength(3);
+  } finally {
+    spawn.mockRestore();
+  }
+});
+
+test("a rejected reviewer request does not hide a created PR", async () => {
+  const url = "https://github.com/acme/linear-repo/pull/9";
+  const spawn = mockGh([
+    { stdout: "[]" },
+    { stdout: `${url}\n` },
+    { code: 1, stderr: "could not resolve reviewer" },
+  ]);
+  try {
+    const result = await createPrWithAttribution(
+      `${worktreeRoot}/task`,
+      "ENG-1",
+      ISSUE.url,
+      ISSUE.title,
+      [],
+      "not-a-collaborator",
+    );
+    expect(result).toEqual({ url });
+  } finally {
+    spawn.mockRestore();
+  }
+});
+
 test("automatic PR creation fails closed without a repository App token", async () => {
   const spawn = spyOn(Bun, "spawn");
   try {
     prCredentialEnv = { GH_TOKEN: "" };
-    expect(
-      await createPrWithAttribution(
-        `${worktreeRoot}/task`,
-        "ENG-1",
-        ISSUE.url,
-        ISSUE.title,
-        [],
-      ),
-    ).toBeNull();
+    const result = await createPrWithAttribution(
+      `${worktreeRoot}/task`,
+      "ENG-1",
+      ISSUE.url,
+      ISSUE.title,
+      [],
+    );
+    expect(result.url).toBeNull();
+    expect(result.reason).toContain("credentials are unavailable");
     expect(credentialCalls).toEqual(["acme/linear-repo"]);
     expect(spawn).not.toHaveBeenCalled();
   } finally {
@@ -444,17 +547,61 @@ test("automatic PR creation does not mint credentials for an unknown worktree", 
   const spawn = spyOn(Bun, "spawn");
   try {
     prRepo = undefined;
-    expect(
-      await createPrWithAttribution(
-        `${worktreeRoot}/task`,
-        "ENG-1",
-        ISSUE.url,
-        ISSUE.title,
-        [],
-      ),
-    ).toBeNull();
+    const result = await createPrWithAttribution(
+      `${worktreeRoot}/task`,
+      "ENG-1",
+      ISSUE.url,
+      ISSUE.title,
+      [],
+    );
+    expect(result.url).toBeNull();
+    expect(result.reason).toContain("no registered GitHub repository");
     expect(credentialCalls).toEqual([]);
     expect(spawn).not.toHaveBeenCalled();
+  } finally {
+    spawn.mockRestore();
+  }
+});
+
+test("a repeated implementation turn reuses the stored PR after a restart", async () => {
+  const id = "7d7d7d7d-7d7d-4d7d-8d7d-7d7d7d7d7d7d";
+  const key = linearSessionFileKey(id);
+  const url = "https://github.com/acme/linear-repo/pull/55";
+  const spawn = mockGh([{ stdout: "[]" }, { stdout: `${url}\n` }]);
+  try {
+    await handleAgentSession(webhook("created", id), {});
+    await awaitReady(id);
+
+    runResult = "Implemented. IMPLEMENTATION_COMPLETE";
+    await handleAgentSession(prompted(id, "implement", "activity-pr-1"), {});
+    await waitFor(
+      () =>
+        activityCalls.some((call) =>
+          String(call.content.body).includes(`PR: ${url}`),
+        ),
+      "first PR activity",
+    );
+    expect(readStored(key).prUrl).toBe(url);
+
+    // Restart: the in-memory URL is gone, the agent-session file keeps it.
+    activeSessions.clear();
+    processedSessions.clear();
+
+    runResult = "Implemented again. IMPLEMENTATION_COMPLETE";
+    await handleAgentSession(
+      prompted(id, "implement again", "activity-pr-2"),
+      {},
+    );
+    await waitFor(
+      () =>
+        activityCalls.filter((call) =>
+          String(call.content.body).includes(`PR: ${url}`),
+        ).length === 2,
+      "second PR activity",
+    );
+
+    // list + create for the first turn only; the retry made no gh calls.
+    expect(ghCalls).toHaveLength(2);
   } finally {
     spawn.mockRestore();
   }
@@ -684,7 +831,9 @@ test("a reassigned session runs while the previous session is still unwinding", 
   expect(activityCalls).not.toContainEqual(
     expect.objectContaining({
       sessionId: second,
-      content: expect.objectContaining({ body: expect.stringContaining("still working") }),
+      content: expect.objectContaining({
+        body: expect.stringContaining("still working"),
+      }),
     }),
   );
 
@@ -711,7 +860,10 @@ test("a redelivered prompt activity does not run a second turn", async () => {
 
   expect(readStored(key).processedPromptIds).toContain(activityId);
 
-  const replay = await handleAgentSession(prompted(id, "go ahead", activityId), {});
+  const replay = await handleAgentSession(
+    prompted(id, "go ahead", activityId),
+    {},
+  );
   expect(await replay.json()).toMatchObject({ duplicate: true });
   await Bun.sleep(20);
   expect(runCalls).toHaveLength(1);
@@ -731,7 +883,10 @@ test("a processed prompt stays deduplicated after a restart", async () => {
   activeSessions.clear();
   processedSessions.clear();
 
-  const replay = await handleAgentSession(prompted(id, "go ahead", activityId), {});
+  const replay = await handleAgentSession(
+    prompted(id, "go ahead", activityId),
+    {},
+  );
   expect(await replay.json()).toMatchObject({ duplicate: true });
   await Bun.sleep(20);
   expect(runCalls).toHaveLength(1);

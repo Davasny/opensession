@@ -18,9 +18,11 @@ routing.
   (unless instance `selfDev` is `"worktree"`). The Linear agent does not request
   an isolated checkout explicitly, so a shared-checkout default repo is edited
   in place and has no dedicated branch for the automatic PR.
-- Give the Open Session service user working Git push credentials and ambient
-  `gh` authentication for that repository. The final PR helper invokes
-  `gh pr create` with the service process's environment and `HOME`.
+- Give the Open Session GitHub App access to the default repository (contents
+  and pull requests write). The final PR helper mints an installation token for
+  that repository and fails closed, with a short reason in the session, when
+  the App is not installed or cannot mint a token. Ambient `gh` authentication
+  is not used for the automatic PR.
 - The issue's Linear team should have workflow statuses named **Ready** and
   **In Progress**. Planning moves the issue to `Ready`; implementation moves it
   to and auto-starts from `In Progress`. Status matching is case-insensitive,
@@ -126,8 +128,12 @@ and `handlers.ts`):
   an existing Linear session with an engine session and an issue comment whose
   body contains `# Implementation Plan` or `## Implementation Plan`.
 - When a run returns `IMPLEMENTATION_COMPLETE`, Open Session runs `gh pr create`
-  and posts the resulting PR URL to the Linear agent session. A failed PR
-  command is reported in Linear but is not retried automatically.
+  and posts the resulting PR URL to the Linear agent session. An open PR for
+  the checkout's current branch is reused, and the URL is stored in the session
+  file, so a retried implementation does not open a second PR. A failure is
+  reported in Linear with a short reason (the raw command output stays in the
+  server log). A reviewer request that GitHub rejects does not hide a created
+  PR. Failed PR creation is not retried automatically.
 
 Other event types and actions are acknowledged and ignored. Team IDs are
 fetched from each issue; only the workflow status names above are fixed.

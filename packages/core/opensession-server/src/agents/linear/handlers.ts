@@ -430,20 +430,34 @@ async function runClaimedLinearTurn(
           const creatorGithub = linearEmailToGithubUsername(
             session.issueCreator?.email || null,
           );
-          const prUrl = await createPrWithAttribution(
-            session.worktreeDir,
-            session.issueIdentifier,
-            session.issueUrl,
-            session.issueTitle,
-            session.participants || [],
-            creatorGithub,
-          );
+          // A retried or reopened implementation turn must not open a second
+          // PR: the URL is persisted in the agent-session file.
+          let prUrl = session.prUrl ?? null;
+          let failureReason: string | undefined;
+          if (!prUrl) {
+            const pr = await createPrWithAttribution(
+              session.worktreeDir,
+              session.issueIdentifier,
+              session.issueUrl,
+              session.issueTitle,
+              session.participants || [],
+              creatorGithub,
+            );
+            prUrl = pr.url;
+            failureReason = pr.reason;
+            if (prUrl) {
+              session.prUrl = prUrl;
+              await persistActiveSession(session);
+            }
+          }
 
           await createAgentActivity(accessToken, id, {
             type: "response",
             body: prUrl
               ? `Implementation complete! PR: ${prUrl}`
-              : "Implementation complete! PR creation may have failed - please check manually.",
+              : `Implementation complete, but I couldn't open the pull request${
+                  failureReason ? `: ${failureReason}` : ""
+                }. Please check manually.`,
           });
           outcome = { busy: false, result };
         } else if (options.reportGeneric !== false) {

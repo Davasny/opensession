@@ -470,6 +470,8 @@ export interface LinearSessionFile {
   };
   /** Linear agent-activity ids whose prompted turn was already claimed. */
   processedPromptIds?: string[];
+  /** Pull request opened by this session; reused by later turns. */
+  prUrl?: string;
   /** Pi engine session id (see SlackSessionFile.piSessionId). */
   piSessionId?: string | null;
 }
