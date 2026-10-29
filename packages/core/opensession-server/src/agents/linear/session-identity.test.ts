@@ -10,7 +10,15 @@
  * Everything here is synthetic: the Linear API, OAuth, the worktree layer and
  * the agent runner are replaced with in-memory doubles.
  */
-import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -184,7 +192,9 @@ mock.module("./api", () => ({
 
 let validToken: string | null = "synthetic-token";
 
+const actualOauth = await import("./oauth");
 mock.module("./oauth", () => ({
+  ...actualOauth,
   getValidToken: async () => validToken,
 }));
 
@@ -400,6 +410,12 @@ afterEach(() => {
   processedSessions.clear();
   (globalThis as any).__linearEndedAgentSessions?.clear();
   delete process.env.LINEAR_START_MODE;
+});
+
+// Module mocks are process-wide in Bun's test runner: leaving them installed
+// makes a later file import the doubles instead of the real modules.
+afterAll(() => {
+  mock.restore();
 });
 
 test("automatic PR creation passes fresh repository App credentials to gh", async () => {

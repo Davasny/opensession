@@ -32,23 +32,71 @@ export interface LinearTokens {
   };
 }
 
+/** The token set the running connector is using. API calls see only a token
+ *  string, so a 401 needs this binding to know which org to refresh. */
+let boundTokens: LinearTokens | null = null;
+
+function bindTokens(tokens: LinearTokens): LinearTokens {
+  boundTokens = tokens;
+  return tokens;
+}
+
+/** One refresh per org at a time: Linear rotates refresh tokens, so a second
+ *  concurrent exchange would spend the token the first one already replaced. */
+const refreshInFlight = new Map<string, Promise<boolean>>();
+
 export async function loadTokens(): Promise<LinearTokens> {
   try {
     const file = Bun.file(TOKENS_FILE);
     if (await file.exists()) {
-      return JSON.parse(await file.text());
+      return bindTokens(JSON.parse(await file.text()));
     }
-    return {};
+    return bindTokens({});
   } catch {
-    return {};
+    return bindTokens({});
   }
 }
 
 export async function saveTokens(tokens: LinearTokens): Promise<void> {
+  bindTokens(tokens);
   writeJsonAtomic(TOKENS_FILE, tokens);
 }
 
-export async function refreshToken(
+export function refreshToken(
+  orgId: string,
+  tokens: LinearTokens,
+): Promise<boolean> {
+  bindTokens(tokens);
+  const inFlight = refreshInFlight.get(orgId);
+  if (inFlight) return inFlight;
+  const run = refreshTokenOnce(orgId, tokens).finally(() => {
+    if (refreshInFlight.get(orgId) === run) refreshInFlight.delete(orgId);
+  });
+  refreshInFlight.set(orgId, run);
+  return run;
+}
+
+/**
+ * Refresh the grant behind an access token that Linear just rejected. Used by
+ * the GraphQL helper after a 401 so a revoked token recovers without waiting
+ * for its recorded expiry. Returns the new access token, or null when the
+ * token is unknown or the exchange failed.
+ */
+export async function refreshAccessToken(
+  accessToken: string,
+): Promise<string | null> {
+  const tokens = boundTokens;
+  if (!tokens) return null;
+  const orgId = Object.keys(tokens).find(
+    (id) => tokens[id]?.accessToken === accessToken,
+  );
+  if (!orgId) return null;
+  if (!(await refreshToken(orgId, tokens))) return null;
+  const next = tokens[orgId]?.accessToken;
+  return next && next !== accessToken ? next : null;
+}
+
+async function refreshTokenOnce(
   orgId: string,
   tokens: LinearTokens,
 ): Promise<boolean> {
@@ -99,6 +147,7 @@ export async function getValidToken(
   orgId: string,
   tokens: LinearTokens,
 ): Promise<string | null> {
+  bindTokens(tokens);
   const tokenData = tokens[orgId];
   if (!tokenData) return null;
 

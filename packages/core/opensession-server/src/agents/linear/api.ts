@@ -3,6 +3,7 @@
  */
 import type { Participant } from "./session";
 import { linearGraphql } from "./graphql";
+import { refreshAccessToken } from "./oauth";
 
 export { LinearApiError } from "./graphql";
 
@@ -11,7 +12,7 @@ async function gql(
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<any> {
-  return linearGraphql(accessToken, query, variables);
+  return linearGraphql(accessToken, query, variables, refreshAccessToken);
 }
 
 /** Fetch a Linear user's details */

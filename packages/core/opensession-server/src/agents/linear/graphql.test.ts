@@ -45,6 +45,32 @@ test("retries 5xx up to the attempt budget and then returns the error body", asy
   expect(calls).toBe(3);
 });
 
+test("rotates a rejected token once and replays the request", async () => {
+  let calls = 0;
+  const seenTokens: string[] = [];
+  const refreshAccessToken = async (accessToken: string) => {
+    seenTokens.push(accessToken);
+    return "fresh-token";
+  };
+
+  globalThis.fetch = (async (_input: unknown, init: any) => {
+    calls++;
+    const auth = new Headers(init.headers).get("authorization");
+    if (calls === 1) {
+      expect(auth).toBe("Bearer stale-token");
+      return jsonResponse({}, 401);
+    }
+    expect(auth).toBe("Bearer fresh-token");
+    return jsonResponse({ data: { ok: true } });
+  }) as unknown as typeof fetch;
+
+  expect(
+    await linearGraphql("stale-token", QUERY, {}, refreshAccessToken),
+  ).toEqual({ data: { ok: true } });
+  expect(calls).toBe(2);
+  expect(seenTokens).toEqual(["stale-token"]);
+});
+
 test("a 401 without a refresh path rejects without looping", async () => {
   let calls = 0;
   globalThis.fetch = (async () => {
