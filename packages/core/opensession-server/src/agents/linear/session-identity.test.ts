@@ -273,9 +273,10 @@ function webhook(
   } as any;
 }
 
-function prompted(id: string, body = "go ahead") {
+function prompted(id: string, body = "go ahead", activityId?: string) {
   return webhook("prompted", id, {
     agentActivity: {
+      ...(activityId ? { id: activityId } : {}),
       signal: "continue",
       userId: "user-1",
       content: { type: "prompt", body },
@@ -696,6 +697,44 @@ test("a reassigned session runs while the previous session is still unwinding", 
     () => activeSessions.get(second)?.abortController === undefined,
     "second run teardown",
   );
+});
+
+test("a redelivered prompt activity does not run a second turn", async () => {
+  const id = "7b7b7b7b-7b7b-4b7b-8b7b-7b7b7b7b7b7b";
+  const key = linearSessionFileKey(id);
+  const activityId = "activity-duplicate-1";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await handleAgentSession(prompted(id, "go ahead", activityId), {});
+  await waitFor(() => runCalls.length === 1, "first prompt run");
+
+  expect(readStored(key).processedPromptIds).toContain(activityId);
+
+  const replay = await handleAgentSession(prompted(id, "go ahead", activityId), {});
+  expect(await replay.json()).toMatchObject({ duplicate: true });
+  await Bun.sleep(20);
+  expect(runCalls).toHaveLength(1);
+});
+
+test("a processed prompt stays deduplicated after a restart", async () => {
+  const id = "7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c";
+  const activityId = "activity-duplicate-2";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await handleAgentSession(prompted(id, "go ahead", activityId), {});
+  await waitFor(() => runCalls.length === 1, "first prompt run");
+
+  // Restart: the live map is gone; only the durable agent-session file and the
+  // captured activity id remain.
+  activeSessions.clear();
+  processedSessions.clear();
+
+  const replay = await handleAgentSession(prompted(id, "go ahead", activityId), {});
+  expect(await replay.json()).toMatchObject({ duplicate: true });
+  await Bun.sleep(20);
+  expect(runCalls).toHaveLength(1);
 });
 
 test("an ended session's late save and late cleanup cannot touch its replacement", async () => {

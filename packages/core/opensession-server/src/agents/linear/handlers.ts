@@ -131,6 +131,10 @@ const endedAgentSessions: Map<string, number> = ((
 ).__linearEndedAgentSessions ??= new Map<string, number>());
 const ENDED_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** Activity ids kept per session: comfortably more than Linear's retry window
+ *  without growing the session file without bound. */
+const PROCESSED_PROMPT_LIMIT = 100;
+
 function isEndedAgentSession(id: string): boolean {
   const at = endedAgentSessions.get(id);
   if (at === undefined) return false;
@@ -860,6 +864,20 @@ export async function handleAgentSession(
     }
 
     if (session) {
+      // Linear redelivers a webhook when the first delivery was not
+      // acknowledged. The transcript's stable id makes the row an upsert, but
+      // only this durable claim keeps the turn from running twice after a
+      // restart (in-memory state is gone by then).
+      const promptActivityId = webhook.agentActivity?.id;
+      if (
+        promptActivityId &&
+        session.processedPromptIds?.includes(promptActivityId)
+      ) {
+        console.log(
+          `[linear] Ignoring replayed prompt activity ${promptActivityId} for ${agentSession.id}`,
+        );
+        return Response.json({ ok: true, duplicate: true });
+      }
       if (await isLinearAssignmentStopped(agentSession.id)) {
         await clearLinearAssignmentStopped(agentSession.id);
         if (
@@ -1075,6 +1093,16 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
         void executeLinearTurn(s, accessToken, effectivePrompt, {
           promptEntry,
           onClaimed: async () => {
+            if (promptActivityId) {
+              const seen = s.processedPromptIds ?? [];
+              if (!seen.includes(promptActivityId))
+                s.processedPromptIds = [...seen, promptActivityId].slice(
+                  -PROCESSED_PROMPT_LIMIT,
+                );
+              // Persist before the turn starts: a redelivery after a restart
+              // must see this id even if the process dies mid-run.
+              await persistActiveSession(s);
+            }
             try {
               await appendLinearTranscript(
                 linearUnifiedSessionId(s.sessionKey),

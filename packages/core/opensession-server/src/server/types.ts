@@ -468,6 +468,8 @@ export interface LinearSessionFile {
     settledAt?: string;
     noticeAt?: string;
   };
+  /** Linear agent-activity ids whose prompted turn was already claimed. */
+  processedPromptIds?: string[];
   /** Pi engine session id (see SlackSessionFile.piSessionId). */
   piSessionId?: string | null;
 }

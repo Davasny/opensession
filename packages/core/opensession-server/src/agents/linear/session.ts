@@ -117,6 +117,9 @@ export interface StoredSession {
   startMode?: LinearStartMode;
   /** One automatic assignment turn, claimed before the runner starts. */
   assignmentStart?: LinearAssignmentStart;
+  /** Linear agent-activity ids whose prompted turn was already claimed. A
+   *  webhook redelivered after a restart must not run the same message twice. */
+  processedPromptIds?: string[];
   updatedAt?: string;
 }
 
@@ -330,6 +333,11 @@ function storedFromFile(
     greetingAt: raw.greetingAt ?? undefined,
     startMode: raw.startMode ?? undefined,
     assignmentStart: raw.assignmentStart ?? undefined,
+    processedPromptIds: Array.isArray(raw.processedPromptIds)
+      ? raw.processedPromptIds.filter(
+          (id: unknown): id is string => typeof id === "string",
+        )
+      : undefined,
     updatedAt: raw.updatedAt,
   };
 }
@@ -555,6 +563,7 @@ export async function persistActiveSession(
       greetingAt: session.greetingAt,
       startMode: session.startMode,
       assignmentStart: session.assignmentStart,
+      processedPromptIds: session.processedPromptIds,
     },
     live,
   );
