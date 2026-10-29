@@ -80,7 +80,7 @@ $ISSUE_DESCRIPTION
 $PARTICIPANTS_SECTION
 ---
 
-IMPORTANT: Always push your commits immediately after making them. Never leave commits unpushed.
+IMPORTANT: Always push your commits immediately after making them with \`git push -u origin HEAD\` — this worktree branch has no upstream yet, and the automatic PR step needs the branch pushed. Never leave commits unpushed.
 
 When implementation is complete and all acceptance criteria are met:
 1. Commit all changes with a descriptive message and push immediately
