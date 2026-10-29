@@ -22,7 +22,9 @@ import {
   removeWorktree,
   resolveUniqueBranch,
   sharedCheckoutForNewSessions,
+  repoForPathOrNull,
 } from "../../server/worktree";
+import { githubServiceCredentialEnv } from "../../server/github-app";
 import { rm } from "fs/promises";
 import { homeDir } from "../../server/paths";
 import {
@@ -949,6 +951,20 @@ ${participantsLine ? `\n${participantsLine}\n` : ""}
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
 
   try {
+    const repo = repoForPathOrNull(worktreeDir);
+    if (!repo?.ghRepo || repo.host === "codestorage") {
+      console.error(
+        "[linear] Cannot create PR: worktree has no registered GitHub repository",
+      );
+      return null;
+    }
+    const credentialEnv = await githubServiceCredentialEnv(repo.ghRepo);
+    if (!credentialEnv.GH_TOKEN) {
+      console.error(
+        `[linear] Cannot create PR: GitHub App credential unavailable for ${repo.ghRepo}`,
+      );
+      return null;
+    }
     const args = [
       "gh",
       "pr",
@@ -967,6 +983,7 @@ ${participantsLine ? `\n${participantsLine}\n` : ""}
       stderr: "pipe",
       env: {
         ...process.env,
+        ...credentialEnv,
         PATH: `${homeDir()}/.cargo/bin:${homeDir()}/.bun/bin:${homeDir()}/.local/bin:${homeDir()}/bin:${homeDir()}/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
         HOME: homeDir(),
       },

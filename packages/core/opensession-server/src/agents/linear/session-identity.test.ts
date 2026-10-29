@@ -10,11 +10,14 @@
  * Everything here is synthetic: the Linear API, OAuth, the worktree layer and
  * the agent runner are replaced with in-memory doubles.
  */
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const worktreeRoot = "/synthetic-worktrees";
+let prRepo: { ghRepo: string; host: string } | undefined;
+const credentialCalls: string[] = [];
+let prCredentialEnv: Record<string, string> = {};
 const createdBranches: string[] = [];
 const removedBranches: string[] = [];
 const usedBranches = new Set<string>();
@@ -42,6 +45,8 @@ let thoughtGate: Promise<void> | null = null;
 let thoughtStarted: (() => void) | null = null;
 
 mock.module("../../server/worktree", () => ({
+  repoForPathOrNull: (cwd: string) =>
+    cwd.startsWith(`${worktreeRoot}/`) ? prRepo : undefined,
   createWorktree: async (branch: string) => {
     const gate = createGate;
     createGate = null;
@@ -61,6 +66,13 @@ mock.module("../../server/worktree", () => ({
   sharedCheckoutForNewSessions: () => false,
   removeWorktree: async (branch: string) => {
     removedBranches.push(branch);
+  },
+}));
+
+mock.module("../../server/github-app", () => ({
+  githubServiceCredentialEnv: async (ghRepo: string) => {
+    credentialCalls.push(ghRepo);
+    return prCredentialEnv;
   },
 }));
 
@@ -224,6 +236,7 @@ const {
   persistActiveSession,
   saveSessionInfo,
   deleteSessionFile,
+  createPrWithAttribution,
 } = await import("./session");
 const { isLinearSessionTerminal, markLinearSessionTerminal } =
   await import("./session-store");
@@ -305,6 +318,9 @@ async function waitForAssignmentSettled(id: string) {
 }
 
 beforeEach(() => {
+  prRepo = { ghRepo: "acme/linear-repo", host: "github" };
+  credentialCalls.length = 0;
+  prCredentialEnv = { GH_TOKEN: "synthetic-installation-token" };
   activeSessions.clear();
   processedSessions.clear();
   (globalThis as any).__linearEndedAgentSessions?.clear();
@@ -342,6 +358,102 @@ afterEach(() => {
   processedSessions.clear();
   (globalThis as any).__linearEndedAgentSessions?.clear();
   delete process.env.LINEAR_START_MODE;
+});
+
+test("automatic PR creation passes fresh repository App credentials to gh", async () => {
+  const proc = Bun.spawn(
+    [
+      "/bin/sh",
+      "-c",
+      "printf 'https://github.com/acme/linear-repo/pull/42\\n'",
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const spawn = spyOn(Bun, "spawn").mockReturnValue(proc);
+  const oldToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "unrelated-host-token";
+  try {
+    prCredentialEnv = {
+      GH_TOKEN: "synthetic-installation-token",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "synthetic-helper",
+    };
+    const url = await createPrWithAttribution(
+      `${worktreeRoot}/task`,
+      "ENG-1",
+      ISSUE.url,
+      ISSUE.title,
+      [],
+      "reviewer",
+    );
+    expect(url).toBe("https://github.com/acme/linear-repo/pull/42");
+    expect(credentialCalls).toEqual(["acme/linear-repo"]);
+    expect(spawn).toHaveBeenCalledWith(
+      [
+        "gh",
+        "pr",
+        "create",
+        "--title",
+        "ENG-1: Fix the bug",
+        "--body",
+        expect.any(String),
+        "--reviewer",
+        "reviewer",
+      ],
+      expect.objectContaining({
+        cwd: `${worktreeRoot}/task`,
+        env: expect.objectContaining(prCredentialEnv),
+      }),
+    );
+  } finally {
+    spawn.mockRestore();
+    if (oldToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = oldToken;
+  }
+});
+
+test("automatic PR creation fails closed without a repository App token", async () => {
+  const spawn = spyOn(Bun, "spawn");
+  try {
+    prCredentialEnv = { GH_TOKEN: "" };
+    expect(
+      await createPrWithAttribution(
+        `${worktreeRoot}/task`,
+        "ENG-1",
+        ISSUE.url,
+        ISSUE.title,
+        [],
+      ),
+    ).toBeNull();
+    expect(credentialCalls).toEqual(["acme/linear-repo"]);
+    expect(spawn).not.toHaveBeenCalled();
+  } finally {
+    spawn.mockRestore();
+  }
+});
+
+test("automatic PR creation does not mint credentials for an unknown worktree", async () => {
+  const spawn = spyOn(Bun, "spawn");
+  try {
+    prRepo = undefined;
+    expect(
+      await createPrWithAttribution(
+        `${worktreeRoot}/task`,
+        "ENG-1",
+        ISSUE.url,
+        ISSUE.title,
+        [],
+      ),
+    ).toBeNull();
+    expect(credentialCalls).toEqual([]);
+    expect(spawn).not.toHaveBeenCalled();
+  } finally {
+    spawn.mockRestore();
+  }
 });
 
 test("reassigning the same issue/title starts a new identity, file and worktree", async () => {
