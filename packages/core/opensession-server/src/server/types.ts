@@ -452,8 +452,14 @@ export interface LinearSessionFile {
   issueUrl?: string;
   participants?: Array<{ id: string; name: string; email: string | null }>;
   lastActiveUser?: { id: string; name: string; email: string | null } | null;
+  issueCreator?: { id: string; name: string; email: string | null } | null;
   updatedAt?: string;
   model?: string;
+  workspaceId?: string;
+  repoId?: string;
+  ownsWorktree?: boolean;
+  greetingPostedAt?: string;
+  greetingAt?: string;
   /** Pi engine session id (see SlackSessionFile.piSessionId). */
   piSessionId?: string | null;
 }

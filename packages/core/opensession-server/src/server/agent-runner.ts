@@ -203,6 +203,11 @@ export interface RunAgentOpts {
    * run token so every model attempt still writes one user bubble.
    */
   promptEntryId?: string;
+  /** Display text for the prompt's user transcript row when the engine prompt
+   *  is a transformed version of what the person sent (Linear direction). */
+  promptEntryText?: string;
+  /** Timestamp for that row; keeps a replayed webhook's ordering stable. */
+  promptEntryTimestamp?: string;
   /**
    * Prior-engine transcript entries accompanying a cross-engine handoff (the
    * same entries the handoff note was built from). The pi runner seeds a

@@ -46,6 +46,7 @@
 import {
   createWorkspace,
   findWorkspaceByBranch,
+  findWorkspaceByKey,
   findWorkspaceByWorktree,
   getWorkspace,
   updateWorkspace,
@@ -186,6 +187,114 @@ function persist(sessionId: string, workspaceId: string): void {
       ),
     )
     .catch(() => {});
+}
+
+export interface WorkspaceFilingInput {
+  sessionId: string;
+  repo: string;
+  branch: string | null;
+  worktreeDir: string | null;
+  /** False for a shared checkout: never group those by worktree or branch. */
+  ownsWorktree: boolean;
+  title: string;
+  createdBy: string;
+  createdAt?: string;
+  /** Called before and inside the session link write. A session ended while
+   *  the workspace was being resolved must not get a resurrecting sidecar. */
+  isLive?: () => boolean;
+}
+
+/** One in-flight workspace resolution per worktree/branch/session. Each caller
+ *  still links its OWN session id below; only the mint/adopt work is shared. */
+const workspaceResolutions = new Map<string, Promise<Workspace>>();
+
+function filingKey(input: WorkspaceFilingInput): string {
+  if (input.ownsWorktree && input.branch)
+    return `branch:${input.repo}\0${input.branch}`;
+  if (input.ownsWorktree && input.worktreeDir)
+    return `worktree:${input.worktreeDir}`;
+  return `session:${input.sessionId}`;
+}
+
+async function resolveWorkspace(
+  input: WorkspaceFilingInput,
+): Promise<Workspace> {
+  const repo = configuredRepos()[input.repo];
+  const byWorktree =
+    input.ownsWorktree && input.worktreeDir
+      ? await findWorkspaceByWorktree(input.worktreeDir)
+      : null;
+  const byBranch =
+    !byWorktree &&
+    repo &&
+    input.ownsWorktree &&
+    input.branch &&
+    input.branch !== repo.defaultBranch
+      ? await findWorkspaceByBranch(input.repo, input.branch)
+      : null;
+  const key = `session:${input.sessionId}`;
+  return (
+    byWorktree ??
+    byBranch ??
+    (await findWorkspaceByKey(key)) ??
+    (await createWorkspace({
+      key,
+      name: input.title || input.branch || input.sessionId,
+      repo: input.repo,
+      branch: input.branch ?? undefined,
+      worktreeDir:
+        input.ownsWorktree && input.worktreeDir ? input.worktreeDir : undefined,
+      createdBy: input.createdBy,
+      createdAt: input.createdAt,
+    }))
+  );
+}
+
+async function linkSessionWorkspace(
+  input: WorkspaceFilingInput,
+  workspace: Workspace,
+): Promise<Workspace | null> {
+  if (input.isLive && !input.isLive()) return null;
+  let linkedId = workspace.id;
+  let linked = false;
+  // Lazy import: session-cache imports sessions.ts, which imports this module.
+  const { updateSessionFile } = await import("./session-cache");
+  await updateSessionFile(input.sessionId, (data) => {
+    if (input.isLive && !input.isLive()) return data;
+    if (data.workspaceId) {
+      linkedId = data.workspaceId;
+      linked = true;
+      return data;
+    }
+    linked = true;
+    return { ...data, workspaceId: workspace.id };
+  });
+  if (!linked) return null;
+  if (linkedId === workspace.id) return workspace;
+  return (await getWorkspace(linkedId)) ?? workspace;
+}
+
+/**
+ * File one session at creation time and wait for the durable link. Unlike the
+ * list-scan backfill, this does not depend on a cold rebuild or on a test-only
+ * guard, and it uses only warm workspace projections plus the serialized
+ * session metadata writer. Concurrent sessions on one branch share the
+ * resolve/mint result but each gets its own session link.
+ */
+export async function fileSessionWorkspace(
+  input: WorkspaceFilingInput,
+): Promise<Workspace | null> {
+  const key = filingKey(input);
+  let resolution = workspaceResolutions.get(key);
+  if (!resolution) {
+    resolution = resolveWorkspace(input).finally(() => {
+      if (workspaceResolutions.get(key) === resolution)
+        workspaceResolutions.delete(key);
+    });
+    workspaceResolutions.set(key, resolution);
+  }
+  const workspace = await resolution;
+  return linkSessionWorkspace(input, workspace);
 }
 
 /**

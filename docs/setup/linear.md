@@ -139,8 +139,13 @@ two agent sessions on the same issue (same generated branch) separate: their
 Open Session ids, transcripts, worktrees and external links are distinct. Ending
 a session records a terminal marker under `~/.linear-sessions/.ended/` before
 removing its file, so a webhook replay after a restart cannot start a new run
-for the ended id. On startup, Open Session restores files updated within the
-last seven days when they have a Linear session ID and either an engine session
-ID or the `awaiting_direction` phase. Older files remain on disk but are not
+for the ended id. New sessions are filed into a workspace before the greeting
+is posted, using the repository, branch and checkout that were actually created
+and the issue creator's mapped attribution. The greeting and each incoming
+direction reply are also written to the OpenSession transcript with stable ids;
+a replayed webhook updates those rows instead of duplicating them. On startup,
+Open Session restores files updated within the last seven days when they have a
+Linear session ID and either an engine session ID or the `awaiting_direction`
+phase. Older files remain on disk but are not
 restored. An interrupted background turn is not restarted automatically; a
 later prompt can continue the restored session.

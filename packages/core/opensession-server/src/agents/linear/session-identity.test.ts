@@ -21,12 +21,19 @@ const usedBranches = new Set<string>();
 const runCalls: Array<Record<string, unknown>> = [];
 const activityCalls: Array<{ sessionId: string; content: any }> = [];
 const linkCalls: Array<{ sessionId: string; urls: string[] }> = [];
+const workspaceCalls: Array<Record<string, unknown>> = [];
+const transcriptCalls: Array<{ sessionId: string; entry: any }> = [];
 let createGate: Promise<void> | null = null;
 let runGate: Promise<void> | null = null;
 let apiGate: Promise<void> | null = null;
 let apiGateStarted: (() => void) | null = null;
 let issueStatus = "Todo";
 let issueHasPlanResult = false;
+let workspaceFailures = 0;
+let transcriptFailures = 0;
+let transcriptUnavailable = false;
+let elicitationGate: Promise<void> | null = null;
+let elicitationStarted: (() => void) | null = null;
 
 mock.module("../../server/worktree", () => ({
   createWorktree: async (branch: string) => {
@@ -58,6 +65,13 @@ mock.module("./api", () => ({
     content: any,
   ) => {
     activityCalls.push({ sessionId, content });
+    if (content.type === "elicitation") {
+      const gate = elicitationGate;
+      elicitationGate = null;
+      elicitationStarted?.();
+      elicitationStarted = null;
+      if (gate) await gate;
+    }
   },
   updateAgentSession: async (
     token: string,
@@ -116,6 +130,57 @@ mock.module("../../server/agent-runner", () => ({
 // Persistence is under test; the list index / catalog projection is not.
 mock.module("../../server/session-cache", () => ({
   publishSessionChange: async () => {},
+}));
+
+mock.module("../../server/session-workspace", () => ({
+  fileSessionWorkspace: async (input: Record<string, unknown>) => {
+    workspaceCalls.push(input);
+    if (workspaceFailures > 0) {
+      workspaceFailures--;
+      throw new Error("synthetic workspace failure");
+    }
+    return {
+      id: "ws-linear-test",
+      name: String(input.title ?? "linear"),
+      repo: input.repo,
+      branch: input.branch,
+      worktreeDir: input.worktreeDir,
+      createdBy: input.createdBy,
+    };
+  },
+}));
+
+mock.module("./transcript", () => ({
+  linearGreetingEntry: (input: {
+    agentSessionId: string;
+    text: string;
+    timestamp: string;
+  }) => ({
+    id: `linear-greeting:${input.agentSessionId}`,
+    type: "assistant",
+    content: input.text,
+    timestamp: input.timestamp,
+  }),
+  linearUserEntry: (input: {
+    agentSessionId: string;
+    activityId: string | null;
+    text: string;
+    timestamp: string;
+  }) => ({
+    id: `linear-activity:${input.activityId ?? input.agentSessionId}`,
+    type: "user",
+    content: input.text,
+    timestamp: input.timestamp,
+  }),
+  appendLinearTranscript: async (sessionId: string, entry: any) => {
+    transcriptCalls.push({ sessionId, entry });
+    if (transcriptUnavailable) return null;
+    if (transcriptFailures > 0) {
+      transcriptFailures--;
+      throw new Error("synthetic transcript failure");
+    }
+    return { firstSeq: 0, lastSeq: 0, inserted: 1, updated: 0 };
+  },
 }));
 
 const { handleAgentSession, handleIssueUpdate } = await import("./handlers");
@@ -211,12 +276,19 @@ beforeEach(() => {
   runCalls.length = 0;
   activityCalls.length = 0;
   linkCalls.length = 0;
+  workspaceCalls.length = 0;
+  transcriptCalls.length = 0;
   createGate = null;
   runGate = null;
   apiGate = null;
   apiGateStarted = null;
   issueStatus = "Todo";
   issueHasPlanResult = false;
+  workspaceFailures = 0;
+  transcriptFailures = 0;
+  transcriptUnavailable = false;
+  elicitationGate = null;
+  elicitationStarted = null;
   mkdirSync(SESSION_DIR, { recursive: true });
 });
 
@@ -240,7 +312,20 @@ test("reassigning the same issue/title starts a new identity, file and worktree"
     branch: BRANCH,
     linearSessionId: first,
     worktreeDir: `${worktreeRoot}/${BRANCH}`,
+    workspaceId: "ws-linear-test",
   });
+  expect(workspaceCalls).toHaveLength(1);
+  expect(workspaceCalls[0]).toMatchObject({
+    sessionId: linearUnifiedSessionId(firstKey),
+    repo: "opensession",
+    branch: BRANCH,
+    worktreeDir: `${worktreeRoot}/${BRANCH}`,
+    ownsWorktree: true,
+    createdBy: "Ada",
+  });
+  expect(
+    transcriptCalls.filter((call) => call.entry.type === "assistant"),
+  ).toHaveLength(1);
   // The external link points at the new identity, not the branch.
   const firstUnified = linearUnifiedSessionId(firstKey);
   expect(
@@ -296,6 +381,10 @@ test("duplicate created for the same agent session is idempotent after a restart
   expect(
     activityCalls.filter((c) => c.content.type === "elicitation").length,
   ).toBe(1);
+  expect(workspaceCalls).toHaveLength(1);
+  expect(
+    transcriptCalls.filter((call) => call.entry.type === "assistant"),
+  ).toHaveLength(1);
 });
 
 test("prompted recovery refuses a branch record owned by another agent session", async () => {
@@ -375,7 +464,15 @@ test("prompted recovery by a known agent-session id uses that file and transcrip
   expect(runCalls[0]).toMatchObject({
     cwd: originalWorktree,
     transcriptSessionId: `linear-${key}`,
+    promptEntryId: `linear-activity:${id}`,
+    promptEntryText: "go ahead",
+    promptEntryTimestamp: expect.any(String),
   });
+  expect(
+    transcriptCalls.some(
+      (call) => call.entry.type === "user" && call.entry.content === "go ahead",
+    ),
+  ).toBe(true);
   expect(activeSessions.get(id)?.sessionKey).toBe(key);
 });
 
@@ -505,6 +602,97 @@ test("an end during deferred initial API setup leaves no worktree behind", async
   expect(
     activityCalls.filter((call) => call.content.type === "elicitation"),
   ).toEqual([]);
+});
+
+test("a duplicate created finishes a failed workspace/transcript setup without another run", async () => {
+  const id = "01010101-0101-4101-8101-010101010101";
+  const key = linearSessionFileKey(id);
+  workspaceFailures = 1;
+  transcriptFailures = 1;
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  expect(existsSync(storedPath(key))).toBe(true);
+  expect(readStored(key).workspaceId).toBeUndefined();
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toEqual([]);
+
+  // processedSessions elapsed; the live session may only finish setup.
+  processedSessions.delete(id);
+  const firstRetry = await handleAgentSession(webhook("created", id), {});
+  expect(firstRetry.status).toBe(503);
+  const secondRetry = await handleAgentSession(webhook("created", id), {});
+  expect(await secondRetry.json()).toMatchObject({ initialized: true });
+
+  expect(createdBranches).toEqual([BRANCH]);
+  expect(workspaceCalls).toHaveLength(2);
+  expect(readStored(key).workspaceId).toBe("ws-linear-test");
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toHaveLength(1);
+  expect(runCalls).toEqual([]);
+});
+
+test("a null transcript result keeps setup retryable", async () => {
+  const id = "03030303-0303-4303-8303-030303030303";
+  transcriptUnavailable = true;
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toEqual([]);
+
+  processedSessions.delete(id);
+  const failed = await handleAgentSession(webhook("created", id), {});
+  expect(failed.status).toBe(503);
+
+  transcriptUnavailable = false;
+  const retried = await handleAgentSession(webhook("created", id), {});
+  expect(await retried.json()).toMatchObject({ initialized: true });
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toHaveLength(1);
+});
+
+test("parallel setup retries share one greeting activity", async () => {
+  const id = "02020202-0202-4202-8202-020202020202";
+  workspaceFailures = 1;
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toEqual([]);
+
+  let release!: () => void;
+  let started!: () => void;
+  elicitationGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  elicitationStarted = started;
+
+  processedSessions.delete(id);
+  const first = handleAgentSession(webhook("created", id), {});
+  const second = handleAgentSession(webhook("created", id), {});
+  await reached;
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toHaveLength(1);
+  release();
+  await Promise.all([first, second]);
+
+  expect(
+    activityCalls.filter((call) => call.content.type === "elicitation"),
+  ).toHaveLength(1);
+  expect(
+    transcriptCalls.filter((call) => call.entry.type === "assistant"),
+  ).toHaveLength(1);
+  expect(createdBranches).toEqual([BRANCH]);
 });
 
 test("ending during a slow worktree create removes the checkout and skips the greeting", async () => {

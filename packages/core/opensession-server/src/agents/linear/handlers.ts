@@ -2,7 +2,8 @@
  * Linear agent webhook handlers for AgentSession and Issue events.
  */
 import { linearEmailToGithubUsername } from "../../server/shared/user-mappings";
-import { personaName } from "../../server/config";
+import { defaultRepo, personaName } from "../../server/config";
+import { fileSessionWorkspace } from "../../server/session-workspace";
 import {
   createAgentActivity,
   fetchLinearUser,
@@ -43,6 +44,11 @@ import {
   type ActiveSession,
 } from "./session";
 import { isLinearSessionTerminal } from "./session-store";
+import {
+  appendLinearTranscript,
+  linearGreetingEntry,
+  linearUserEntry,
+} from "./transcript";
 
 // --- Webhook types ---
 
@@ -54,6 +60,7 @@ export interface AgentSessionWebhook {
   agentSession: {
     id: string;
     status: string;
+    createdAt?: string;
     issue: {
       id: string;
       identifier: string;
@@ -64,6 +71,8 @@ export interface AgentSessionWebhook {
     comments?: Array<{ id: string; body: string }>;
   };
   agentActivity?: {
+    id?: string;
+    createdAt?: string;
     signal?: string;
     userId?: string;
     content?: { type: string; body: string };
@@ -121,6 +130,10 @@ const issueCreationChains: Map<string, Promise<unknown>> = ((
   globalThis as any
 ).__linearIssueCreationChains ??= new Map<string, Promise<unknown>>());
 
+const sessionSetupRuns: Map<string, Promise<boolean>> = ((
+  globalThis as any
+).__linearSessionSetupRuns ??= new Map<string, Promise<boolean>>());
+
 async function withIssueCreationLock<T>(
   issueId: string,
   fn: () => Promise<T>,
@@ -139,6 +152,109 @@ async function withIssueCreationLock<T>(
       issueCreationChains.delete(issueId);
     }
   }
+}
+
+function linearCreatorName(
+  creator: { name: string; email: string | null } | null,
+): string {
+  const login = linearEmailToGithubUsername(creator?.email ?? null);
+  return creator?.name || login || "Anonymous";
+}
+
+/**
+ * Finish the durable, idempotent parts of a Linear session setup: workspace
+ * filing, transcript greeting and the Linear greeting activity. One run per
+ * agent session: parallel duplicate deliveries share it, so only one can post
+ * the greeting.
+ */
+function completeLinearSessionSetup(
+  session: ActiveSession,
+  accessToken: string,
+  issue: { identifier: string; title: string },
+): Promise<boolean> {
+  const id = session.linearSessionId;
+  const inflight = sessionSetupRuns.get(id);
+  if (inflight) return inflight;
+  const run = runLinearSessionSetup(session, accessToken, issue).finally(() => {
+    if (sessionSetupRuns.get(id) === run) sessionSetupRuns.delete(id);
+  });
+  sessionSetupRuns.set(id, run);
+  return run;
+}
+
+async function runLinearSessionSetup(
+  session: ActiveSession,
+  accessToken: string,
+  issue: { identifier: string; title: string },
+): Promise<boolean> {
+  const id = session.linearSessionId;
+  const live = () => !session.ended && activeSessions.get(id) === session;
+  if (!live() || (await isLinearSessionTerminal(id))) return false;
+
+  const unifiedId = linearUnifiedSessionId(session.sessionKey);
+  const greeting = GREETING_PROMPT.replaceAll(
+    "$ISSUE_ID",
+    issue.identifier,
+  ).replaceAll("$ISSUE_TITLE", issue.title);
+  let changed = false;
+
+  if (!session.workspaceId) {
+    const workspace = await fileSessionWorkspace({
+      sessionId: unifiedId,
+      repo: session.repoId ?? defaultRepo().id,
+      branch: session.branch,
+      worktreeDir: session.worktreeDir,
+      ownsWorktree: session.ownsWorktree ?? false,
+      title: `${issue.identifier}: ${issue.title}`,
+      createdBy: linearCreatorName(session.issueCreator),
+      createdAt: session.greetingAt,
+      isLive: live,
+    });
+    if (!workspace) {
+      if (!live() || (await isLinearSessionTerminal(id))) return false;
+      throw new Error(`Workspace filing unavailable for ${id}`);
+    }
+    session.workspaceId = workspace.id;
+    changed = true;
+  }
+
+  if (!live() || (await isLinearSessionTerminal(id))) return false;
+
+  if (!session.greetingPostedAt) {
+    const appended = await appendLinearTranscript(
+      unifiedId,
+      linearGreetingEntry({
+        agentSessionId: session.linearSessionId,
+        text: greeting,
+        timestamp:
+          session.greetingAt ?? session.updatedAt ?? new Date().toISOString(),
+      }),
+    );
+    if (!appended) throw new Error(`Transcript unavailable for ${id}`);
+    if (!live() || (await isLinearSessionTerminal(id))) return false;
+    const linked = await updateAgentSession(accessToken, id, {
+      addedExternalUrls: [
+        {
+          url: opensessionSessionUrl(unifiedId),
+          label: `Open in ${personaName()}`,
+        },
+      ],
+    });
+    if (!linked) throw new Error(`External link unavailable for ${id}`);
+    if (!live() || (await isLinearSessionTerminal(id))) return false;
+    await createAgentActivity(accessToken, id, {
+      type: "elicitation",
+      body: greeting,
+    });
+    session.greetingPostedAt = new Date().toISOString();
+    changed = true;
+  }
+
+  if (changed && !(await persistActiveSession(session))) {
+    if (!live() || (await isLinearSessionTerminal(id))) return false;
+    throw new Error(`Setup state unavailable for ${id}`);
+  }
+  return changed;
 }
 
 // --- Issue status change → auto-implement ---
@@ -588,6 +704,29 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
           return Response.json({ ok: true, busy: true });
         }
         inFlightPrompts.add(issueId);
+        const activity = webhook.agentActivity;
+        const promptTimestamp = activity?.createdAt ?? new Date().toISOString();
+        const userEntry = linearUserEntry({
+          agentSessionId: agentSession.id,
+          activityId: activity?.id ?? null,
+          text: prompt,
+          timestamp: promptTimestamp,
+          sourceTimestamp: activity?.createdAt ?? null,
+          userId: activity?.userId ?? null,
+        });
+        try {
+          await appendLinearTranscript(
+            linearUnifiedSessionId(s.sessionKey),
+            userEntry,
+          );
+        } catch (e) {
+          console.error(`[linear] Failed to append prompt transcript:`, e);
+        }
+        const promptEntry = {
+          id: userEntry.id,
+          text: prompt,
+          timestamp: promptTimestamp,
+        };
         (async () => {
           try {
             const { result, claudeSessionId } = await runAgentHeadless(
@@ -597,6 +736,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
               accessToken,
               s.claudeSessionId || undefined,
               s,
+              promptEntry,
             );
 
             s.claudeSessionId = claudeSessionId;
@@ -721,6 +861,36 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
   }
 
   const sessionId = agentSession.id;
+  const liveSession = activeSessions.get(sessionId);
+  if (liveSession) {
+    // A live session owns the worktree and abort controller. A redelivery may
+    // only finish setup steps that failed earlier; it never replaces the
+    // object or starts another run.
+    if (liveSession.ready) {
+      return Response.json({ ok: true, skipped: true });
+    }
+    const liveToken = await getValidToken(organizationId, tokens);
+    if (!liveToken) {
+      return Response.json({ error: "Not authorized" }, { status: 401 });
+    }
+    let finished = false;
+    try {
+      finished = await completeLinearSessionSetup(
+        liveSession,
+        liveToken,
+        agentSession.issue,
+      );
+    } catch (e) {
+      console.error(`[linear] Failed to finish setup ${sessionId}:`, e);
+      return Response.json(
+        { error: "Setup incomplete", retryable: true },
+        { status: 503 },
+      );
+    }
+    return Response.json(
+      finished ? { ok: true, initialized: true } : { ok: true, skipped: true },
+    );
+  }
   if (processedSessions.has(sessionId)) {
     return Response.json({ ok: true, skipped: true });
   }
@@ -735,12 +905,6 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     console.log(
       `[linear] Ignoring created event for durably ended session ${sessionId}`,
     );
-    return Response.json({ ok: true, skipped: true });
-  }
-  // Never replace a live in-memory session with a disk snapshot. A delayed
-  // redelivery (after the processedSessions TTL) can land while a run is in
-  // flight; that session object owns the engine id and abort controller.
-  if (activeSessions.has(sessionId)) {
     return Response.json({ ok: true, skipped: true });
   }
   // The terminal check yielded. Re-check and claim the intake synchronously:
@@ -802,17 +966,22 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
       // Disk records have one; a legacy record that omits it still needs a
       // freshness signal before another record can be picked as newest.
       updatedAt: existing.session.updatedAt || new Date().toISOString(),
+      greetingAt: existing.session.greetingAt ?? new Date().toISOString(),
       planningConversation: [],
     };
     activeSessions.set(sessionId, reused);
-    updateAgentSession(accessToken, sessionId, {
-      addedExternalUrls: [
-        {
-          url: opensessionSessionUrl(linearUnifiedSessionId(existing.key)),
-          label: `Open in ${personaName()}`,
-        },
-      ],
-    }).catch(() => {});
+    try {
+      await completeLinearSessionSetup(reused, accessToken, issue);
+    } catch (e) {
+      console.error(
+        `[linear] Failed to finish reused setup ${existing.key}:`,
+        e,
+      );
+      return Response.json(
+        { error: "Setup incomplete", retryable: true },
+        { status: 503 },
+      );
+    }
     console.log(
       `[linear] Reused existing session ${existing.key} for agent session ${sessionId}`,
     );
@@ -858,6 +1027,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     phase: "awaiting_direction",
     ready,
     updatedAt: new Date().toISOString(),
+    greetingAt: agentSession.createdAt ?? new Date().toISOString(),
     planningConversation: [],
     participants: [],
     lastActiveUser: null,
@@ -877,6 +1047,8 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
       );
       session.branch = created.branch;
       session.worktreeDir = created.worktreeDir;
+      session.repoId = created.repoId;
+      session.ownsWorktree = created.ownsWorktree;
 
       // Ended while the worktree was being created: endLinearSession could not
       // remove a path that did not exist yet. Clean it up now, before any
@@ -906,26 +1078,13 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
       )
         return;
 
-      // Link the Linear session to the web UI session viewer
-      updateAgentSession(accessToken, sessionId, {
-        addedExternalUrls: [
-          {
-            url: opensessionSessionUrl(linearUnifiedSessionId(sessionKey)),
-            label: `Open in ${personaName()}`,
-          },
-        ],
-      }).catch(() => {});
-
-      const greeting = GREETING_PROMPT.replaceAll(
-        "$ISSUE_ID",
-        issue.identifier,
-      ).replaceAll("$ISSUE_TITLE", issue.title);
-
-      // The greeting asks for direction (plan/implement/other) → elicitation
-      await createAgentActivity(accessToken, sessionId, {
-        type: "elicitation",
-        body: greeting,
-      });
+      try {
+        await completeLinearSessionSetup(session, accessToken, issue);
+      } catch (e) {
+        // The session file and worktree are durable; a later duplicate created
+        // retries workspace/transcript/greeting without minting a second run.
+        console.error(`[linear] Failed to finish setup ${sessionId}:`, e);
+      }
     } catch (e) {
       // An ended session's setup failure is not worth an activity; cleanup ran
       // (or the created path above found no worktree to remove).

@@ -27,6 +27,7 @@ writeFileSync(
     issueIdentifier: "ENG-1",
     issueTitle: "Fix the bug",
     issueUrl: "https://linear.app/example/issue/ENG-1",
+    issueCreator: { id: "u1", name: "Ada", email: "ada@example.test" },
     updatedAt: "2026-10-01T10:00:00.000Z",
   }),
 );
@@ -34,6 +35,8 @@ writeFileSync(
   join(LINEAR_DIR, `${CURRENT_KEY}.json`),
   JSON.stringify({
     branch: `${SHARED_BRANCH}-2`,
+    repoId: "opensession",
+    workspaceId: "ws-linear-current",
     worktreeDir: "/tmp/linear-current-worktree",
     claudeSessionId: "engine-current",
     linearSessionId: CURRENT_ID,
@@ -57,6 +60,8 @@ test("old branch links and current agent-session ids resolve to their own rows",
     worktreeDir: "/tmp/linear-legacy-worktree",
     linearSessionId: LEGACY_ID,
     claudeSessionId: "engine-legacy",
+    startedBy: "Ada",
+    createdBy: "Ada",
   });
 
   const current = readAgentSessionListRow(`linear-${CURRENT_KEY}`);
@@ -64,6 +69,8 @@ test("old branch links and current agent-session ids resolve to their own rows",
     id: `linear-${CURRENT_KEY}`,
     source: "linear",
     branch: `${SHARED_BRANCH}-2`,
+    repo: "opensession",
+    workspaceId: "ws-linear-current",
     worktreeDir: "/tmp/linear-current-worktree",
     linearSessionId: CURRENT_ID,
     claudeSessionId: "engine-current",

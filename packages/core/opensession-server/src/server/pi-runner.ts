@@ -2247,9 +2247,9 @@ async function* runPiAttempt(
     // A replay must reuse the FIRST attempt's uuid: the store upserts by id,
     // so a freshly minted one would show the person's message twice.
     const userLine = transcriptLineUser(
-      prompt,
+      opts.promptEntryText ?? prompt,
       opts.promptEntryId || walk.promptEntryId,
-      undefined,
+      opts.promptEntryTimestamp,
       opts.images,
     );
     walk.promptEntryId ??= String(userLine.uuid);

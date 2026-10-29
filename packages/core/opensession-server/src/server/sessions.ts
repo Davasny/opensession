@@ -13,7 +13,10 @@ import {
   type LinearSessionSource,
   type SlackSessionSource,
 } from "./agent-session-catalog";
-import { slackIdToFirstName } from "./shared/user-mappings";
+import {
+  linearEmailToGithubUsername,
+  slackIdToFirstName,
+} from "./shared/user-mappings";
 import { isArchivedId, getArchiveReason } from "./archive";
 import { purgeDraftsForSessions } from "./drafts";
 import { removeSessionScratch } from "./session-scratch";
@@ -1056,13 +1059,16 @@ function linearSessionRowFromData(
   data: LinearSessionFile,
   fileMtime: () => string,
 ): UnifiedSession {
-  const rawName =
-    data.participants?.[0]?.name || data.lastActiveUser?.name || null;
+  const creator =
+    data.issueCreator ?? data.participants?.[0] ?? data.lastActiveUser ?? null;
+  const rawName = creator?.name || null;
+  const createdByLogin = linearEmailToGithubUsername(creator?.email ?? null);
   // Clean up email-style names (e.g. "john@example.com" → "John")
-  const startedBy = rawName?.includes("@")
+  const cleanedName = rawName?.includes("@")
     ? rawName.split("@")[0].charAt(0).toUpperCase() +
       rawName.split("@")[0].slice(1)
     : rawName;
+  const startedBy = cleanedName || createdByLogin;
 
   const branch = data.branch || fileKey;
   const title = data.issueIdentifier
@@ -1077,8 +1083,11 @@ function linearSessionRowFromData(
     claudeSessionId: data.claudeSessionId,
     source: "linear",
     branch,
+    repo: data.repoId || undefined,
+    workspaceId: data.workspaceId ?? undefined,
     worktreeDir: data.worktreeDir || null,
     createdBy: startedBy,
+    createdByLogin: createdByLogin ?? undefined,
     startedBy,
     title,
     lastActivity: data.updatedAt || fileMtime(),

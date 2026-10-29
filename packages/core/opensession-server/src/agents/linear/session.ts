@@ -91,6 +91,16 @@ export interface StoredSession {
   issueCreator: Participant | null;
   /** Model id for this session's runs (from the session file); unset = default. */
   model?: string;
+  /** Workspace link established at creation; absent means setup is incomplete. */
+  workspaceId?: string;
+  /** The repo and checkout ownership chosen when the worktree was created. */
+  repoId?: string;
+  ownsWorktree?: boolean;
+  /** Set after the Linear greeting activity landed, so a replay can finish a
+   *  failed setup without posting it twice. */
+  greetingPostedAt?: string;
+  /** Stable timestamp for the transcript greeting. */
+  greetingAt?: string;
   updatedAt?: string;
 }
 
@@ -207,9 +217,12 @@ export function generateBranchName(
  * failing on) the previous session's branch. A shared-checkout repo keeps its
  * one live checkout by design; `createRepoWorktree` returns that path.
  */
-export async function createSessionWorktree(
-  desiredBranch: string,
-): Promise<{ branch: string; worktreeDir: string; ownsWorktree: boolean }> {
+export async function createSessionWorktree(desiredBranch: string): Promise<{
+  branch: string;
+  worktreeDir: string;
+  ownsWorktree: boolean;
+  repoId: string;
+}> {
   const repo = defaultRepo();
   const shared = sharedCheckoutForNewSessions(repo);
   let branch = shared
@@ -218,7 +231,7 @@ export async function createSessionWorktree(
   try {
     const worktreeDir = await createRepoWorktree(branch, repo.id);
     console.log(`[linear] Created worktree: ${branch} at ${worktreeDir}`);
-    return { branch, worktreeDir, ownsWorktree: !shared };
+    return { branch, worktreeDir, ownsWorktree: !shared, repoId: repo.id };
   } catch (error) {
     // Two creates for the same ticket can resolve the same name. Re-resolve
     // once now that the first attempt may have registered the branch.
@@ -227,7 +240,12 @@ export async function createSessionWorktree(
     if (retry === branch) throw error;
     const worktreeDir = await createRepoWorktree(retry, repo.id);
     console.log(`[linear] Created worktree: ${retry} at ${worktreeDir}`);
-    return { branch: retry, worktreeDir, ownsWorktree: true };
+    return {
+      branch: retry,
+      worktreeDir,
+      ownsWorktree: true,
+      repoId: repo.id,
+    };
   }
 }
 
@@ -250,7 +268,6 @@ function emptyStored(branch: string): StoredSession {
     issueCreator: null,
   };
 }
-
 /**
  * Read one session file, migrating files written before `phase` replaced the
  * three booleans. `awaitingInitialDirection` was only ever written as true and
@@ -287,6 +304,12 @@ function storedFromFile(
     lastActiveUser: raw.lastActiveUser ?? null,
     issueCreator: raw.issueCreator ?? null,
     model: raw.model ?? undefined,
+    workspaceId: raw.workspaceId ?? undefined,
+    repoId: raw.repoId ?? undefined,
+    ownsWorktree:
+      typeof raw.ownsWorktree === "boolean" ? raw.ownsWorktree : undefined,
+    greetingPostedAt: raw.greetingPostedAt ?? undefined,
+    greetingAt: raw.greetingAt ?? undefined,
     updatedAt: raw.updatedAt,
   };
 }
@@ -505,6 +528,11 @@ export async function persistActiveSession(
       lastActiveUser: session.lastActiveUser,
       issueCreator: session.issueCreator,
       model: session.model,
+      workspaceId: session.workspaceId,
+      repoId: session.repoId,
+      ownsWorktree: session.ownsWorktree,
+      greetingPostedAt: session.greetingPostedAt,
+      greetingAt: session.greetingAt,
     },
     live,
   );
@@ -723,6 +751,12 @@ function makeActionStreamer(accessToken: string, linearSessionId: string) {
   };
 }
 
+export interface LinearPromptEntry {
+  id: string;
+  text: string;
+  timestamp: string;
+}
+
 // --- Headless agent runner (pi engine) ---
 
 export async function runAgentHeadless(
@@ -732,6 +766,7 @@ export async function runAgentHeadless(
   accessToken: string,
   resumeClaudeId?: string,
   session?: ActiveSession,
+  promptEntry?: LinearPromptEntry,
 ): Promise<{ result: string; claudeSessionId: string }> {
   console.log(
     `[linear] Running agent in ${worktreeDir}${resumeClaudeId ? ` (resuming ${resumeClaudeId})` : ""}`,
@@ -772,6 +807,13 @@ export async function runAgentHeadless(
       sessionId: claudeSessionId || undefined,
       cwd: worktreeDir,
       mode: "code",
+      ...(promptEntry
+        ? {
+            promptEntryId: promptEntry.id,
+            promptEntryText: promptEntry.text,
+            promptEntryTimestamp: promptEntry.timestamp,
+          }
+        : {}),
       model: toPiModel(session?.model || getDefaultModel()),
       user: actorEmail,
       author: commitAuthor,
