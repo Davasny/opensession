@@ -2,24 +2,16 @@
  * Linear GraphQL API helpers.
  */
 import type { Participant } from "./session";
-import { fetchWithTimeout } from "../../server/shared/fetch-with-timeout";
+import { linearGraphql } from "./graphql";
 
-const LINEAR_GQL = "https://api.linear.app/graphql";
+export { LinearApiError } from "./graphql";
 
 async function gql(
   accessToken: string,
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<any> {
-  const response = await fetchWithTimeout(LINEAR_GQL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  return response.json();
+  return linearGraphql(accessToken, query, variables);
 }
 
 /** Fetch a Linear user's details */
