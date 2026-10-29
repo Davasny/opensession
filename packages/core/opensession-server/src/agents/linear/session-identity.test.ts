@@ -51,6 +51,7 @@ function mockGh(
 }
 const createdBranches: string[] = [];
 const removedBranches: string[] = [];
+const removedRepoIds: Array<string | undefined> = [];
 const usedBranches = new Set<string>();
 const runCalls: Array<Record<string, unknown>> = [];
 const activityCalls: Array<{ sessionId: string; content: any }> = [];
@@ -96,8 +97,9 @@ mock.module("../../server/worktree", () => ({
     return desired;
   },
   sharedCheckoutForNewSessions: () => false,
-  removeWorktree: async (branch: string) => {
+  removeWorktree: async (branch: string, repoId?: string) => {
     removedBranches.push(branch);
+    removedRepoIds.push(repoId);
   },
 }));
 
@@ -365,6 +367,7 @@ beforeEach(() => {
   (globalThis as any).__linearEndedAgentSessions?.clear();
   createdBranches.length = 0;
   removedBranches.length = 0;
+  removedRepoIds.length = 0;
   usedBranches.clear();
   runCalls.length = 0;
   activityCalls.length = 0;
@@ -890,6 +893,24 @@ test("a processed prompt stays deduplicated after a restart", async () => {
   expect(await replay.json()).toMatchObject({ duplicate: true });
   await Bun.sleep(20);
   expect(runCalls).toHaveLength(1);
+});
+
+test("ending a session removes the checkout in its recorded repo", async () => {
+  const id = "7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f";
+  const key = linearSessionFileKey(id);
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  await saveSessionInfo(key, { repoId: "legacy-repo" });
+
+  // Restart: the in-memory session is gone; the file's repoId is the only
+  // record of which repository owns the checkout.
+  activeSessions.clear();
+  processedSessions.clear();
+
+  await handleAgentSession(webhook("ended", id), {});
+  expect(removedBranches).toEqual([BRANCH]);
+  expect(removedRepoIds).toEqual(["legacy-repo"]);
 });
 
 test("an ended session's late save and late cleanup cannot touch its replacement", async () => {

@@ -1161,7 +1161,11 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
         // Never remove a checkout another live agent session is using. New
         // assignments resolve a unique branch, so this only guards shared or
         // legacy sessions that still point at the same one.
-        await deleteWorktreeIfUnused(ended.branch, agentSession.id);
+        await deleteWorktreeIfUnused(
+          ended.branch,
+          agentSession.id,
+          ended.repoId,
+        );
       }
     } catch (e) {
       console.error(
@@ -1384,7 +1388,11 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
       // record or greeting, so a slow create cannot leak a checkout.
       const cleanupOwnCheckout = async () => {
         if (created.ownsWorktree)
-          await deleteWorktreeIfUnused(created.branch, sessionId);
+          await deleteWorktreeIfUnused(
+            created.branch,
+            sessionId,
+            created.repoId,
+          );
       };
       if (session.cleanupCreatedWorktree) {
         session.cleanupCreatedWorktree = false;

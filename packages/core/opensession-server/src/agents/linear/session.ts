@@ -582,6 +582,9 @@ export interface EndedLinearSession {
    *  its worktree is only safe behind this flag. */
   owned: boolean;
   branch: string | null;
+  /** Repository that owns the checkout, so cleanup targets it even when the
+   *  instance default repo has changed since this session was created. */
+  repoId: string | null;
   /** True when the store record was removed (or was already absent). */
   removed: boolean;
   /** True when setup had not produced a worktree yet; the created flow owns
@@ -617,11 +620,13 @@ export async function endLinearSession(
   );
   const key = active?.sessionKey ?? stored?.key;
   const branch = active?.branch ?? stored?.session.branch ?? null;
+  const repoId = active?.repoId ?? stored?.session.repoId ?? null;
   const removed = key ? await deleteSessionFile(key, linearSessionId) : false;
   activeSessions.delete(linearSessionId);
   return {
     owned: !!active || !!stored,
     branch,
+    repoId,
     removed,
     cleanupDeferred: !!active?.cleanupCreatedWorktree,
   };
@@ -631,6 +636,7 @@ export async function endLinearSession(
 export async function deleteWorktreeIfUnused(
   branch: string,
   ownerLinearSessionId: string,
+  repoId?: string | null,
 ): Promise<boolean> {
   const inUse = [...activeSessions.entries()].some(
     ([id, session]) =>
@@ -639,7 +645,7 @@ export async function deleteWorktreeIfUnused(
       session.branch === branch,
   );
   if (inUse) return false;
-  await removeWorktree(branch, defaultRepo().id);
+  await removeWorktree(branch, repoId || defaultRepo().id);
   console.log(`[linear] Deleted worktree: ${branch}`);
   return true;
 }
