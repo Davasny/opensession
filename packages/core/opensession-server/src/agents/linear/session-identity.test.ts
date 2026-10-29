@@ -656,6 +656,48 @@ test("a prompted turn with no usable token is retried instead of dropped", async
   await waitFor(() => runCalls.length === 1, "retried prompted run");
 });
 
+test("a reassigned session runs while the previous session is still unwinding", async () => {
+  const first = "79797979-7979-4979-8979-797979797979";
+  const second = "7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a";
+  let release!: () => void;
+  runGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await handleAgentSession(webhook("created", first), {});
+  await awaitReady(first);
+  await handleAgentSession(prompted(first, "first turn"), {});
+  await waitFor(() => runCalls.length === 1, "first session run");
+
+  // Dismiss+reassign while the first turn is still running. The new agent
+  // session gets its own worktree, so it must not wait on the old checkout.
+  await handleAgentSession(webhook("created", second), {});
+  await awaitReady(second);
+  expect(activeSessions.get(second)?.branch).not.toBe(
+    activeSessions.get(first)?.branch,
+  );
+
+  await handleAgentSession(prompted(second, "second turn"), {});
+  await waitFor(() => runCalls.length === 2, "reassigned session run");
+
+  expect(activityCalls).not.toContainEqual(
+    expect.objectContaining({
+      sessionId: second,
+      content: expect.objectContaining({ body: expect.stringContaining("still working") }),
+    }),
+  );
+
+  release();
+  await waitFor(
+    () => activeSessions.get(first)?.abortController === undefined,
+    "first run teardown",
+  );
+  await waitFor(
+    () => activeSessions.get(second)?.abortController === undefined,
+    "second run teardown",
+  );
+});
+
 test("an ended session's late save and late cleanup cannot touch its replacement", async () => {
   const first = "88888888-8888-4888-8888-888888888888";
   const second = "99999999-9999-4999-8999-999999999999";

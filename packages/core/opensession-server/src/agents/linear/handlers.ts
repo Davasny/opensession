@@ -105,13 +105,24 @@ export interface IssueWebhook {
   };
 }
 
-// In-flight guard for `prompted` webhooks, keyed by issue id. A redelivered or
-// concurrent prompt would otherwise spawn a second query() resuming the SAME
-// claudeSessionId in the same worktree — corrupting the turn. Parked on
-// globalThis so a hot reload doesn't lose in-flight state.
+// In-flight guard for `prompted` webhooks, keyed by the checkout a turn owns. A
+// redelivered or concurrent prompt would otherwise spawn a second query()
+// resuming the SAME claudeSessionId in the same worktree — corrupting the turn.
+// Isolated agent sessions get their own worktree, so two agent sessions on one
+// issue may run concurrently; shared-checkout sessions share a directory and
+// still serialize. Parked on globalThis so a hot reload doesn't lose in-flight
+// state.
 const inFlightPrompts: Set<string> = ((
   globalThis as any
 ).__linearInFlightPrompts ??= new Set<string>());
+
+/** The checkout a Linear turn must exclusively own, with an issue-level
+ *  fallback while setup has not produced a worktree path yet. */
+function turnLockKey(
+  session: Pick<ActiveSession, "worktreeDir" | "issueId">,
+): string {
+  return session.worktreeDir || `issue:${session.issueId}`;
+}
 
 // Agent-session ids already ended in this process. A delayed `created`
 // delivery for one of them must not mint a worktree or record after cleanup.
@@ -305,10 +316,10 @@ async function executeLinearTurn(
   prompt: string,
   options: LinearTurnOptions = {},
 ): Promise<LinearTurnResult> {
-  const issueId = session.issueId;
   const id = session.linearSessionId;
-  if (inFlightPrompts.has(issueId)) return { busy: true };
-  inFlightPrompts.add(issueId);
+  const lockKey = turnLockKey(session);
+  if (inFlightPrompts.has(lockKey)) return { busy: true };
+  inFlightPrompts.add(lockKey);
 
   const guard: LinearTurnGuard = {
     cancelled: async () =>
@@ -332,7 +343,7 @@ async function executeLinearTurn(
         prompt,
         options,
         guard,
-      ).finally(() => inFlightPrompts.delete(issueId));
+      ).finally(() => inFlightPrompts.delete(lockKey));
       return { busy: false, dispatched: true };
     }
     return await runClaimedLinearTurn(
@@ -350,7 +361,7 @@ async function executeLinearTurn(
     }).catch(() => {});
     return { busy: false, error: e };
   } finally {
-    if (!detached) inFlightPrompts.delete(issueId);
+    if (!detached) inFlightPrompts.delete(lockKey);
   }
 }
 
@@ -508,7 +519,7 @@ async function startAssignmentIfNeeded(
   if (await isLinearAssignmentStopped(session.linearSessionId))
     return "skipped";
 
-  if (inFlightPrompts.has(session.issueId)) return "busy";
+  if (inFlightPrompts.has(turnLockKey(session))) return "busy";
 
   const existing = session.assignmentStart;
   if (existing) {
@@ -1028,18 +1039,20 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
             .replaceAll("$LATEST_RESPONSE", prompt);
         }
 
-        // Run Claude in background — at most one run per issue. Check-and-set
+        // Run Claude in background — at most one run per checkout. Check-and-set
         // is synchronous, so two concurrent/redelivered prompts can't both
         // start a query() resuming the same claudeSessionId in this worktree.
+        // The key is the checkout, not the issue: a reassigned agent session
+        // gets its own worktree and may run while the previous one unwinds.
         const s = session;
-        const issueId = agentSession.issue.id;
-        if (inFlightPrompts.has(issueId)) {
+        const lockKey = turnLockKey(s);
+        if (inFlightPrompts.has(lockKey)) {
           console.log(
             `[linear] Refusing concurrent prompt for ${s.issueIdentifier} — a run is already in flight`,
           );
           await createAgentActivity(accessToken, agentSession.id, {
             type: "response",
-            body: "I'm still working on the previous message for this issue — I can only run one turn at a time. Please wait for it to finish (or send a stop signal), then prompt me again.",
+            body: "I'm still working on the previous message in this checkout — I can only run one turn at a time. Please wait for it to finish (or send a stop signal), then prompt me again.",
           }).catch(() => {});
           return Response.json({ ok: true, busy: true });
         }
