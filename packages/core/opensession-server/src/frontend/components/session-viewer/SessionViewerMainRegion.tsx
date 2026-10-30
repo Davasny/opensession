@@ -69,6 +69,7 @@ import { SchedulePromptButton } from "../SchedulePrompt";
 import { BrandMark } from "../BrandMark";
 import { UsageMeter } from "../UsageMeter";
 import { cn } from "../../ui/cn";
+import { BrowserLoading } from "../BrowserPane";
 import { composerMenuIcon, composerMenuItem } from "../../lib/composer-classes";
 import {
   IconArrowDown,
@@ -733,6 +734,13 @@ export function SessionViewerMainRegion({
           frameScope={frameScope}
           commentSessionId={session.id}
         />
+      ) : showStaging ? (
+        // The Browser tab is in front but its page is not known yet: the PR's
+        // preview is still loading. Hold the tab's place rather than show the
+        // chat under it; the tab closes itself if no preview turns up.
+        <div className={cn(VIEWER_REVIEW_MAIN, "relative")}>
+          <BrowserLoading name="Browser" />
+        </div>
       ) : showAssets ? (
         // The session's scratch assets, full-width (same component
         // the Info panel's Assets button opens). AssetsPanel is

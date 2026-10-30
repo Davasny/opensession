@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   getActiveViewTabKeys,
   type ActiveViewTab,
 } from "../lib/active-view-tab";
+import {
+  readBrowserTabUrls,
+  saveBrowserTabUrls,
+} from "../lib/browser-tab-urls";
 import { dropKeptFrame, keptFrameKey } from "../lib/kept-frames";
 import type { PortalTarget } from "../lib/portals";
 
@@ -29,8 +33,11 @@ export function useOnDemandViewTabs({
     Record<string, PortalTarget>
   >({});
   // A link opened in the Browser tab, per workspace. It takes the tab over
-  // from the PR's preview deployment until the tab closes.
-  const [browserUrls, setBrowserUrls] = useState<Record<string, string>>({});
+  // from the PR's preview deployment until the tab closes, and is saved so a
+  // reload brings the tab back with its page.
+  const [browserUrls, setBrowserUrls] =
+    useState<Record<string, string>>(readBrowserTabUrls);
+  useEffect(() => saveBrowserTabUrls(browserUrls), [browserUrls]);
   const [assetsOpen, setAssetsOpen] = useState<Set<string>>(
     () => new Set(getActiveViewTabKeys("assets")),
   );
@@ -58,9 +65,14 @@ export function useOnDemandViewTabs({
   function openBrowser(url: string) {
     if (!workspaceKey) return;
     const key = workspaceKey;
-    setBrowserUrls((prev) =>
-      prev[key] === url ? prev : { ...prev, [key]: url },
-    );
+    setBrowserUrls((prev) => {
+      if (prev[key] === url) return prev;
+      // Last is most recent, so the saved list drops the oldest first.
+      const next = { ...prev };
+      delete next[key];
+      next[key] = url;
+      return next;
+    });
     setStagingOpen((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
     setActiveViewTab("staging");
   }

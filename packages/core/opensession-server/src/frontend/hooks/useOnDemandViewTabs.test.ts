@@ -66,6 +66,9 @@ describe("on-demand view tab ownership", () => {
     );
     expect(hookSource).not.toContain("saveActiveViewTab");
     expect(hookSource).not.toContain("localStorage");
+    expect(hookSource).toContain(
+      "useState<Record<string, string>>(readBrowserTabUrls)",
+    );
   });
 
   test("falls back only when the closed tab is active", () => {
