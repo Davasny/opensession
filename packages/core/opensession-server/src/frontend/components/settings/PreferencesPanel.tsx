@@ -133,6 +133,11 @@ import {
   onServerHealthMonitorChanged,
   setServerHealthMonitorPref,
 } from "../../lib/server-health-pref";
+import {
+  getSessionContextRowPref,
+  onSessionContextRowChanged,
+  setSessionContextRowPref,
+} from "../../lib/session-context-pref";
 import { Input, Textarea } from "../../ui/input";
 import { Button } from "../../ui/button";
 import {
@@ -356,6 +361,16 @@ function DebugSection() {
       ),
     [],
   );
+  const [sessionContext, setSessionContext] = useState(
+    getSessionContextRowPref,
+  );
+  useEffect(
+    () =>
+      onSessionContextRowChanged(() =>
+        setSessionContext(getSessionContextRowPref()),
+      ),
+    [],
+  );
   const [serverHealth, setServerHealth] = useState(getServerHealthMonitorPref);
   useEffect(
     () =>
@@ -382,6 +397,17 @@ function DebugSection() {
             }
           />
         )}
+        <SettingRow
+          title="Session context"
+          desc="Show what the model received before the first message at the top of each transcript."
+          control={
+            <Switch
+              aria-label="Session context"
+              checked={sessionContext}
+              onCheckedChange={setSessionContextRowPref}
+            />
+          }
+        />
         <SettingRow
           title="Viewport readout"
           desc="Show live window, keyboard, and scroll numbers in a corner of the screen. Only this device."

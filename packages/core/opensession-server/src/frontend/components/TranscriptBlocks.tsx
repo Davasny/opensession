@@ -46,7 +46,7 @@ import {
   ShippedChangeComposer,
   type ShippedChangeComposerProps,
 } from "./ShippedChangeComposer";
-import { SessionContextMessage } from "./SessionContextMessage";
+import { SessionContextSlot } from "./SessionContextSlot";
 import {
   transcriptRangesContainPayload,
   visibleTranscriptHydrationDemand,
@@ -449,7 +449,7 @@ export const TranscriptBlocks = function TranscriptBlocks(props: Props) {
   return (
     <>
       {props.sessionId && (
-        <SessionContextMessage
+        <SessionContextSlot
           sessionId={props.sessionId}
           historyLoading={props.historyLoading}
         />

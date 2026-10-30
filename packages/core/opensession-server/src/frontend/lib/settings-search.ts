@@ -70,6 +70,7 @@ export const SETTINGS_KEYWORDS = {
     "vim mode",
     "debug",
     "agentation",
+    "session context",
     "page feedback",
     "pin new sessions",
     "tool calls",

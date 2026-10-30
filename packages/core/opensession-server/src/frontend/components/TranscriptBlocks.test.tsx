@@ -10,6 +10,24 @@ import {
 
 const { TranscriptBlocks } = await import("./TranscriptBlocks");
 
+describe("session context slot", () => {
+  test("hides the session context row unless its debug preference is on", () => {
+    const idle = renderToStaticMarkup(
+      <TranscriptBlocks entries={[]} sessionId="os-context-hidden" />,
+    );
+    expect(idle).not.toContain("data-session-context");
+    const loading = renderToStaticMarkup(
+      <TranscriptBlocks
+        entries={[]}
+        sessionId="os-context-hidden"
+        historyLoading
+      />,
+    );
+    expect(loading).toContain("Loading transcript…");
+    expect(loading).not.toContain("Loading session context");
+  });
+});
+
 const entries: TranscriptEntry[] = [
   {
     id: "merged-notice",
