@@ -389,16 +389,7 @@ describe("classifyEntry", () => {
     expect(c.content).toBe("couldn't push");
   });
 
-  it("reads a recap inline and a compaction as a title", () => {
-    expect(
-      classifyEntry(
-        entry({
-          type: "system",
-          content: "Fixed the build.",
-          noticeKind: "recap",
-        }),
-      ).notice,
-    ).toMatchObject({ kind: "recap", body: "inline" });
+  it("reads a compaction as a title", () => {
     expect(
       classifyEntry(
         entry({

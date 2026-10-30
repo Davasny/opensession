@@ -46,7 +46,7 @@ export interface StartTranscriptWatchOptions {
    * EVERY send site here, snapshot and append alike, because a store row is
    * raw — a client that reads only the classified form (the native apps read
    * `notice`/`sender` and never see `noticeKind`) would otherwise render a
-   * recap as an anonymous system chip and a teammate's routed-back answer as
+   * compaction as an anonymous system chip and a teammate's routed-back answer as
    * words the session owner typed.
    */
   prepareEntries?: (entries: SeqEntry[]) => SeqEntry[];

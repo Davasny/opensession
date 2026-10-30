@@ -7,7 +7,7 @@
  * match. It never sends. Off by default: each person opts in.
  *
  * Latency is the whole feature, so this does not use the Pi one-shot (p50
- * about 2s on Haiku, and it would queue behind titles and recaps in the shared
+ * about 2s on Haiku, and it would queue behind titles in the shared
  * one-shot pool). It is one direct, stateless Responses call to the fast
  * OpenAI tier with reasoning off, billed to the instance OpenAI key the voice
  * helpers already use. Measured at about 1s end to end. Without a key the

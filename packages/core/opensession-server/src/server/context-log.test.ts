@@ -279,7 +279,7 @@ describe("context-log: injection records are not conversation", () => {
     expect(store.readTail(sessionId, 100).entries).not.toHaveLength(0);
     expect(injections(sessionId)).toHaveLength(1);
     expect(standing(sessionId)).toHaveLength(1);
-    // …and the excerpt loader, which a recap is built over, sees none of
+    // …and the excerpt loader, which summaries are built over, sees none of
     // them: summarizing the harness's own plumbing back at the model is
     // exactly the loop these records must not join.
     const excerpt = await transcriptExcerpt(sessionId, {}, { store });

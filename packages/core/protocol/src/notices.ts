@@ -124,7 +124,6 @@ export function noticeIcon(content: string): NoticeIcon | undefined {
  *  entry — never for a per-kind rendering, which is the thing this replaces. */
 export type NoticeKind =
   | "system"
-  | "recap"
   | "compaction"
   | "worker-report"
   | "review-handoff"
@@ -167,10 +166,9 @@ export type NoticeKind =
 /**
  * How a client renders the entry's `content` underneath the title:
  *  - absent: the title IS the whole notice (short operational lines).
- *  - "inline": always shown — a recap exists to be read without a tap.
  *  - "collapsed": behind a show/hide toggle, for the long ones.
  */
-export type NoticeBody = "inline" | "collapsed";
+export type NoticeBody = "collapsed";
 
 /**
  * An interface icon for a notice that carries a state but no alarm: a merged
@@ -600,7 +598,6 @@ const PARSED_NOTICES: Record<string, Omit<EntryNotice, "tone">> = {
     kind: "compaction",
     title: "Context compacted",
   },
-  recap: { kind: "recap", title: "Recap", body: "inline" },
   "context-injection": {
     kind: "context-injection",
     title: "Injected context",

@@ -509,8 +509,6 @@ enum TranscriptGrouping {
                     items.append(.entry(entry))
                 }
             default:
-                // The server's "welcome back" recap reads as noise on a phone.
-                if entry.notice?.kind == "recap" { continue }
                 items.append(.entry(entry))
             }
         }

@@ -314,24 +314,10 @@ function harnessEntryFor(
         ]
       : [];
   }
-  // Session recap (transcriptLineRecap in pi-transcript.ts): the
-  // away-summary recap.ts writes when a viewer returns to a session whose turn
-  // finished while nobody was watching. A system entry with `recap` set, so
-  // the UI renders a "recap:" line instead of a generic system chip.
-  if (t.startsWith("<recap>")) {
-    const body = t.match(/<recap>([\s\S]*?)<\/recap>/)?.[1]?.trim();
-    return body
-      ? [
-          {
-            id,
-            type: "system",
-            content: body,
-            timestamp: ts,
-            noticeKind: "recap",
-          },
-        ]
-      : [];
-  }
+  // Retired session recap: older transcripts still hold `<recap>` lines from
+  // the away-summary feature. Drop them rather than show the marker as a
+  // user bubble.
+  if (t.startsWith("<recap>")) return [];
   // A "You should know" suggestion (transcriptLineYouShouldKnow, written by
   // you-should-know.ts): title line plus explanation, rendered as a notice
   // whose explanation sits behind the show toggle. The close tag is matched

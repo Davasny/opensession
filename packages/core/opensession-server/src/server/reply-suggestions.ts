@@ -16,7 +16,7 @@
  *   a question, and a row that appears every turn is a row nobody reads. One
  *   chip is a perfectly good answer when the question has one likely reply;
  *   two is the ceiling.
- * - **Presence gates generation**, exactly like recap.ts: a turn that ends
+ * - **Presence gates generation**: a turn that ends
  *   with someone watching generates immediately, and a turn that ends
  *   unwatched generates nothing until a viewer opens the session. Most turns
  *   here are unwatched worker/loop runs, and suggestions nobody sees are pure
@@ -24,8 +24,7 @@
  *   reach run-session's idle block (the opening turn in session-create, a
  *   detached run reattached after a restart).
  *
- * State is in-memory and restart-fresh, like run-state and recap's pending
- * marks: losing the chips costs a glance, whereas a persisted chip written
+ * State is in-memory and restart-fresh, like run-state: losing the chips costs a glance, whereas a persisted chip written
  * against a superseded turn would paste a stale instruction.
  *
  * Kill switch: OPENSESSION_REPLY_SUGGESTIONS=0.
@@ -415,7 +414,7 @@ async function generate(sessionId: string, user?: string): Promise<void> {
     // model call outright on the great majority of turns, which is both the
     // cost saving and the reason a row now means something when it appears.
     if (!endsOnAQuestion(excerpt.windows.flatMap((w) => w.entries))) return;
-    // Same inert-data framing as recap and session-index: the transcript may
+    // Same inert-data framing as session-index: the transcript may
     // contain instruction-shaped text, and it is material to read, never
     // directives to this call.
     const prompt =

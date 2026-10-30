@@ -57,7 +57,6 @@ import {
   msgReasoningBody,
   msgReasoningTitle,
   msgRow,
-  msgSystemInline,
   msgSystemRow,
   msgSystemText,
   msgSystemTone,
@@ -260,7 +259,7 @@ function AgentMessageBody({
 /**
  * The one way a transcript renders something that isn't a message.
  *
- * Operational lines go through here: runner notices, recaps, compactions,
+ * Operational lines go through here: runner notices, compactions,
  * review findings, and restart resumes. Agent correspondence renders as chat.
  * The server decides which of those an entry is (classifyEntry in the protocol's notices.ts) and hands back a
  * title, a tone, and at most one body and one action; this component is the
@@ -282,19 +281,6 @@ function NoticeRow({
   const collapsible = notice.body === "collapsed";
   const toned = notice.tone !== "info";
   const isError = notice.tone === "error";
-
-  // An inline body is a catch-up line, not a card: title, colon, prose, all
-  // on one left-aligned run so a returning reader takes it in without a tap.
-  if (notice.body === "inline") {
-    return (
-      <div className={msgSystemRow} data-eid={entry.id}>
-        <span className={cn(msgSystemInline, "text-left italic")}>
-          <span className="font-semibold not-italic">{notice.title}: </span>
-          {entry.content}
-        </span>
-      </div>
-    );
-  }
 
   return (
     <div className={msgSystemRow} data-eid={entry.id}>
