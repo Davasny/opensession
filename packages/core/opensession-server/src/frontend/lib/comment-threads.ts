@@ -4,6 +4,8 @@
  * the text a thread becomes when it is handed to the main session.
  */
 
+import { parseMentions } from "./mention-text";
+import type { Person } from "./people";
 import type { CommentThread } from "./types";
 import { requestYouShouldKnowChat } from "./you-should-know";
 
@@ -64,26 +66,54 @@ export function lastActivityAt(thread: CommentThread): number {
   return latest;
 }
 
-/** Who has seen the newest comment, oldest receipt first, never counting
- *  its author. */
-export function seenLatest(
-  thread: CommentThread,
-): { user: string; ts: number }[] {
-  const latest = thread.comments.at(-1);
-  const since = lastActivityAt(thread);
-  return (thread.seenBy ?? []).filter(
-    (s) => s.ts >= since && !(latest && sameName(s.user, latest.user)),
-  );
+/** A teammate tagged in the newest comment, and when they saw it. */
+export interface TagReceipt {
+  name: string;
+  /** ms epoch they saw the newest comment; absent until they have. */
+  seenAt?: number;
 }
 
-/** Whether `me` still owes the thread a read receipt: someone else wrote
- *  the newest comment and my receipt predates it. */
-export function needsSeenMark(thread: CommentThread, me: string): boolean {
-  if (!me.trim()) return false;
+/**
+ * Read receipts for the people the newest comment @-tags, in the order they
+ * were tagged, never its author. Nobody tagged means no receipt: the note
+ * was not addressed to anyone in particular.
+ */
+export function taggedReceipts(
+  thread: CommentThread,
+  people: Person[],
+): TagReceipt[] {
   const latest = thread.comments.at(-1);
-  if (!latest || sameName(latest.user, me)) return false;
-  const mine = thread.seenBy?.find((s) => sameName(s.user, me));
-  return !mine || mine.ts < lastActivityAt(thread);
+  if (!latest || latest.agent) return [];
+  const since = lastActivityAt(thread);
+  const out: TagReceipt[] = [];
+  for (const token of parseMentions(latest.text, people)) {
+    if (token.kind !== "mention") continue;
+    const name = token.name;
+    if (sameName(name, latest.user) || out.some((r) => sameName(r.name, name)))
+      continue;
+    const person = people.find((p) => sameName(p.name, name));
+    const seen = thread.seenBy?.find(
+      (s) =>
+        s.ts >= since &&
+        (sameName(s.user, name) ||
+          (!!person && sameName(s.user, person.fullName))),
+    );
+    out.push(seen ? { name, seenAt: seen.ts } : { name });
+  }
+  return out;
+}
+
+/** Whether `me` still owes the thread a read receipt: the newest comment
+ *  tags me and I have not seen it since. */
+export function needsSeenMark(
+  thread: CommentThread,
+  me: string,
+  people: Person[],
+): boolean {
+  if (!me.trim()) return false;
+  return taggedReceipts(thread, people).some(
+    (r) => sameName(r.name, me) && r.seenAt === undefined,
+  );
 }
 
 /** "Michiel", "Michiel and Jaap", "Michiel, Jaap and 2 others". */

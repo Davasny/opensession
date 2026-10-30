@@ -1,39 +1,54 @@
 import { describe, expect, test } from "bun:test";
-import { needsSeenMark, seenByLabel, seenLatest } from "./comment-threads";
+import { needsSeenMark, seenByLabel, taggedReceipts } from "./comment-threads";
+import type { Person } from "./people";
 import type { CommentThread } from "./types";
 
-function note(seenBy?: CommentThread["seenBy"]): CommentThread {
+const people: Person[] = [
+  { name: "Ada", fullName: "Ada Lovelace" },
+  { name: "Bob", fullName: "Bob Ross" },
+  { name: "Cy", fullName: "Cy Twombly" },
+];
+
+function note(text: string, seenBy?: CommentThread["seenBy"]): CommentThread {
   const thread: CommentThread = {
     id: "n1",
     sessionId: "os-1",
     status: "open",
     createdBy: "Ada",
     ts: 1000,
-    updatedAt: 2000,
-    comments: [
-      { id: "n1", user: "Ada", text: "Can you sign it?", ts: 1000 },
-      { id: "c2", user: "Bob", text: "On it", ts: 2000 },
-    ],
+    updatedAt: 1000,
+    comments: [{ id: "n1", user: "Ada", text, ts: 1000 }],
   };
   if (seenBy) thread.seenBy = seenBy;
   return thread;
 }
 
 describe("note read receipts", () => {
-  test("only receipts newer than the latest comment count, minus its author", () => {
-    const thread = note([
-      { user: "Cy", ts: 1500 },
-      { user: "Bob", ts: 2100 },
-      { user: "Ada", ts: 2200 },
+  test("only people tagged in the newest comment get a receipt", () => {
+    expect(taggedReceipts(note("Ship it"), people)).toEqual([]);
+    expect(taggedReceipts(note("@Ada and @nobody"), people)).toEqual([]);
+    const thread = note("@Bob @cy can you sign it? cc @Bob", [
+      { user: "Bob", ts: 1500 },
+      { user: "Cy", ts: 900 },
+      { user: "Dee", ts: 1600 },
     ]);
-    expect(seenLatest(thread).map((s) => s.user)).toEqual(["Ada"]);
+    expect(taggedReceipts(thread, people)).toEqual([
+      { name: "Bob", seenAt: 1500 },
+      { name: "Cy" },
+    ]);
   });
 
-  test("a viewer owes a receipt until theirs covers the latest comment", () => {
-    expect(needsSeenMark(note(), "Ada")).toBe(true);
-    expect(needsSeenMark(note([{ user: "ada", ts: 2000 }]), "Ada")).toBe(false);
-    expect(needsSeenMark(note(), "Bob")).toBe(false);
-    expect(needsSeenMark(note(), "")).toBe(false);
+  test("only a tagged viewer owes a receipt, until theirs is fresh", () => {
+    expect(needsSeenMark(note("@Bob look"), "Bob", people)).toBe(true);
+    expect(needsSeenMark(note("@Bob look"), "Cy", people)).toBe(false);
+    expect(needsSeenMark(note("look"), "Bob", people)).toBe(false);
+    expect(
+      needsSeenMark(
+        note("@Bob look", [{ user: "bob", ts: 1000 }]),
+        "Bob",
+        people,
+      ),
+    ).toBe(false);
   });
 
   test("names read naturally", () => {

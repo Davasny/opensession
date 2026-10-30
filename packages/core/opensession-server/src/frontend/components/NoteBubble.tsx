@@ -3,9 +3,10 @@ import { markThreadSeenApi } from "../lib/api";
 import {
   needsSeenMark,
   seenByLabel,
-  seenLatest,
   sendThreadToSession,
+  taggedReceipts,
 } from "../lib/comment-threads";
+import { usePeople } from "../lib/people";
 import { noteSurface } from "../lib/tinted-surface";
 import type { CommentThread } from "../lib/types";
 import { Button } from "../ui/button";
@@ -24,7 +25,8 @@ import { useCurrentUser } from "./UserPicker";
  *
  * It takes replies, @-mentions, an assignee and a resolve state like any
  * thread. A resolved note folds to one line so the timeline stays readable.
- * Under the comments a read receipt says who has seen the newest one.
+ * When the newest comment @-tags people, a read receipt under it says which
+ * of them have seen it.
  */
 export function NoteBubble({
   thread,
@@ -95,8 +97,8 @@ const SEEN_DWELL_MS = 1000;
 
 /**
  * Send my read receipt once the note has been on screen for a moment, in a
- * visible tab. Only when the newest comment is someone else's and my last
- * receipt predates it, so scrolling past a note I already saw costs nothing.
+ * visible tab. Only when the newest comment tags me and my last receipt
+ * predates it, so scrolling past any other note costs nothing.
  */
 function useMarkSeen(
   ref: React.RefObject<HTMLDivElement | null>,
@@ -104,7 +106,8 @@ function useMarkSeen(
   sessionId: string | undefined,
 ) {
   const me = useCurrentUser();
-  const owed = !!sessionId && needsSeenMark(thread, me);
+  const people = usePeople();
+  const owed = !!sessionId && needsSeenMark(thread, me, people);
   // One request per newest comment, even while its echo is in flight.
   const sentFor = useRef<string | null>(null);
   const latestKey = `${thread.comments.at(-1)?.id}:${thread.comments.length}`;
@@ -149,20 +152,23 @@ function useMarkSeen(
 }
 
 /**
- * The read receipt under a note: who has seen the newest comment. When that
- * comment is mine and nobody has, it says so, which is the case the receipt
- * exists for.
+ * The read receipt under a note: which of the people the newest comment tags
+ * have seen it. Faded avatars are the ones who have not yet.
  */
 function NoteSeen({ thread }: { thread: CommentThread }) {
-  const me = useCurrentUser();
-  const seen = seenLatest(thread);
-  const latest = thread.comments.at(-1);
-  if (!seen.length) {
-    if (!latest || latest.user.trim().toLowerCase() !== me.trim().toLowerCase())
-      return null;
-    return <div className="pl-7 text-meta text-faint">Not seen yet</div>;
-  }
-  const names = seen.map((s) => s.user);
+  const people = usePeople();
+  const receipts = taggedReceipts(thread, people);
+  if (!receipts.length) return null;
+  const seen = receipts
+    .filter((r) => r.seenAt !== undefined)
+    .map((r) => r.name);
+  const waiting = receipts
+    .filter((r) => r.seenAt === undefined)
+    .map((r) => r.name);
+  const parts = [
+    seen.length ? `Seen by ${seenByLabel(seen)}` : "",
+    waiting.length ? `Not seen by ${seenByLabel(waiting)}` : "",
+  ].filter(Boolean);
   return (
     <div className="pl-7">
       <Tooltip
@@ -171,9 +177,10 @@ function NoteSeen({ thread }: { thread: CommentThread }) {
         align="start"
         label={
           <span className="flex flex-col">
-            {seen.map((s) => (
-              <span key={s.user}>
-                {s.user} · {commentTime(s.ts)}
+            {receipts.map((r) => (
+              <span key={r.name}>
+                {r.name} ·{" "}
+                {r.seenAt === undefined ? "not seen" : commentTime(r.seenAt)}
               </span>
             ))}
           </span>
@@ -182,14 +189,19 @@ function NoteSeen({ thread }: { thread: CommentThread }) {
         <div
           className="flex w-fit max-w-full items-center gap-1.5 text-meta text-faint"
           tabIndex={0}
-          aria-label={`Seen by ${names.join(", ")}`}
+          aria-label={parts.join(". ")}
         >
           <span className="flex shrink-0 -space-x-1">
-            {seen.slice(0, 3).map((s) => (
-              <UserAvatar key={s.user} name={s.user} size={14} />
+            {receipts.slice(0, 3).map((r) => (
+              <span
+                key={r.name}
+                className={r.seenAt === undefined ? "opacity-40" : undefined}
+              >
+                <UserAvatar name={r.name} size={14} />
+              </span>
             ))}
           </span>
-          <span className="truncate">Seen by {seenByLabel(names)}</span>
+          <span className="truncate">{parts.join(" · ")}</span>
         </div>
       </Tooltip>
     </div>
