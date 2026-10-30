@@ -111,3 +111,16 @@ export async function askAgentInThreadApi(
     label: "Failed to ask the agent",
   });
 }
+
+/** Read receipt: `user` had the thread on screen. */
+export async function markThreadSeenApi(
+  sessionId: string,
+  threadId: string,
+  user: string,
+): Promise<CommentThread> {
+  const data = await request<{ thread: CommentThread }>(
+    threadsPath(sessionId, threadId, "seen"),
+    { method: "POST", body: { user }, label: "Failed to mark seen" },
+  );
+  return data.thread;
+}

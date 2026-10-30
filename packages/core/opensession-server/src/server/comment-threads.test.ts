@@ -4,6 +4,7 @@ import {
   applyCreateThread,
   applyDeleteComment,
   applyEditComment,
+  applyMarkSeen,
   applyUpdateThread,
   cleanAnchor,
   cleanThreads,
@@ -260,5 +261,52 @@ describe("comment thread service rules", () => {
 
   test("thread links open the session with the thread focused", () => {
     expect(threadUrl("os-1", "t 1")).toBe("/session/os-1?thread=t%201");
+  });
+});
+
+describe("read receipts", () => {
+  test("a receipt records the viewer without bumping updatedAt", () => {
+    const { threads, thread } = created();
+    const seen = applyMarkSeen(threads, thread.id, "Bob", 2000);
+    if (!seen.ok) throw new Error(seen.reason);
+    expect(seen.changed).toBe(true);
+    expect(seen.thread.seenBy).toEqual([{ user: "Bob", ts: 2000 }]);
+    expect(seen.thread.updatedAt).toBe(thread.updatedAt);
+  });
+
+  test("a second receipt for the same comment writes nothing", () => {
+    const { threads, thread } = created();
+    const first = applyMarkSeen(threads, thread.id, "Bob", 2000);
+    if (!first.ok) throw new Error(first.reason);
+    const again = applyMarkSeen(first.threads, thread.id, "bob", 3000);
+    if (!again.ok) throw new Error(again.reason);
+    expect(again.changed).toBe(false);
+    expect(again.thread.seenBy).toEqual([{ user: "Bob", ts: 2000 }]);
+  });
+
+  test("a new reply needs a fresh receipt, which replaces the old one", () => {
+    const { threads, thread } = created();
+    const first = applyMarkSeen(threads, thread.id, "Bob", 2000);
+    if (!first.ok) throw new Error(first.reason);
+    const reply = applyAddComment(first.threads, thread.id, {
+      user: "Ada",
+      text: "Ping",
+      now: 2500,
+    });
+    if (!reply.ok) throw new Error(reply.reason);
+    const again = applyMarkSeen(reply.threads, thread.id, "Bob", 3000);
+    if (!again.ok) throw new Error(again.reason);
+    expect(again.changed).toBe(true);
+    expect(again.thread.seenBy).toEqual([{ user: "Bob", ts: 3000 }]);
+  });
+
+  test("malformed receipts are dropped when the document is read", () => {
+    const { thread } = created();
+    const [clean] = cleanThreads({
+      threads: [
+        { ...thread, seenBy: [{ user: "Bob", ts: 1 }, { user: 3 }, "x"] },
+      ],
+    });
+    expect(clean!.seenBy).toEqual([{ user: "Bob", ts: 1 }]);
   });
 });

@@ -52,6 +52,47 @@ export function agentIsAnswering(
   );
 }
 
+function sameName(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/** ms epoch of the newest thing to read in a thread: a comment or an edit. */
+export function lastActivityAt(thread: CommentThread): number {
+  let latest = 0;
+  for (const c of thread.comments)
+    latest = Math.max(latest, c.editedAt ?? c.ts, c.ts);
+  return latest;
+}
+
+/** Who has seen the newest comment, oldest receipt first, never counting
+ *  its author. */
+export function seenLatest(
+  thread: CommentThread,
+): { user: string; ts: number }[] {
+  const latest = thread.comments.at(-1);
+  const since = lastActivityAt(thread);
+  return (thread.seenBy ?? []).filter(
+    (s) => s.ts >= since && !(latest && sameName(s.user, latest.user)),
+  );
+}
+
+/** Whether `me` still owes the thread a read receipt: someone else wrote
+ *  the newest comment and my receipt predates it. */
+export function needsSeenMark(thread: CommentThread, me: string): boolean {
+  if (!me.trim()) return false;
+  const latest = thread.comments.at(-1);
+  if (!latest || sameName(latest.user, me)) return false;
+  const mine = thread.seenBy?.find((s) => sameName(s.user, me));
+  return !mine || mine.ts < lastActivityAt(thread);
+}
+
+/** "Michiel", "Michiel and Jaap", "Michiel, Jaap and 2 others". */
+export function seenByLabel(names: string[]): string {
+  if (names.length <= 2) return names.join(" and ");
+  if (names.length === 3) return `${names[0]}, ${names[1]} and ${names[2]}`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} others`;
+}
+
 /** The agent's name in a thread, as the server wrote it. */
 export function threadAgentName(thread: CommentThread): string | undefined {
   return thread.comments.find((c) => c.agent)?.user;

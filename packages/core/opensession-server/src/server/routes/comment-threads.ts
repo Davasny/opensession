@@ -9,6 +9,7 @@
  *   PATCH  /api/sessions/:id/threads/:tid/comments/:cid  edit your comment
  *   DELETE /api/sessions/:id/threads/:tid/comments/:cid  delete your comment
  *   POST   /api/sessions/:id/threads/:tid/agent          ask the agent to answer
+ *   POST   /api/sessions/:id/threads/:tid/seen           read receipt
  *
  * The /notes routes are the old team-notes API, kept for clients that still
  * speak it: a note is the opening comment of a session-level thread.
@@ -30,6 +31,7 @@ import {
   createThread,
   deleteComment,
   editComment,
+  markThreadSeen,
   updateThread,
 } from "../comment-thread-service";
 import { removeStagedImages, stageInlineImages } from "../uploads";
@@ -80,13 +82,13 @@ export async function handleCommentThreadRoutes(
   const { path } = ctx;
   if (!path.startsWith("/api/sessions/")) return undefined;
   const match = path.match(
-    /^\/api\/sessions\/([^/]+)\/(threads|notes)(?:\/([^/]+))?(?:\/(comments|agent))?(?:\/([^/]+))?$/,
+    /^\/api\/sessions\/([^/]+)\/(threads|notes)(?:\/([^/]+))?(?:\/(comments|agent|seen))?(?:\/([^/]+))?$/,
   );
   if (!match) return undefined;
   const sessionId = decodeURIComponent(match[1]!);
   if (!isValidThreadSession(sessionId)) return invalidSession();
   const threadId = match[3] ? decodeURIComponent(match[3]) : undefined;
-  const sub = match[4] as "comments" | "agent" | undefined;
+  const sub = match[4] as ThreadSub | undefined;
   const commentId = match[5] ? decodeURIComponent(match[5]) : undefined;
   if (match[2] === "notes")
     return sub || commentId
@@ -95,11 +97,13 @@ export async function handleCommentThreadRoutes(
   return handleThreads(ctx, sessionId, threadId, sub, commentId);
 }
 
+type ThreadSub = "comments" | "agent" | "seen";
+
 async function handleThreads(
   ctx: RouteContext,
   sessionId: string,
   threadId: string | undefined,
-  sub: "comments" | "agent" | undefined,
+  sub: ThreadSub | undefined,
   commentId: string | undefined,
 ): Promise<Response | undefined> {
   const { req } = ctx;
@@ -176,6 +180,18 @@ async function handleThreads(
       await import("../comment-thread-agent");
     answerThreadInBackground(sessionId, threadId, user);
     return Response.json({ ok: true }, { status: 202 });
+  }
+
+  if (sub === "seen") {
+    if (req.method !== "POST" || commentId) return undefined;
+    const body = await req.json().catch(() => null);
+    const user = requestUser(ctx, body?.user);
+    if (!user)
+      return Response.json({ error: "user required" }, { status: 400 });
+    const result = await markThreadSeen(sessionId, threadId, user);
+    return result.ok
+      ? Response.json({ thread: result.thread })
+      : failure(result.reason);
   }
 
   // sub === "comments"

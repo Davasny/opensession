@@ -301,6 +301,8 @@ export interface ThreadViewProps {
   /** Called after resolve, so a host can close its card or sheet. */
   onResolved?: () => void;
   autoFocusReply?: boolean;
+  /** Shown under the comments, above the reply box (a note's read receipt). */
+  footer?: React.ReactNode;
 }
 
 /**
@@ -316,6 +318,7 @@ export function CommentThreadView({
   rootLabel,
   onResolved,
   autoFocusReply,
+  footer,
 }: ThreadViewProps) {
   const me = useCurrentUser();
   const people = usePeople();
@@ -481,6 +484,7 @@ export function CommentThreadView({
           trailing={index === 0 ? actions : undefined}
         />
       ))}
+      {footer}
       {answering && (
         <div
           className="flex items-center gap-2 text-supporting text-dim"

@@ -88,8 +88,19 @@ export interface CommentThread {
   assigneeTodoId?: string;
   /** ms epoch the agent started answering; cleared when it posts. */
   agentPendingSince?: number;
+  /** Read receipts: who opened the thread and when they last saw it. */
+  seenBy?: ThreadSeen[];
   comments: ThreadComment[];
 }
+
+export interface ThreadSeen {
+  user: string;
+  /** ms epoch they last had the thread on screen. */
+  ts: number;
+}
+
+/** Receipts kept per thread; the oldest fall off first. */
+export const MAX_SEEN = 50;
 
 export type ThreadFailure =
   | "not_found"
@@ -168,6 +179,12 @@ function isThread(value: unknown): value is CommentThread {
   );
 }
 
+function isSeen(value: unknown): value is ThreadSeen {
+  if (!value || typeof value !== "object") return false;
+  const s = value as Record<string, unknown>;
+  return typeof s.user === "string" && typeof s.ts === "number";
+}
+
 /** Parse a stored document, dropping anything malformed. */
 export function cleanThreads(value: unknown): CommentThread[] {
   const raw =
@@ -175,11 +192,21 @@ export function cleanThreads(value: unknown): CommentThread[] {
       ? (value as { threads?: unknown }).threads
       : undefined;
   if (!Array.isArray(raw)) return [];
-  return raw.filter(isThread).map((thread) => ({
-    ...thread,
-    updatedAt:
-      typeof thread.updatedAt === "number" ? thread.updatedAt : thread.ts,
-  }));
+  return raw.filter(isThread).map((thread) => {
+    const clean: CommentThread = {
+      ...thread,
+      updatedAt:
+        typeof thread.updatedAt === "number" ? thread.updatedAt : thread.ts,
+    };
+    if (thread.seenBy !== undefined) {
+      const seen = Array.isArray(thread.seenBy)
+        ? thread.seenBy.filter(isSeen)
+        : [];
+      if (seen.length) clean.seenBy = seen;
+      else delete clean.seenBy;
+    }
+    return clean;
+  });
 }
 
 function fits(threads: CommentThread[]): boolean {
@@ -382,6 +409,45 @@ export function applyUpdateThread(
     else delete next.agentPendingSince;
   }
   return replace(threads, next);
+}
+
+/** ms epoch of the newest thing to read in a thread: a comment or an edit. */
+export function lastActivityAt(thread: CommentThread): number {
+  let latest = 0;
+  for (const c of thread.comments)
+    latest = Math.max(latest, c.editedAt ?? c.ts, c.ts);
+  return latest;
+}
+
+/**
+ * Record that `user` had the thread on screen. A no-op (`changed: false`)
+ * when their receipt already covers the newest comment, so a client that
+ * reports twice writes nothing. A receipt is not activity: `updatedAt` stays,
+ * so it never reorders a thread or reads as news.
+ */
+export function applyMarkSeen(
+  threads: CommentThread[],
+  threadId: string,
+  user: string,
+  now = Date.now(),
+): ThreadResult & { changed?: boolean } {
+  const thread = threads.find((t) => t.id === threadId);
+  if (!thread) return { ok: false, reason: "not_found" };
+  const name = cleanName(user);
+  if (!name) return { ok: false, reason: "empty" };
+  const seen = thread.seenBy ?? [];
+  const mine = seen.find((s) => sameUser(s.user, name));
+  if (mine && mine.ts >= lastActivityAt(thread))
+    return { ok: true, thread, threads, changed: false };
+  const next: CommentThread = {
+    ...thread,
+    seenBy: [
+      ...seen.filter((s) => !sameUser(s.user, name)),
+      { user: name, ts: now },
+    ].slice(-MAX_SEEN),
+  };
+  const result = replace(threads, next);
+  return result.ok ? { ...result, changed: true } : result;
 }
 
 /**

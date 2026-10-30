@@ -13,6 +13,7 @@ import {
   applyCreateThread,
   applyDeleteComment,
   applyEditComment,
+  applyMarkSeen,
   applyUpdateThread,
   mutateThreads,
   sameUser,
@@ -406,4 +407,26 @@ export async function setAgentPending(
   if (!result.ok) return null;
   emit(result.thread);
   return result.thread;
+}
+
+/**
+ * A read receipt: `user` had the thread on screen. Tells only the people
+ * watching the session; a receipt never notifies anyone.
+ */
+export async function markThreadSeen(
+  sessionId: string,
+  threadId: string,
+  user: string,
+): Promise<ServiceResult> {
+  const result = await mutateThreads(sessionId, (threads) =>
+    applyMarkSeen(threads, threadId, user),
+  );
+  if (!result.ok) return result;
+  if (result.changed)
+    broadcastToSession(sessionId, {
+      type: "comment_thread",
+      sessionId,
+      thread: result.thread,
+    });
+  return { ok: true, thread: result.thread };
 }

@@ -418,6 +418,8 @@ export interface CommentThread {
   assigneeTodoId?: string;
   /** ms epoch the agent started answering in the thread. */
   agentPendingSince?: number;
+  /** Read receipts: who had the thread on screen, and when last. */
+  seenBy?: { user: string; ts: number }[];
   comments: ThreadComment[];
 }
 
