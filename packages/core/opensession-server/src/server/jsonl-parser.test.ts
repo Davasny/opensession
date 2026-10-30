@@ -169,16 +169,16 @@ describe("entriesForWire", () => {
   it("drops parser-only metadata after classifying an entry", () => {
     const [entry] = entriesForWire([
       {
-        id: "recap",
+        id: "compaction",
         type: "system",
         content: "Work completed",
         timestamp: TS,
         requestId: "provider-request-id",
-        noticeKind: "recap",
+        noticeKind: "compaction",
       },
     ]);
 
-    expect(entry.notice?.kind).toBe("recap");
+    expect(entry.notice?.kind).toBe("compaction");
     expect("requestId" in entry).toBe(false);
     expect("noticeKind" in entry).toBe(false);
   });
@@ -370,22 +370,11 @@ describe("parseTranscript", () => {
     });
   });
 
-  it("maps recap lines to system entries with the recap flag", () => {
+  it("drops retired recap lines", () => {
     const path = writeFixture([
-      userLine(
-        "rc1",
-        "<recap>We shipped the recap feature and pushed to main. Next: open a session to see it.</recap>",
-      ),
+      userLine("rc1", "<recap>We shipped it. Next: try it.</recap>"),
     ]);
-    const entries = parseTranscript(path);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      id: "sys-rc1",
-      type: "system",
-      noticeKind: "recap",
-      content:
-        "We shipped the recap feature and pushed to main. Next: open a session to see it.",
-    });
+    expect(parseTranscript(path)).toEqual([]);
   });
 
   it("returns [] for an empty file", () => {

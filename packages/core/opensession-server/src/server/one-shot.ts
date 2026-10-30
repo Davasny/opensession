@@ -1,7 +1,7 @@
 /**
  * Tool-less single-prompt helper backed by Pi.
  *
- * Callers use this for titles, branch names, classifiers, and recaps. Every
+ * Callers use this for titles, branch names, and classifiers. Every
  * call gets a throwaway Pi session with no local or MCP tools. It is fail-soft
  * by contract: any model, timeout, or provider failure returns null so each
  * caller can keep its deterministic fallback.

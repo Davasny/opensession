@@ -235,19 +235,6 @@ export function transcriptLineCompactionSummary(
   );
 }
 
-/** Session recap (away-summary): the one-liner recap.ts generates when a
- *  viewer returns to a session whose turn finished with nobody watching. Same
- *  user-role + harness-marker pattern as runner notices; the jsonl parser maps
- *  it to a system entry tagged `noticeKind: "recap"` so the UI renders a recap line
- *  instead of a user bubble. */
-export function transcriptLineRecap(
-  text: string,
-  id?: string,
-  ts?: string,
-): JsonlLine {
-  return transcriptLineUser(`<recap>${text}</recap>`, id, ts);
-}
-
 /** A "You should know" suggestion (you-should-know.ts): the tag and learn
  *  line on the first line, the explanation below. Same user-role +
  *  harness-marker pattern as the recap; the jsonl parser maps it to a system

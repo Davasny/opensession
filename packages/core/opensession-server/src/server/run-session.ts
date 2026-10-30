@@ -201,7 +201,6 @@ import {
   recordSessionPrompter,
   SESSIONS_DIR,
 } from "./session-cache";
-import { markRecapPendingIfUnwatched } from "./recap";
 import { noteYouShouldKnowStep } from "./you-should-know";
 import { scheduleSessionHistoryIndex } from "./session-index";
 import { broadcastToSession, sessionWatchers } from "./ws-hub";
@@ -4113,12 +4112,6 @@ async function runSessionPromptInner(
     // linger on "Ahead by N commits" (see autoPushSessionBranches). Only on a
     // clean finish — an errored/aborted turn may be mid-work. Fire-and-forget.
     if (!endedWithError) void autoPushSessionBranches(session);
-    // Clean finish with nobody looking → next returning viewer gets a recap
-    // system chip (recap.ts). Errored turns already land a failure chip, and
-    // a turn that published a walkthrough already summarized itself, which is
-    // what the turn's start time lets recap.ts check.
-    if (!endedWithError && (assistantText.trim() || toolUseCount > 0))
-      markRecapPendingIfUnwatched(sessionId, turnMetricStartedAt);
     // A turn that ended on a choice ("fix both, or only step 1?") offers that
     // choice as chips above the composer. Generated only for a watcher who is
     // actually there; anyone arriving later gets them on watch instead

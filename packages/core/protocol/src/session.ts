@@ -145,7 +145,7 @@ export interface TranscriptEntry {
   seq?: number;
   changeSeq?: number;
   /** What the transcript's raw form said this system entry is — set by
-   *  whoever parsed the line (a `<compaction-summary>`, a `<recap>`), read
+   *  whoever parsed the line (a `<compaction-summary>`), read
    *  only by classifyEntry, which turns it into `notice`. It exists because
    *  the marker is gone by the time an entry reaches the classifier; adding a
    *  kind must not add another boolean here. */

@@ -18,7 +18,6 @@ import {
   transcriptLineAssistantText,
   transcriptLineCompactionSummary,
   transcriptLineContextInjection,
-  transcriptLineRecap,
   transcriptLineRunnerNotice,
   transcriptLineToolResult,
   transcriptLineToolUse,
@@ -975,11 +974,6 @@ export function demoSessions(opts: {
           "demo-review-a4",
           iso(t0 + 9 * min + 100_000),
           MODEL_FABLE,
-        ),
-        transcriptLineRecap(
-          "Fixed the backwards progress bar on retry and pushed; waiting for the re-review.",
-          "demo-review-r1",
-          iso(t0 + 12 * min),
         ),
         transcriptLineUser(
           handoff(

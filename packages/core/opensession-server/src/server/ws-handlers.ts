@@ -113,7 +113,6 @@ import {
   v2TranscriptHasDrift,
 } from "./sessions";
 import { handleSlashCommand } from "./slash-commands";
-import { maybeRecapOnReturn } from "./recap";
 import {
   maybeSuggestRepliesOnReturn,
   resendReplySuggestions,
@@ -995,13 +994,10 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
           // stops showing its owner's face to everyone else.
           const presenceSuppressed = ws.data.presenceSuppressed === true;
           setClientAway(ws, presenceSuppressed || msg.away === true);
-          // Coming back to a session whose turn finished while everyone was
-          // away → drop in an away-summary system chip (recap.ts).
+          // Coming back to a session whose turn ended on a choice while nobody
+          // was here: offer it as chips (reply-suggestions.ts).
           const returnedTo = ws.data?.watchingSessionId;
           if (!presenceSuppressed && msg.away !== true && returnedTo) {
-            maybeRecapOnReturn(returnedTo, ws.data?.user || undefined);
-            // Same return: offer the finished turn's choice as chips if it
-            // ended one while nobody was here (reply-suggestions.ts).
             maybeSuggestRepliesOnReturn(returnedTo, ws.data?.user || undefined);
             maybePredictComposerOnReturn(
               returnedTo,
@@ -1068,11 +1064,9 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
             `[presence] watch user=${JSON.stringify(data.user || "Anonymous")} login=${JSON.stringify(data.authLogin || null)} session=${JSON.stringify(sessionId)} client=${JSON.stringify(data.presenceClient || "unknown")}`,
           );
 
-          // Opening a session whose last turn finished with nobody watching →
-          // drop in an away-summary system chip (recap.ts). Fire-and-forget;
-          // the recap arrives through the transcript bus like any append.
+          // Opening a session whose last turn finished with nobody watching:
+          // offer its reply chips and composer prediction. Fire-and-forget.
           if (data.presenceSuppressed !== true) {
-            maybeRecapOnReturn(sessionId, data.user || undefined);
             maybeSuggestRepliesOnReturn(sessionId, data.user || undefined);
             maybePredictComposerOnReturn(sessionId, data.user || undefined);
           }

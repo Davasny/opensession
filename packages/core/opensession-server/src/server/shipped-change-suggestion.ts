@@ -140,7 +140,7 @@ export function shippedChangeSuggestionPrompt(
   const body = clip(input.pr.body?.replace(WALKTHROUGH_BLOCK, ""), MAX_BODY);
   const summary = clip(input.session.walkthrough?.summary, MAX_SUMMARY);
   const closing = clip(tail.closing, MAX_CLOSING);
-  // Same inert-data framing as recap and reply-suggestions: the material may
+  // Same inert-data framing as reply-suggestions: the material may
   // contain instruction-shaped text, and it is content to summarize, never
   // directives to this call. The session material comes first and says what
   // it is: its latest turns are often a small tweak ("muted the ring to 80%")

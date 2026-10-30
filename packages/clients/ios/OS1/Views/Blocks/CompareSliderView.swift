@@ -2,9 +2,14 @@ import SwiftUI
 
 /// A ```compare fence: two stills as one before/after control. The before
 /// still underneath, the after still clipped to the right of a divider, and
-/// a drag or a tap anywhere moves the divider. Both stills load with the
+/// a sideways drag or a tap anywhere moves the divider. A vertical swipe that
+/// starts on the stills still scrolls the transcript, and a tall pair is
+/// capped in height so it never fills the screen. Both stills load with the
 /// session's credentials the way every transcript picture does.
 struct CompareSliderView: View {
+    /// The tallest the box gets; a portrait pair shrinks in width to fit.
+    private static let maxHeight: CGFloat = 400
+
     let spec: CompareSpec
 
     @Environment(\.transcriptSessionId) private var sessionId
@@ -91,14 +96,21 @@ struct CompareSliderView: View {
                 label("After", alignment: .topTrailing)
             }
             .contentShape(Rectangle())
+            #if os(iOS)
+            .onTapGesture(coordinateSpace: .local) { location in
+                set(location.x / max(width, 1), animated: true)
+            }
+            .gesture(HorizontalPan { x in set(x / max(width, 1), animated: false) })
+            #else
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         set(value.location.x / max(width, 1), animated: false)
                     }
             )
+            #endif
         }
-        .aspectRatio(aspectRatio(of: before), contentMode: .fit)
+        .modifier(CappedAspect(ratio: aspectRatio(of: before), maxHeight: Self.maxHeight))
         .overlay(alignment: .bottomTrailing) { expandButton(before: before, after: after) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Before and after")
@@ -178,3 +190,65 @@ struct CompareSliderView: View {
         return size.width / size.height
     }
 }
+
+/// Sizes its content to `ratio` across the offered width, unless that would
+/// be taller than `maxHeight`: then the height is capped and the width
+/// shrinks to keep the ratio. `.aspectRatio` plus `.frame(maxHeight:)` can't
+/// do this inside a scroll view, which offers no height to clamp against.
+private struct CappedAspect: ViewModifier {
+    let ratio: CGFloat
+    let maxHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        CappedAspectLayout(ratio: ratio, maxHeight: maxHeight) { content }
+    }
+
+    private struct CappedAspectLayout: Layout {
+        let ratio: CGFloat
+        let maxHeight: CGFloat
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            let width = proposal.width ?? maxHeight * ratio
+            let height = width / ratio
+            guard height > maxHeight else { return CGSize(width: width, height: height) }
+            return CGSize(width: maxHeight * ratio, height: maxHeight)
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            for subview in subviews {
+                subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+            }
+        }
+    }
+}
+
+#if os(iOS)
+/// A pan that only begins when the finger first moves sideways. A SwiftUI
+/// `DragGesture` claims every touch on the stills, so a vertical swipe that
+/// starts on a tall pair can't scroll the transcript; this one fails on a
+/// vertical start and leaves the swipe to the scroll view.
+private struct HorizontalPan: UIGestureRecognizerRepresentable {
+    let onChange: (CGFloat) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.delegate = context.coordinator
+        return pan
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        guard recognizer.state == .began || recognizer.state == .changed else { return }
+        onChange(context.converter.localLocation.x)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return true }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.x) > abs(velocity.y)
+        }
+    }
+}
+#endif

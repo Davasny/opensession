@@ -187,7 +187,7 @@ async function loadEntries(
             const seq = e.seq ?? out.length + from + 1;
             // The harness's own injection records (context-log.ts) are
             // not conversation: an excerpt exists to show what was said,
-            // and a recap built over one must not summarize plumbing.
+            // and a summary built over one must not repeat plumbing.
             if (!isContextInjection(e)) out.push({ ...e, seq });
             cursor = Math.max(cursor, seq);
           }
