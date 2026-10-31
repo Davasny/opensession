@@ -1182,11 +1182,8 @@ export async function recordRecoveredRunEvent(
     // had fallback-minted a new engine session must not leave the session
     // file pointing at the dead one.
     if (event.type === "model_switch" && event.toModel) {
-      if (
-        shouldPersistModelSwitch(event) &&
-        syncAgentSessionEngine(session, { model: event.toModel })
-      ) {
-        await publishSessionChange(session.id);
+      if (shouldPersistModelSwitch(event)) {
+        await syncAgentSessionEngine(session, { model: event.toModel });
       }
     } else if (
       (event.type === "init" || event.type === "done") &&
@@ -1194,15 +1191,12 @@ export async function recordRecoveredRunEvent(
     ) {
       const provider =
         event.provider || providerFor(event.model || session.model);
-      if (
-        syncAgentSessionEngine(
-          session,
-          provider === "pi"
-            ? { piSessionId: event.sessionId }
-            : { engineSessionId: event.sessionId },
-        )
-      )
-        await publishSessionChange(session.id);
+      await syncAgentSessionEngine(
+        session,
+        provider === "pi"
+          ? { piSessionId: event.sessionId }
+          : { engineSessionId: event.sessionId },
+      );
       if (session.worktreeDir)
         attachSessionWatchersToEngineTranscript(
           osSessionId,
@@ -3652,7 +3646,7 @@ async function runSessionPromptInner(
                 : {}),
             });
             await publishSessionChange(session.id); // new watchers must see the new transcriptPath
-          } else if (
+          } else {
             // Slack/linear-source sessions need the same persistence, into
             // the owning agent's store — otherwise a fallback/rotation-minted
             // id lives only in the run journal, the session file keeps
@@ -3661,14 +3655,12 @@ async function runSessionPromptInner(
             // 2026-07-16). Pi ids take their own patch slot: shape-ambiguous
             // in the claude slot, the next turn's run-start arm couldn't
             // tell them from a claude id and minted a fresh pi session.
-            syncAgentSessionEngine(
+            await syncAgentSessionEngine(
               session,
               effectiveProvider === "pi"
                 ? { piSessionId: finalSessionId }
                 : { engineSessionId: finalSessionId },
-            )
-          ) {
-            await publishSessionChange(session.id);
+            );
           }
           attachSessionWatchersToEngineTranscript(
             sessionId,
@@ -3725,14 +3717,11 @@ async function runSessionPromptInner(
           // chose meanwhile) every later hop is refused too, which is
           // exactly right — their choice stands.
           lastPersistedModel = to;
-        } else if (
-          persistSwitch &&
-          syncAgentSessionEngine(session, { model: to })
-        ) {
+        } else if (persistSwitch) {
           // Keep the slack/linear store's model in step so the next turn
           // (from the loop or the UI) resumes on the fallback, not the
           // exhausted model. The new engine id follows via the init event.
-          await publishSessionChange(session.id);
+          await syncAgentSessionEngine(session, { model: to });
         }
         if (persistSwitch)
           broadcastToSession(sessionId, {
@@ -3959,7 +3948,7 @@ async function runSessionPromptInner(
         : {}),
     });
   } else if (finalSessionId) {
-    syncAgentSessionEngine(
+    await syncAgentSessionEngine(
       session,
       effectiveProvider === "pi"
         ? { piSessionId: finalSessionId }

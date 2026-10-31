@@ -3,7 +3,7 @@
  */
 import {
   completeAgentSessionCatalogSources,
-  agentSessionSourceDirectory,
+  agentSessionSourceKey,
 } from "../../server/agent-session-catalog";
 import { STRIPE_CONFIRM_TOOLS } from "../../server/runner-shared";
 import { shouldPersistModelSwitch } from "../../server/run-events";
@@ -15,13 +15,18 @@ import {
   productName,
 } from "../../server/config";
 import { getDefaultModel, toPiModel } from "../../server/models";
-import { writeJsonAtomic } from "../../server/shared/atomic-write";
+import { writeJsonAtomicAsync } from "../../server/shared/atomic-write";
 import { publishSessionChange } from "../../server/session-cache";
 import {
   createWorktree as createRepoWorktree,
   removeWorktree,
+  resolveUniqueBranch,
+  sharedCheckoutForNewSessions,
+  repoForPathOrNull,
+  worktreeHeadBranch,
 } from "../../server/worktree";
-import { unlinkSync } from "fs";
+import { githubServiceCredentialEnv } from "../../server/github-app";
+import { rm } from "fs/promises";
 import { homeDir } from "../../server/paths";
 import {
   gitIdentityFor,
@@ -30,8 +35,19 @@ import {
 import { createAgentActivity } from "./api";
 import type { LinearTokens } from "./oauth";
 import { getValidToken } from "./oauth";
+import type { LinearStartMode } from "./start-mode";
+import {
+  isAgentSessionFileKey,
+  isLinearSessionTerminal,
+  linearSessionFilePath,
+  linearSessionFileKey,
+  linearSessionIdFromFileKey,
+  linearUnifiedSessionId,
+  markLinearSessionTerminal,
+  withSessionStoreWrite,
+} from "./session-store";
 
-const SESSION_DIR = agentSessionSourceDirectory("linear");
+export { linearSessionFileKey, linearUnifiedSessionId } from "./session-store";
 
 /** Sessions with no activity for this long aren't restored on startup. */
 const STALE_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -58,6 +74,15 @@ const PHASES = [
  */
 export type SessionPhase = (typeof PHASES)[number];
 
+/** Durable claim for the one automatic turn a plan/implement assignment starts. */
+export interface LinearAssignmentStart {
+  mode: Exclude<LinearStartMode, "ask">;
+  status: "pending" | "dispatched" | "completed" | "failed" | "cancelled";
+  claimedAt: string;
+  settledAt?: string;
+  noticeAt?: string;
+}
+
 /**
  * The fields kept in `<branch>.json`. Saves take a Partial of this and
  * startup hydration spreads the whole record into the live session, so every
@@ -79,15 +104,50 @@ export interface StoredSession {
   issueCreator: Participant | null;
   /** Model id for this session's runs (from the session file); unset = default. */
   model?: string;
+  /** Workspace link established at creation; absent means setup is incomplete. */
+  workspaceId?: string;
+  /** The repo and checkout ownership chosen when the worktree was created. */
+  repoId?: string;
+  ownsWorktree?: boolean;
+  /** Set after the Linear greeting activity landed, so a replay can finish a
+   *  failed setup without posting it twice. */
+  greetingPostedAt?: string;
+  /** Stable timestamp for the transcript greeting. */
+  greetingAt?: string;
+  /** Locked for this assignment so a config change cannot re-route it. */
+  startMode?: LinearStartMode;
+  /** One automatic assignment turn, claimed before the runner starts. */
+  assignmentStart?: LinearAssignmentStart;
+  /** Linear agent-activity ids whose prompted turn was already claimed. A
+   *  webhook redelivered after a restart must not run the same message twice. */
+  processedPromptIds?: string[];
+  /** The pull request this session opened. Reused by a later implementation
+   *  turn so a retry never opens a second PR. */
+  prUrl?: string;
   updatedAt?: string;
 }
 
 /** A stored session plus the parts that only exist while the process runs. */
 export interface ActiveSession extends StoredSession {
+  /** The store file this session is persisted in. Current files are keyed by
+   *  the Linear agent-session id; legacy files are keyed by branch. */
+  sessionKey: string;
   accessToken: string;
   issueDescription: string;
   teamId: string;
   abortController?: AbortController;
+  /** A `created` webhook's worktree/setup promise. Prompts arriving before the
+   *  worktree exists wait on it instead of guessing a path. */
+  ready?: Promise<void>;
+  /** Set once this exact session was ended/dismissed. A late run completion
+   *  must not revive its file or touch a replacement. */
+  ended?: boolean;
+  /** A stop signal arrived before the runner had an abort controller. */
+  stopRequested?: boolean;
+  /** Set by endLinearSession when `worktreeDir` was still empty because the
+   *  created flow was mid-setup. That flow removes the checkout once it knows
+   *  the real path; end cannot remove a path it never saw. */
+  cleanupCreatedWorktree?: boolean;
   planningConversation: Array<{
     role: "agent" | "user";
     content: string;
@@ -175,16 +235,43 @@ export function generateBranchName(
   return branch;
 }
 
-export async function createWorktree(
-  branch: string,
-  _ticketId: string,
-  _title: string,
-  _description: string,
-  _url: string,
-): Promise<string> {
-  const worktreeDir = await createRepoWorktree(branch, defaultRepo().id);
-  console.log(`[linear] Created worktree: ${branch}`);
-  return worktreeDir;
+/**
+ * Create the isolated checkout for a new Linear agent session and return the
+ * branch and path that actually exist. A reassigned issue regenerates the same
+ * branch, so an isolated repo gets a unique suffix instead of reusing (or
+ * failing on) the previous session's branch. A shared-checkout repo keeps its
+ * one live checkout by design; `createRepoWorktree` returns that path.
+ */
+export async function createSessionWorktree(desiredBranch: string): Promise<{
+  branch: string;
+  worktreeDir: string;
+  ownsWorktree: boolean;
+  repoId: string;
+}> {
+  const repo = defaultRepo();
+  const shared = sharedCheckoutForNewSessions(repo);
+  let branch = shared
+    ? desiredBranch
+    : await resolveUniqueBranch(desiredBranch, repo.id);
+  try {
+    const worktreeDir = await createRepoWorktree(branch, repo.id);
+    console.log(`[linear] Created worktree: ${branch} at ${worktreeDir}`);
+    return { branch, worktreeDir, ownsWorktree: !shared, repoId: repo.id };
+  } catch (error) {
+    // Two creates for the same ticket can resolve the same name. Re-resolve
+    // once now that the first attempt may have registered the branch.
+    if (shared) throw error;
+    const retry = await resolveUniqueBranch(branch, repo.id);
+    if (retry === branch) throw error;
+    const worktreeDir = await createRepoWorktree(retry, repo.id);
+    console.log(`[linear] Created worktree: ${retry} at ${worktreeDir}`);
+    return {
+      branch: retry,
+      worktreeDir,
+      ownsWorktree: true,
+      repoId: repo.id,
+    };
+  }
 }
 
 // --- Session persistence ---
@@ -206,7 +293,6 @@ function emptyStored(branch: string): StoredSession {
     issueCreator: null,
   };
 }
-
 /**
  * Read one session file, migrating files written before `phase` replaced the
  * three booleans. `awaitingInitialDirection` was only ever written as true and
@@ -214,7 +300,7 @@ function emptyStored(branch: string): StoredSession {
  * there is no engine session id: once a turn has run, direction was given.
  */
 function storedFromFile(
-  branch: string,
+  sessionKey: string,
   raw: Record<string, any>,
 ): StoredSession {
   const claudeSessionId = raw.claudeSessionId ?? null;
@@ -227,7 +313,10 @@ function storedFromFile(
         : "working";
 
   return {
-    branch,
+    // Current files carry the branch inside a key that is the agent-session id;
+    // legacy files are named after the branch and often omit the field.
+    branch:
+      typeof raw.branch === "string" && raw.branch ? raw.branch : sessionKey,
     claudeSessionId,
     issueIdentifier: raw.issueIdentifier ?? "",
     issueTitle: raw.issueTitle ?? "",
@@ -240,44 +329,33 @@ function storedFromFile(
     lastActiveUser: raw.lastActiveUser ?? null,
     issueCreator: raw.issueCreator ?? null,
     model: raw.model ?? undefined,
+    workspaceId: raw.workspaceId ?? undefined,
+    repoId: raw.repoId ?? undefined,
+    ownsWorktree:
+      typeof raw.ownsWorktree === "boolean" ? raw.ownsWorktree : undefined,
+    greetingPostedAt: raw.greetingPostedAt ?? undefined,
+    greetingAt: raw.greetingAt ?? undefined,
+    startMode: raw.startMode ?? undefined,
+    assignmentStart: raw.assignmentStart ?? undefined,
+    processedPromptIds: Array.isArray(raw.processedPromptIds)
+      ? raw.processedPromptIds.filter(
+          (id: unknown): id is string => typeof id === "string",
+        )
+      : undefined,
+    prUrl: typeof raw.prUrl === "string" && raw.prUrl ? raw.prUrl : undefined,
     updatedAt: raw.updatedAt,
   };
 }
 
-/**
- * Merge a patch over the stored session: named fields move, everything else
- * keeps what is on disk. A key left out (or explicitly undefined) is a
- * deliberate "keep the stored value", not a miscounted argument slot.
- */
-export async function saveSessionInfo(
-  branch: string,
-  patch: Partial<StoredSession>,
-): Promise<void> {
-  const defined = Object.fromEntries(
-    Object.entries(patch).filter(([, v]) => v !== undefined),
-  ) as Partial<StoredSession>;
-
-  const existing = await loadSessionInfo(branch);
-  const data: StoredSession = {
-    ...emptyStored(branch),
-    ...(existing || {}),
-    ...defined,
-    branch,
-    updatedAt: new Date().toISOString(),
-  };
-  writeJsonAtomic(`${SESSION_DIR}/${branch}.json`, data);
-  // The list index and the catalog projection learn this file only from a
-  // targeted publish; the gateway never lists the directory.
-  await publishSessionChange(`linear-${branch}`);
-}
-
-export async function loadSessionInfo(
-  branch: string,
+async function readStoredFile(
+  sessionKey: string,
 ): Promise<StoredSession | null> {
+  const path = linearSessionFilePath(sessionKey);
+  if (!path) return null;
   try {
-    const file = Bun.file(`${SESSION_DIR}/${branch}.json`);
+    const file = Bun.file(path);
     if (await file.exists()) {
-      return storedFromFile(branch, JSON.parse(await file.text()));
+      return storedFromFile(sessionKey, JSON.parse(await file.text()));
     }
     return null;
   } catch {
@@ -285,19 +363,319 @@ export async function loadSessionInfo(
   }
 }
 
-export async function deleteSessionFile(branch: string): Promise<void> {
-  try {
-    unlinkSync(`${SESSION_DIR}/${branch}.json`);
-    console.log(`[linear] Deleted session file: ${SESSION_DIR}/${branch}.json`);
-  } catch {
-    // File might not exist
-  }
-  await publishSessionChange(`linear-${branch}`);
+/**
+ * Merge a patch over the stored session: named fields move, everything else
+ * keeps what is on disk. A key left out (or explicitly undefined) is a
+ * deliberate "keep the stored value", not a miscounted argument slot.
+ *
+ * The file is keyed by `sessionKey` (agent-session id for current sessions,
+ * branch for legacy ones), never by `patch.branch`: two agent sessions on the
+ * same issue share a branch but must never share a file. A write that would
+ * relabel an existing file with a different agent-session id is refused, so a
+ * late run cannot take over the store record of a replacement.
+ */
+export async function saveSessionInfo(
+  sessionKey: string,
+  patch: Partial<StoredSession>,
+  isLive?: () => boolean,
+): Promise<boolean> {
+  const path = linearSessionFilePath(sessionKey);
+  if (!path) return false;
+  const defined = Object.fromEntries(
+    Object.entries(patch).filter(([, v]) => v !== undefined),
+  ) as Partial<StoredSession>;
+
+  let wrote = false;
+  await withSessionStoreWrite(path, async () => {
+    // Liveness is re-checked INSIDE the per-file write lock: an end that runs
+    // between the caller's pre-check and this queued write must win, not be
+    // undone by a late save recreating the record.
+    if (isLive && !isLive()) return;
+    const existing = await readStoredFile(sessionKey);
+    const keyOwner = linearSessionIdFromFileKey(sessionKey);
+    if (
+      keyOwner &&
+      defined.linearSessionId &&
+      defined.linearSessionId !== keyOwner
+    ) {
+      console.warn(
+        `[linear] Refusing to write agent session ${defined.linearSessionId} into ${sessionKey}`,
+      );
+      return;
+    }
+    if (
+      existing?.linearSessionId &&
+      defined.linearSessionId &&
+      existing.linearSessionId !== defined.linearSessionId
+    ) {
+      console.warn(
+        `[linear] Refusing to relabel session file ${sessionKey} from ${existing.linearSessionId} to ${defined.linearSessionId}`,
+      );
+      return;
+    }
+    const owner =
+      defined.linearSessionId ||
+      existing?.linearSessionId ||
+      keyOwner ||
+      undefined;
+    if (owner && (await isLinearSessionTerminal(owner))) {
+      console.warn(
+        `[linear] Refusing to write ended Linear session ${owner} (${sessionKey})`,
+      );
+      return;
+    }
+    const data: StoredSession = {
+      ...emptyStored(isAgentSessionFileKey(sessionKey) ? "" : sessionKey),
+      ...(existing || {}),
+      ...defined,
+      updatedAt: new Date().toISOString(),
+    };
+    if (!data.branch) data.branch = sessionKey;
+    await writeJsonAtomicAsync(path, data);
+    wrote = true;
+  });
+  if (!wrote) return false;
+  // The list index and the catalog projection learn this file only from a
+  // targeted publish; the gateway never lists the directory.
+  await publishSessionChange(linearUnifiedSessionId(sessionKey));
+  return true;
 }
 
-export function deleteWorktree(branch: string): void {
-  void removeWorktree(branch, defaultRepo().id);
+export async function loadSessionInfo(
+  sessionKey: string,
+): Promise<StoredSession | null> {
+  return readStoredFile(sessionKey);
+}
+
+export interface StoredSessionLocation {
+  /** The store file key, not the branch. */
+  key: string;
+  session: StoredSession;
+}
+
+/**
+ * The stored session an incoming Linear agent-session id may operate on.
+ * Current sessions are keyed by that id. A legacy `<branch>.json` is accepted
+ * only when its recorded `linearSessionId` matches exactly; a branch match
+ * with a different (or missing) id is the old collision and must never be
+ * adopted. An unknown id therefore starts clean instead of inheriting the
+ * previous agent session's transcript.
+ */
+export async function findStoredSessionForAgentSession(
+  linearSessionId: string,
+  branch: string,
+): Promise<StoredSessionLocation | null> {
+  let key = "";
+  try {
+    key = linearSessionFileKey(linearSessionId);
+  } catch {
+    key = "";
+  }
+  if (key) {
+    const stored = await loadSessionInfo(key);
+    if (stored?.linearSessionId === linearSessionId)
+      return { key, session: stored };
+  }
+  if (branch) {
+    const stored = await loadSessionInfo(branch);
+    if (stored?.linearSessionId === linearSessionId)
+      return { key: branch, session: stored };
+  }
+  return null;
+}
+
+/**
+ * Remove the record this agent session owns. With an expected id, a file that
+ * belongs to a different session is left alone. Returns whether the record is
+ * gone (a missing file counts as gone, since there is nothing left to revive).
+ */
+export async function deleteSessionFile(
+  sessionKey: string,
+  expectedLinearSessionId?: string,
+): Promise<boolean> {
+  const path = linearSessionFilePath(sessionKey);
+  if (!path) return false;
+  const keyOwner = linearSessionIdFromFileKey(sessionKey);
+  if (
+    expectedLinearSessionId &&
+    keyOwner &&
+    keyOwner !== expectedLinearSessionId
+  ) {
+    console.warn(
+      `[linear] Refusing to delete session file ${sessionKey}: keyed by ${keyOwner}, not ${expectedLinearSessionId}`,
+    );
+    return false;
+  }
+  let gone = false;
+  await withSessionStoreWrite(path, async () => {
+    const existing = await readStoredFile(sessionKey);
+    if (!existing) {
+      // A missing file counts as gone; an unreadable one is left for its owner
+      // rather than guessed at.
+      gone = !(await Bun.file(path).exists());
+      return;
+    }
+    if (
+      expectedLinearSessionId &&
+      existing.linearSessionId !== expectedLinearSessionId
+    ) {
+      console.warn(
+        `[linear] Refusing to delete session file ${sessionKey}: owned by ${existing.linearSessionId || "(no id)"}, not ${expectedLinearSessionId}`,
+      );
+      return;
+    }
+    await rm(path, { force: true });
+    gone = true;
+  });
+  if (gone) {
+    console.log(`[linear] Deleted session file: ${path}`);
+    await publishSessionChange(linearUnifiedSessionId(sessionKey));
+  }
+  return gone;
+}
+
+/**
+ * Persist this exact live session. False when it was ended or replaced while a
+ * run was in flight: its late completion must not recreate the record or write
+ * into the replacement's file.
+ */
+export async function persistActiveSession(
+  session: ActiveSession,
+): Promise<boolean> {
+  const live = () =>
+    !session.ended && activeSessions.get(session.linearSessionId) === session;
+  if (!live()) return false;
+  const wrote = await saveSessionInfo(
+    session.sessionKey,
+    {
+      branch: session.branch,
+      claudeSessionId: session.claudeSessionId,
+      issueIdentifier: session.issueIdentifier,
+      issueTitle: session.issueTitle,
+      worktreeDir: session.worktreeDir,
+      linearSessionId: session.linearSessionId,
+      phase: session.phase,
+      issueId: session.issueId,
+      issueUrl: session.issueUrl,
+      participants: session.participants,
+      lastActiveUser: session.lastActiveUser,
+      issueCreator: session.issueCreator,
+      model: session.model,
+      workspaceId: session.workspaceId,
+      repoId: session.repoId,
+      ownsWorktree: session.ownsWorktree,
+      greetingPostedAt: session.greetingPostedAt,
+      greetingAt: session.greetingAt,
+      startMode: session.startMode,
+      assignmentStart: session.assignmentStart,
+      processedPromptIds: session.processedPromptIds,
+      prUrl: session.prUrl,
+    },
+    live,
+  );
+  if (wrote) session.updatedAt = new Date().toISOString();
+  return wrote;
+}
+
+export interface EndedLinearSession {
+  /** True when this agent session owned a live or stored record. Cleanup of
+   *  its worktree is only safe behind this flag. */
+  owned: boolean;
+  branch: string | null;
+  /** Repository that owns the checkout, so cleanup targets it even when the
+   *  instance default repo has changed since this session was created. */
+  repoId: string | null;
+  /** True when the store record was removed (or was already absent). */
+  removed: boolean;
+  /** True when setup had not produced a worktree yet; the created flow owns
+   *  cleanup once it learns the real path. */
+  cleanupDeferred: boolean;
+}
+
+/**
+ * End one agent session without touching any other session that reused its
+ * issue or branch. The stored record is located by agent-session id, so an old
+ * session's cleanup can never delete a replacement's file.
+ */
+export async function endLinearSession(
+  linearSessionId: string,
+  generatedBranch: string,
+): Promise<EndedLinearSession> {
+  const active = activeSessions.get(linearSessionId);
+  if (active) {
+    active.ended = true;
+    if (!active.worktreeDir) active.cleanupCreatedWorktree = true;
+    if (active.abortController) {
+      active.abortController.abort();
+      active.abortController = undefined;
+    }
+  }
+  // Durable terminal state lands before the record/worktree disappear, so a
+  // webhook replay after a restart cannot resurrect this id. A failed write is
+  // an error: cleanup must not be silently reported as accepted.
+  await markLinearSessionTerminal(linearSessionId);
+  const stored = await findStoredSessionForAgentSession(
+    linearSessionId,
+    generatedBranch,
+  );
+  const key = active?.sessionKey ?? stored?.key;
+  const branch = active?.branch ?? stored?.session.branch ?? null;
+  const repoId = active?.repoId ?? stored?.session.repoId ?? null;
+  const removed = key ? await deleteSessionFile(key, linearSessionId) : false;
+  activeSessions.delete(linearSessionId);
+  return {
+    owned: !!active || !!stored,
+    branch,
+    repoId,
+    removed,
+    cleanupDeferred: !!active?.cleanupCreatedWorktree,
+  };
+}
+
+/** Remove a checkout only when no other live session moved onto its branch. */
+export async function deleteWorktreeIfUnused(
+  branch: string,
+  ownerLinearSessionId: string,
+  repoId?: string | null,
+): Promise<boolean> {
+  const inUse = [...activeSessions.entries()].some(
+    ([id, session]) =>
+      id !== ownerLinearSessionId &&
+      !session.ended &&
+      session.branch === branch,
+  );
+  if (inUse) return false;
+  await removeWorktree(branch, repoId || defaultRepo().id);
   console.log(`[linear] Deleted worktree: ${branch}`);
+  return true;
+}
+
+/**
+ * The live session to drive for an issue: newest first, terminal records
+ * excluded. `updatedAt` is maintained on every successful persist, so a new
+ * assignment is never mistaken for the previous session on the same issue.
+ */
+export function latestSessionForIssue(
+  issue: { id: string; identifier: string },
+  sessions: Iterable<ActiveSession> = activeSessions.values(),
+): ActiveSession | undefined {
+  let best: ActiveSession | undefined;
+  let bestAt = Number.NEGATIVE_INFINITY;
+  for (const session of sessions) {
+    if (session.ended) continue;
+    if (
+      session.issueId !== issue.id &&
+      session.issueIdentifier !== issue.identifier
+    )
+      continue;
+    const parsed = Date.parse(session.updatedAt || "");
+    const updatedAt = Number.isFinite(parsed) ? parsed : 0;
+    if (!best || updatedAt > bestAt) {
+      best = session;
+      bestAt = updatedAt;
+    }
+  }
+  return best;
 }
 
 // --- Action activity streaming ---
@@ -306,8 +684,8 @@ export function deleteWorktree(branch: string): void {
 export const OPENSESSION_UI_BASE =
   process.env.OPENSESSION_UI_BASE || configuredServer().publicBaseUrl;
 
-export function opensessionSessionUrl(branch: string): string {
-  return `${OPENSESSION_UI_BASE}/session/${encodeURIComponent(`linear-${branch}`)}`;
+export function opensessionSessionUrl(unifiedSessionId: string): string {
+  return `${OPENSESSION_UI_BASE}/session/${encodeURIComponent(unifiedSessionId)}`;
 }
 
 /** Compact action row for a tool call: { action: "Read", parameter: "src/foo.ts" }. */
@@ -416,6 +794,12 @@ function makeActionStreamer(accessToken: string, linearSessionId: string) {
   };
 }
 
+export interface LinearPromptEntry {
+  id: string;
+  text: string;
+  timestamp: string;
+}
+
 // --- Headless agent runner (pi engine) ---
 
 export async function runAgentHeadless(
@@ -425,6 +809,7 @@ export async function runAgentHeadless(
   accessToken: string,
   resumeClaudeId?: string,
   session?: ActiveSession,
+  promptEntry?: LinearPromptEntry,
 ): Promise<{ result: string; claudeSessionId: string }> {
   console.log(
     `[linear] Running agent in ${worktreeDir}${resumeClaudeId ? ` (resuming ${resumeClaudeId})` : ""}`,
@@ -465,6 +850,13 @@ export async function runAgentHeadless(
       sessionId: claudeSessionId || undefined,
       cwd: worktreeDir,
       mode: "code",
+      ...(promptEntry
+        ? {
+            promptEntryId: promptEntry.id,
+            promptEntryText: promptEntry.text,
+            promptEntryTimestamp: promptEntry.timestamp,
+          }
+        : {}),
       model: toPiModel(session?.model || getDefaultModel()),
       user: actorEmail,
       author: commitAuthor,
@@ -477,11 +869,13 @@ export async function runAgentHeadless(
       // session and re-drives turns from Linear events.
       journal: { kind: "linear" },
       // Transcript v2: key this run's store appends on the unified session id
-      // the UI knows this session by (sessions.ts scanLinearSessions:
-      // `linear-<branch>`). Map-only — journal/resume/run-state semantics are
-      // untouched (see RunAgentOpts.transcriptSessionId).
-      transcriptSessionId: session?.branch
-        ? `linear-${session.branch}`
+      // the UI knows this session by. That id is derived from the store file
+      // key (agent-session id for current sessions, branch for legacy files),
+      // never from the branch, which a reassigned issue reuses. Map-only —
+      // journal/resume/run-state semantics are untouched (see
+      // RunAgentOpts.transcriptSessionId).
+      transcriptSessionId: session
+        ? linearUnifiedSessionId(session.sessionKey)
         : undefined,
       // Money-moving Stripe tools need the per-call human confirmation the
       // interactive runner provides; this path has no approval card, so they
@@ -550,6 +944,40 @@ export async function runAgentHeadless(
 
 // --- PR creation ---
 
+export interface PrCreateResult {
+  url: string | null;
+  /** Short, safe explanation when no URL was produced. Fixed messages only:
+   *  gh's raw output stays in the server log, never in a Linear timeline. */
+  reason?: string;
+}
+
+/** Classify gh's failure text into a short explanation safe to show. */
+function describeGhFailure(stderr: string): string {
+  const text = stderr.toLowerCase();
+  if (text.includes("already exists"))
+    return "a pull request already exists for this branch";
+  if (
+    /not logged in|authentication|bad credentials|gh_token|http 401/.test(text)
+  )
+    return "GitHub authentication failed";
+  if (/no commits between|no commits/.test(text))
+    return "the branch has no commits to open a pull request from";
+  if (
+    /not been pushed|no upstream|does not have any commits|publish/.test(text)
+  )
+    return "the branch has not been pushed";
+  return "gh pr create failed";
+}
+
+/**
+ * Open (or recover) the pull request for this session's checkout.
+ *
+ * Idempotent by construction: an open PR for the worktree's actual head branch
+ * is returned as-is, and a create that exits non-zero is checked against
+ * GitHub before being reported as a failure (gh creates the PR first and can
+ * fail afterwards on a reviewer request). A reviewer request failure is
+ * logged but never hides an already-created PR.
+ */
 export async function createPrWithAttribution(
   worktreeDir: string,
   issueIdentifier: string,
@@ -557,7 +985,7 @@ export async function createPrWithAttribution(
   issueTitle: string,
   participants: Participant[],
   reviewer?: string | null,
-): Promise<string | null> {
+): Promise<PrCreateResult> {
   let participantsLine = "";
   if (participants.length > 0) {
     const names = participants.map((p) => p.name).join(", ");
@@ -577,8 +1005,87 @@ ${participantsLine ? `\n${participantsLine}\n` : ""}
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
 
+  // The agent can switch branches inside its worktree, and gh targets HEAD:
+  // look up the branch that actually exists, not the session's original claim.
+  const branch = worktreeHeadBranch(worktreeDir);
+
   try {
-    const args = [
+    const repo = repoForPathOrNull(worktreeDir);
+    if (!repo?.ghRepo || repo.host === "codestorage") {
+      console.error(
+        "[linear] Cannot create PR: worktree has no registered GitHub repository",
+      );
+      return {
+        url: null,
+        reason: "this workspace has no registered GitHub repository",
+      };
+    }
+    const credentialEnv = await githubServiceCredentialEnv(repo.ghRepo);
+    if (!credentialEnv.GH_TOKEN) {
+      console.error(
+        `[linear] Cannot create PR: GitHub App credential unavailable for ${repo.ghRepo}`,
+      );
+      return {
+        url: null,
+        reason: `GitHub credentials are unavailable for ${repo.ghRepo}`,
+      };
+    }
+
+    const runGh = async (args: string[]) => {
+      const proc = Bun.spawn(args, {
+        cwd: worktreeDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          ...credentialEnv,
+          // Never let an interactive prompt wedge an unattended turn.
+          GH_PROMPT_DISABLED: "1",
+          PATH: `${homeDir()}/.cargo/bin:${homeDir()}/.bun/bin:${homeDir()}/.local/bin:${homeDir()}/bin:${homeDir()}/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+          HOME: homeDir(),
+        },
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { stdout, stderr, exitCode };
+    };
+
+    const findOpenPr = async (): Promise<string | null> => {
+      if (!branch) return null;
+      const result = await runGh([
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        repo.ghRepo,
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "url",
+        "--limit",
+        "1",
+      ]);
+      if (result.exitCode !== 0) return null;
+      try {
+        const rows = JSON.parse(result.stdout);
+        if (Array.isArray(rows) && typeof rows[0]?.url === "string")
+          return rows[0].url;
+      } catch {}
+      return null;
+    };
+
+    const existing = await findOpenPr();
+    if (existing) {
+      console.log(`[linear] Reusing existing PR for ${branch}: ${existing}`);
+      return { url: existing };
+    }
+
+    const created = await runGh([
       "gh",
       "pr",
       "create",
@@ -586,35 +1093,53 @@ ${participantsLine ? `\n${participantsLine}\n` : ""}
       `${issueIdentifier}: ${issueTitle}`,
       "--body",
       prBody,
-    ];
+    ]);
+    if (created.exitCode !== 0) {
+      // gh may have opened the PR and then failed on a later step (reviewer
+      // request, network). Ask GitHub before reporting a failure.
+      const recovered = await findOpenPr();
+      if (recovered) {
+        console.log(
+          `[linear] Recovered PR after gh failure for ${branch}: ${recovered}`,
+        );
+        return { url: recovered };
+      }
+      console.error(`[linear] Failed to create PR: ${created.stderr}`);
+      return { url: null, reason: describeGhFailure(created.stderr) };
+    }
+
+    const urlMatch = created.stdout.match(/https:\/\/github\.com\/[^\s]+/);
+    const url = urlMatch ? urlMatch[0] : created.stdout.trim();
+    if (!url) {
+      console.error("[linear] gh pr create returned no pull request URL");
+      return {
+        url: null,
+        reason: "gh did not return a pull request URL",
+      };
+    }
+
     if (reviewer) {
-      args.push("--reviewer", reviewer);
-    }
-    const proc = Bun.spawn(args, {
-      cwd: worktreeDir,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {
-        ...process.env,
-        PATH: `${homeDir()}/.cargo/bin:${homeDir()}/.bun/bin:${homeDir()}/.local/bin:${homeDir()}/bin:${homeDir()}/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
-        HOME: homeDir(),
-      },
-    });
-
-    const output = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
-
-    if (exitCode !== 0) {
-      console.error(`[linear] Failed to create PR: ${stderr}`);
-      return null;
+      // Requesting a reviewer is secondary: a rejected login or a transient
+      // GitHub error must not turn a created PR into a reported failure.
+      const added = await runGh([
+        "gh",
+        "pr",
+        "edit",
+        url,
+        "--add-reviewer",
+        reviewer,
+      ]);
+      if (added.exitCode !== 0) {
+        console.warn(
+          `[linear] Created ${url} but could not request reviewer ${reviewer}: ${added.stderr.trim().slice(0, 200)}`,
+        );
+      }
     }
 
-    const urlMatch = output.match(/https:\/\/github\.com\/[^\s]+/);
-    return urlMatch ? urlMatch[0] : output.trim();
+    return { url };
   } catch (e) {
     console.error(`[linear] Error creating PR: ${e}`);
-    return null;
+    return { url: null, reason: "the pull request command failed" };
   }
 }
 
@@ -637,13 +1162,14 @@ export async function loadActiveSessionsOnStartup(
     let skippedStale = 0;
     for (const { file, data } of sources) {
       try {
-        const branch = file.replace(".json", "");
-        const stored = storedFromFile(branch, data);
+        const sessionKey = agentSessionSourceKey(file);
+        const stored = storedFromFile(sessionKey, data);
 
         if (
           stored &&
           stored.linearSessionId &&
-          (stored.claudeSessionId || stored.phase === "awaiting_direction")
+          (stored.claudeSessionId || stored.phase === "awaiting_direction") &&
+          !(await isLinearSessionTerminal(stored.linearSessionId))
         ) {
           // Don't resurrect long-idle sessions — a week without a run means the
           // ticket moved on without us; the file stays on disk for manual resume.
@@ -658,6 +1184,7 @@ export async function loadActiveSessionsOnStartup(
           // supplied here.
           const session: ActiveSession = {
             ...stored,
+            sessionKey,
             accessToken,
             issueDescription: "",
             teamId: "",
@@ -667,7 +1194,7 @@ export async function loadActiveSessionsOnStartup(
           activeSessions.set(stored.linearSessionId, session);
 
           console.log(
-            `[linear] Restored session: ${branch} (Claude: ${stored.claudeSessionId}, Linear: ${stored.linearSessionId})`,
+            `[linear] Restored session: ${stored.branch} from ${sessionKey} (Claude: ${stored.claudeSessionId}, Linear: ${stored.linearSessionId})`,
           );
         }
       } catch (e) {

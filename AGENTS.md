@@ -53,8 +53,10 @@ being in a worktree does not itself require a PR.
 ### Isolated worktrees
 
 - Stay on the session branch and preserve sibling commits and uncommitted work.
-- Run `bun run check` before committing. Stage only your files and inspect the
-  staged diff. Do not commit if the check fails.
+- Run targeted checks when useful; checks and tests are not required for every
+  commit. Failed checks, including `bun run check`, do not block commits or
+  pushes. Report failures you observe; do not fix unrelated upstream failures
+  unless asked. Stage only your files and inspect the staged diff.
 - The default worktree publication policy is `pull-request`. With an explicit
   repo policy of `direct`, review the complete branch diff, fetch and integrate
   the latest `origin/main`, check the final candidate, then publish with a normal
@@ -82,14 +84,14 @@ Other sessions may edit and stage files there at the same time.
   a stale checkout by rebasing only your own commit, by committing from a
   throwaway worktree, or by leaving `main` behind: each of those leaves the
   shared checkout stale for everyone.
-- **Do not commit until `bun run check` passes in the checkout.** Run it after
-  finishing the change and before the final fetch and commit. It checks
-  formatting, type-checking, lint, isolated unit tests, and strict transcript
-  snapshots. If it fails, do not commit. Platform installer jobs remain CI-only,
+- Run targeted checks when useful; checks and tests are not required for every
+  commit. Failed checks, including `bun run check`, do not block commits or
+  pushes. Report failures you observe; do not fix unrelated upstream failures
+  unless asked. Platform installer jobs remain CI-only,
   so installer or service-definition changes also need their documented
   platform-specific verification.
-- **Do not commit until your branch includes the latest `origin/main`.** After
-  the checkout gate passes, immediately before every `git commit`, run the
+- **Do not commit until your branch includes the latest `origin/main`.**
+  Immediately before every `git commit`, run the
   sync tool again, then `git merge-base --is-ancestor origin/main HEAD`. If it
   fails, do not commit: rebase the local commits onto `origin/main` and resolve
   every conflict first. Run the sync tool again immediately before pushing; if

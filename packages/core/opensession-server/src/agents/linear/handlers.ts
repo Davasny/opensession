@@ -2,8 +2,8 @@
  * Linear agent webhook handlers for AgentSession and Issue events.
  */
 import { linearEmailToGithubUsername } from "../../server/shared/user-mappings";
-import { personaName } from "../../server/config";
-import { worktreePathFor } from "../../server/worktree";
+import { defaultRepo, personaName } from "../../server/config";
+import { fileSessionWorkspace } from "../../server/session-workspace";
 import {
   createAgentActivity,
   fetchLinearUser,
@@ -28,17 +28,34 @@ import {
   processedSessions,
   buildParticipantSections,
   createPrWithAttribution,
-  createWorktree,
-  deleteSessionFile,
-  deleteWorktree,
+  createSessionWorktree,
+  deleteWorktreeIfUnused,
+  endLinearSession,
+  findStoredSessionForAgentSession,
   formatConversationHistory,
   generateBranchName,
+  latestSessionForIssue,
+  linearSessionFileKey,
+  linearUnifiedSessionId,
   loadSessionInfo,
   opensessionSessionUrl,
+  persistActiveSession,
   runAgentHeadless,
-  saveSessionInfo,
   type ActiveSession,
+  type LinearPromptEntry,
 } from "./session";
+import { isLinearSessionTerminal } from "./session-store";
+import {
+  clearLinearAssignmentStopped,
+  isLinearAssignmentStopped,
+  markLinearAssignmentStopped,
+} from "./session-store";
+import {
+  appendLinearTranscript,
+  linearGreetingEntry,
+  linearUserEntry,
+} from "./transcript";
+import { linearStartMode, type LinearStartMode } from "./start-mode";
 
 // --- Webhook types ---
 
@@ -50,6 +67,7 @@ export interface AgentSessionWebhook {
   agentSession: {
     id: string;
     status: string;
+    createdAt?: string;
     issue: {
       id: string;
       identifier: string;
@@ -60,6 +78,8 @@ export interface AgentSessionWebhook {
     comments?: Array<{ id: string; body: string }>;
   };
   agentActivity?: {
+    id?: string;
+    createdAt?: string;
     signal?: string;
     userId?: string;
     content?: { type: string; body: string };
@@ -85,13 +105,525 @@ export interface IssueWebhook {
   };
 }
 
-// In-flight guard for `prompted` webhooks, keyed by issue id. A redelivered or
-// concurrent prompt would otherwise spawn a second query() resuming the SAME
-// claudeSessionId in the same worktree — corrupting the turn. Parked on
-// globalThis so a hot reload doesn't lose in-flight state.
+// In-flight guard for `prompted` webhooks, keyed by the checkout a turn owns. A
+// redelivered or concurrent prompt would otherwise spawn a second query()
+// resuming the SAME claudeSessionId in the same worktree — corrupting the turn.
+// Isolated agent sessions get their own worktree, so two agent sessions on one
+// issue may run concurrently; shared-checkout sessions share a directory and
+// still serialize. Parked on globalThis so a hot reload doesn't lose in-flight
+// state.
 const inFlightPrompts: Set<string> = ((
   globalThis as any
 ).__linearInFlightPrompts ??= new Set<string>());
+
+/** The checkout a Linear turn must exclusively own, with an issue-level
+ *  fallback while setup has not produced a worktree path yet. */
+function turnLockKey(
+  session: Pick<ActiveSession, "worktreeDir" | "issueId">,
+): string {
+  return session.worktreeDir || `issue:${session.issueId}`;
+}
+
+// Agent-session ids already ended in this process. A delayed `created`
+// delivery for one of them must not mint a worktree or record after cleanup.
+const endedAgentSessions: Map<string, number> = ((
+  globalThis as any
+).__linearEndedAgentSessions ??= new Map<string, number>());
+const ENDED_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Activity ids kept per session: comfortably more than Linear's retry window
+ *  without growing the session file without bound. */
+const PROCESSED_PROMPT_LIMIT = 100;
+
+function isEndedAgentSession(id: string): boolean {
+  const at = endedAgentSessions.get(id);
+  if (at === undefined) return false;
+  if (Date.now() - at > ENDED_SESSION_TTL_MS) {
+    endedAgentSessions.delete(id);
+    return false;
+  }
+  return true;
+}
+
+// Per-issue serialization for worktree creation. Branch names are generated
+// from title + identifier, so two concurrent `created` deliveries for one
+// issue would otherwise resolve the same branch.
+const issueCreationChains: Map<string, Promise<unknown>> = ((
+  globalThis as any
+).__linearIssueCreationChains ??= new Map<string, Promise<unknown>>());
+
+const sessionSetupRuns: Map<string, Promise<boolean>> = ((
+  globalThis as any
+).__linearSessionSetupRuns ??= new Map<string, Promise<boolean>>());
+
+async function withIssueCreationLock<T>(
+  issueId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = issueCreationChains.get(issueId) ?? Promise.resolve();
+  const next = previous.catch(() => {}).then(fn);
+  const queued = next.then(
+    () => {},
+    () => {},
+  );
+  issueCreationChains.set(issueId, queued);
+  try {
+    return await next;
+  } finally {
+    if (issueCreationChains.get(issueId) === queued) {
+      issueCreationChains.delete(issueId);
+    }
+  }
+}
+
+function linearCreatorName(
+  creator: { name: string; email: string | null } | null,
+): string {
+  const login = linearEmailToGithubUsername(creator?.email ?? null);
+  return creator?.name || login || "Anonymous";
+}
+
+/**
+ * Finish the durable, idempotent parts of a Linear session setup: workspace
+ * filing, transcript greeting and the Linear greeting activity. One run per
+ * agent session: parallel duplicate deliveries share it, so only one can post
+ * the greeting.
+ */
+function completeLinearSessionSetup(
+  session: ActiveSession,
+  accessToken: string,
+  issue: { identifier: string; title: string },
+): Promise<boolean> {
+  const id = session.linearSessionId;
+  const inflight = sessionSetupRuns.get(id);
+  if (inflight) return inflight;
+  const run = runLinearSessionSetup(session, accessToken, issue).finally(() => {
+    if (sessionSetupRuns.get(id) === run) sessionSetupRuns.delete(id);
+  });
+  sessionSetupRuns.set(id, run);
+  return run;
+}
+
+async function runLinearSessionSetup(
+  session: ActiveSession,
+  accessToken: string,
+  issue: { identifier: string; title: string },
+): Promise<boolean> {
+  const id = session.linearSessionId;
+  const live = () => !session.ended && activeSessions.get(id) === session;
+  if (!live() || (await isLinearSessionTerminal(id))) return false;
+
+  const unifiedId = linearUnifiedSessionId(session.sessionKey);
+  const mode = session.startMode ?? "ask";
+  const greeting = GREETING_PROMPT.replaceAll(
+    "$ISSUE_ID",
+    issue.identifier,
+  ).replaceAll("$ISSUE_TITLE", issue.title);
+  let changed = false;
+
+  if (!session.workspaceId) {
+    const workspace = await fileSessionWorkspace({
+      sessionId: unifiedId,
+      repo: session.repoId ?? defaultRepo().id,
+      branch: session.branch,
+      worktreeDir: session.worktreeDir,
+      ownsWorktree: session.ownsWorktree ?? false,
+      title: `${issue.identifier}: ${issue.title}`,
+      createdBy: linearCreatorName(session.issueCreator),
+      createdAt: session.greetingAt,
+      isLive: live,
+    });
+    if (!workspace) {
+      if (!live() || (await isLinearSessionTerminal(id))) return false;
+      throw new Error(`Workspace filing unavailable for ${id}`);
+    }
+    session.workspaceId = workspace.id;
+    changed = true;
+  }
+
+  if (!live() || (await isLinearSessionTerminal(id))) return false;
+
+  if (!session.greetingPostedAt) {
+    if (mode === "ask") {
+      const appended = await appendLinearTranscript(
+        unifiedId,
+        linearGreetingEntry({
+          agentSessionId: session.linearSessionId,
+          text: greeting,
+          timestamp:
+            session.greetingAt ?? session.updatedAt ?? new Date().toISOString(),
+        }),
+      );
+      if (!appended) throw new Error(`Transcript unavailable for ${id}`);
+      if (!live() || (await isLinearSessionTerminal(id))) return false;
+    }
+    const linked = await updateAgentSession(accessToken, id, {
+      addedExternalUrls: [
+        {
+          url: opensessionSessionUrl(unifiedId),
+          label: `Open in ${personaName()}`,
+        },
+      ],
+    });
+    if (!linked) throw new Error(`External link unavailable for ${id}`);
+    if (!live() || (await isLinearSessionTerminal(id))) return false;
+    if (mode === "ask") {
+      await createAgentActivity(accessToken, id, {
+        type: "elicitation",
+        body: greeting,
+      });
+    }
+    session.greetingPostedAt = new Date().toISOString();
+    changed = true;
+  }
+
+  if (changed && !(await persistActiveSession(session))) {
+    if (!live() || (await isLinearSessionTerminal(id))) return false;
+    throw new Error(`Setup state unavailable for ${id}`);
+  }
+  return changed;
+}
+
+// --- Shared turn execution ---
+
+interface LinearTurnOptions {
+  promptEntry?: LinearPromptEntry;
+  onClaimed?: (guard: LinearTurnGuard) => Promise<void>;
+  onSettled?: (result: LinearTurnResult) => Promise<void>;
+  reportGeneric?: boolean;
+  /** Return once the claim and pre-run side effects land; completion runs in
+   *  the background so a webhook can acknowledge without waiting for a model. */
+  detachAfterClaim?: boolean;
+}
+
+interface LinearTurnGuard {
+  cancelled: () => Promise<boolean>;
+}
+
+interface LinearTurnResult {
+  busy: boolean;
+  cancelled?: boolean;
+  dispatched?: boolean;
+  result?: string;
+  error?: unknown;
+}
+
+/**
+ * The one place a Linear turn is claimed, run, persisted and reported. Prompt
+ * replies, issue-status auto-implementation and the assignment starter all use
+ * it, so the per-issue in-flight guard, stop/end fence and result handling are
+ * identical.
+ */
+async function executeLinearTurn(
+  session: ActiveSession,
+  accessToken: string,
+  prompt: string,
+  options: LinearTurnOptions = {},
+): Promise<LinearTurnResult> {
+  const id = session.linearSessionId;
+  const lockKey = turnLockKey(session);
+  if (inFlightPrompts.has(lockKey)) return { busy: true };
+  inFlightPrompts.add(lockKey);
+
+  const guard: LinearTurnGuard = {
+    cancelled: async () =>
+      !!session.stopRequested ||
+      !!session.ended ||
+      activeSessions.get(id) !== session ||
+      (await isLinearSessionTerminal(id)),
+  };
+
+  let detached = false;
+  try {
+    if (await guard.cancelled()) return { busy: false, cancelled: true };
+    await options.onClaimed?.(guard);
+    if (await guard.cancelled()) return { busy: false, cancelled: true };
+
+    if (options.detachAfterClaim) {
+      detached = true;
+      void runClaimedLinearTurn(
+        session,
+        accessToken,
+        prompt,
+        options,
+        guard,
+      ).finally(() => inFlightPrompts.delete(lockKey));
+      return { busy: false, dispatched: true };
+    }
+    return await runClaimedLinearTurn(
+      session,
+      accessToken,
+      prompt,
+      options,
+      guard,
+    );
+  } catch (e) {
+    console.error(`[linear] Error running Claude for prompt:`, e);
+    await createAgentActivity(accessToken, id, {
+      type: "error",
+      body: `${e}`,
+    }).catch(() => {});
+    return { busy: false, error: e };
+  } finally {
+    if (!detached) inFlightPrompts.delete(lockKey);
+  }
+}
+
+async function runClaimedLinearTurn(
+  session: ActiveSession,
+  accessToken: string,
+  prompt: string,
+  options: LinearTurnOptions,
+  guard: LinearTurnGuard,
+): Promise<LinearTurnResult> {
+  const id = session.linearSessionId;
+  let outcome: LinearTurnResult;
+  try {
+    const { result, claudeSessionId } = await runAgentHeadless(
+      session.worktreeDir,
+      prompt,
+      id,
+      accessToken,
+      session.claudeSessionId || undefined,
+      session,
+      options.promptEntry,
+    );
+    session.claudeSessionId = claudeSessionId;
+
+    if (await guard.cancelled()) outcome = { busy: false, cancelled: true };
+    else if (!(await persistActiveSession(session)))
+      outcome = { busy: false, cancelled: true };
+    else {
+      if (result) {
+        if (
+          result.includes("PLANNING_COMPLETE") &&
+          session.phase === "planning"
+        ) {
+          const planMatch = result.split("PLANNING_COMPLETE")[0].trim();
+          if (planMatch) {
+            await postComment(
+              accessToken,
+              session.issueId,
+              `# Implementation Plan\n\n${planMatch}`,
+            );
+          }
+
+          await moveToStatus(
+            accessToken,
+            session.issueId,
+            session.teamId,
+            "Ready",
+          );
+          session.planningConversation = [];
+          session.phase = "awaiting_implementation";
+
+          if (!(await persistActiveSession(session)))
+            outcome = { busy: false, cancelled: true };
+          else {
+            await createAgentActivity(accessToken, id, {
+              type: "elicitation",
+              body: `${MESSAGES.planningComplete}\n\nReply when you're ready and I'll start implementing.`,
+            });
+            outcome = { busy: false, result };
+          }
+        } else if (result.includes("IMPLEMENTATION_COMPLETE")) {
+          const creatorGithub = linearEmailToGithubUsername(
+            session.issueCreator?.email || null,
+          );
+          // A retried or reopened implementation turn must not open a second
+          // PR: the URL is persisted in the agent-session file.
+          let prUrl = session.prUrl ?? null;
+          let failureReason: string | undefined;
+          if (!prUrl) {
+            const pr = await createPrWithAttribution(
+              session.worktreeDir,
+              session.issueIdentifier,
+              session.issueUrl,
+              session.issueTitle,
+              session.participants || [],
+              creatorGithub,
+            );
+            prUrl = pr.url;
+            failureReason = pr.reason;
+            if (prUrl) {
+              session.prUrl = prUrl;
+              await persistActiveSession(session);
+            }
+          }
+
+          await createAgentActivity(accessToken, id, {
+            type: "response",
+            body: prUrl
+              ? `Implementation complete! PR: ${prUrl}`
+              : `Implementation complete, but I couldn't open the pull request${
+                  failureReason ? `: ${failureReason}` : ""
+                }. Please check manually.`,
+          });
+          outcome = { busy: false, result };
+        } else if (options.reportGeneric !== false) {
+          if (session.phase === "planning") {
+            session.planningConversation.push({
+              role: "agent",
+              content: result,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          const type =
+            session.phase === "planning"
+              ? "elicitation"
+              : result.startsWith("Error:")
+                ? "error"
+                : "response";
+          await createAgentActivity(accessToken, id, { type, body: result });
+          outcome = { busy: false, result };
+        } else outcome = { busy: false, result };
+      } else outcome = { busy: false, result };
+    }
+  } catch (e) {
+    console.error(`[linear] Error running Claude for prompt:`, e);
+    await createAgentActivity(accessToken, id, {
+      type: "error",
+      body: `${e}`,
+    }).catch(() => {});
+    outcome = { busy: false, error: e };
+  }
+
+  if (options.onSettled) {
+    await options.onSettled(outcome).catch((e) => {
+      console.error(`[linear] Failed to persist turn outcome for ${id}:`, e);
+    });
+  }
+  return outcome;
+}
+
+// --- Assignment autostart ---
+
+function assignmentPrompt(session: ActiveSession, mode: "plan" | "implement") {
+  if (mode === "plan") {
+    return PLANNING_PROMPT.replaceAll("$ISSUE_ID", session.issueIdentifier)
+      .replaceAll("$ISSUE_URL", session.issueUrl)
+      .replaceAll("$ISSUE_TITLE", session.issueTitle)
+      .replaceAll(
+        "$ISSUE_DESCRIPTION",
+        session.issueDescription || "(No description)",
+      );
+  }
+  const { participantsSection, coAuthorInstruction } = buildParticipantSections(
+    session.participants || [],
+    session.lastActiveUser || null,
+  );
+  return IMPLEMENTATION_PROMPT.replaceAll("$ISSUE_ID", session.issueIdentifier)
+    .replaceAll("$ISSUE_URL", session.issueUrl)
+    .replaceAll("$ISSUE_TITLE", session.issueTitle)
+    .replaceAll(
+      "$ISSUE_DESCRIPTION",
+      session.issueDescription || "(No description)",
+    )
+    .replaceAll("$PARTICIPANTS_SECTION", participantsSection)
+    .replaceAll("$CO_AUTHOR_INSTRUCTION", coAuthorInstruction);
+}
+
+/**
+ * Start the one automatic turn an assignment asks for. The claim is written
+ * before the runner and is never cleared by a retry: an uncertain pending or
+ * dispatched claim is reported as needing attention instead of running twice.
+ */
+async function startAssignmentIfNeeded(
+  session: ActiveSession,
+  accessToken: string,
+): Promise<"started" | "busy" | "claimed" | "cancelled" | "skipped"> {
+  const mode = session.startMode ?? "ask";
+  if (mode === "ask") return "skipped";
+  if (await isLinearAssignmentStopped(session.linearSessionId))
+    return "skipped";
+
+  if (inFlightPrompts.has(turnLockKey(session))) return "busy";
+
+  const existing = session.assignmentStart;
+  if (existing) {
+    if (existing.status === "pending" || existing.status === "dispatched") {
+      if (!existing.noticeAt) {
+        existing.noticeAt = new Date().toISOString();
+        await persistActiveSession(session);
+        await createAgentActivity(accessToken, session.linearSessionId, {
+          type: "response",
+          body: "The automatic start was interrupted before this turn completed. Open the session to review it, then send a message when you want to continue.",
+        }).catch(() => {});
+      }
+      return "claimed";
+    }
+    return "skipped";
+  }
+
+  const prompt = assignmentPrompt(session, mode);
+  const promptEntry = {
+    id: `linear-assignment:${session.linearSessionId}:${mode}`,
+    text:
+      mode === "plan"
+        ? `Start planning for ${session.issueIdentifier}`
+        : `Start implementation for ${session.issueIdentifier}`,
+    timestamp: session.greetingAt ?? new Date().toISOString(),
+  };
+  const turn = await executeLinearTurn(session, accessToken, prompt, {
+    reportGeneric: true,
+    detachAfterClaim: true,
+    promptEntry,
+    onClaimed: async (guard) => {
+      session.assignmentStart = {
+        mode,
+        status: "pending",
+        claimedAt: new Date().toISOString(),
+      };
+      if (!(await persistActiveSession(session)))
+        throw new Error("Assignment claim was not persisted");
+      if (await guard.cancelled()) return;
+
+      session.phase = mode === "plan" ? "planning" : "working";
+      if (mode === "implement") {
+        await moveToStatus(
+          accessToken,
+          session.issueId,
+          session.teamId,
+          "In Progress",
+        );
+        if (await guard.cancelled()) return;
+      }
+      await createAgentActivity(accessToken, session.linearSessionId, {
+        type: "thought",
+        body:
+          mode === "plan"
+            ? "Starting planning interview..."
+            : MESSAGES.implementationStarted,
+      });
+      if (await guard.cancelled()) return;
+
+      session.assignmentStart.status = "dispatched";
+      if (!(await persistActiveSession(session)))
+        throw new Error("Assignment dispatch was not persisted");
+    },
+    onSettled: async (result) => {
+      if (!session.assignmentStart) return;
+      session.assignmentStart.status = result.cancelled
+        ? "cancelled"
+        : result.error || result.result?.startsWith("Error:")
+          ? "failed"
+          : "completed";
+      session.assignmentStart.settledAt = new Date().toISOString();
+      await persistActiveSession(session);
+    },
+  });
+
+  if (turn.busy) return "busy";
+  if (turn.cancelled) {
+    if (session.assignmentStart) {
+      session.assignmentStart.status = "cancelled";
+      session.assignmentStart.settledAt = new Date().toISOString();
+      await persistActiveSession(session);
+    }
+    return "cancelled";
+  }
+  return "started";
+}
 
 // --- Issue status change → auto-implement ---
 
@@ -123,25 +655,25 @@ export async function handleIssueUpdate(
     return Response.json({ ok: true });
   }
 
-  // Check for existing session
-  let existingSession: ActiveSession | undefined;
-  for (const [, session] of activeSessions) {
-    if (
-      session.issueIdentifier === issue.identifier ||
-      session.issueId === issue.id
-    ) {
-      existingSession = session;
-      break;
-    }
-  }
+  // Check for existing session. When a reassigned issue has more than one live
+  // record (old and new agent session), drive the newest one; terminal records
+  // are never resumed.
+  let existingSession = latestSessionForIssue(issue);
 
   if (!existingSession) {
     const branch = generateBranchName(details.title, issue.identifier);
     const diskSession = await loadSessionInfo(branch);
-    if (diskSession?.claudeSessionId) {
+    // A legacy branch-named file is adopted only when it records a Linear
+    // agent-session id and has no terminal marker. A file without an id, with
+    // another id, or one already ended is not this issue's current session.
+    if (
+      diskSession?.linearSessionId &&
+      diskSession.claudeSessionId &&
+      !(await isLinearSessionTerminal(diskSession.linearSessionId))
+    ) {
       existingSession = {
         ...diskSession,
-        branch,
+        sessionKey: branch,
         accessToken,
         issueTitle: details.title,
         issueIdentifier: issue.identifier,
@@ -158,15 +690,29 @@ export async function handleIssueUpdate(
             : "working",
         issueCreator: diskSession.issueCreator || details.creator || null,
       };
-      if (diskSession.linearSessionId) {
-        activeSessions.set(diskSession.linearSessionId, existingSession);
-      }
+      activeSessions.set(diskSession.linearSessionId, existingSession);
     }
+  }
+
+  if (
+    existingSession &&
+    (await isLinearSessionTerminal(existingSession.linearSessionId))
+  ) {
+    activeSessions.delete(existingSession.linearSessionId);
+    existingSession = undefined;
   }
 
   if (!existingSession) {
     return Response.json({ ok: true });
   }
+
+  if (await isLinearAssignmentStopped(existingSession.linearSessionId))
+    return Response.json({ ok: true });
+  if (
+    existingSession.assignmentStart?.status === "pending" ||
+    existingSession.assignmentStart?.status === "dispatched"
+  )
+    return Response.json({ ok: true });
 
   const hasPlan = await issueHasPlan(accessToken, issue.id);
   if (!hasPlan) {
@@ -197,70 +743,20 @@ export async function handleIssueUpdate(
 
     (async () => {
       try {
-        if (existingSession!.linearSessionId) {
-          await createAgentActivity(
-            accessToken,
-            existingSession!.linearSessionId,
-            {
-              type: "thought",
-              body: `Auto-starting implementation (ticket moved to In Progress)`,
-            },
-          );
-        }
-
-        const { result, claudeSessionId } = await runAgentHeadless(
-          existingSession!.worktreeDir,
-          implementationPrompt,
-          existingSession!.linearSessionId,
+        await createAgentActivity(
           accessToken,
-          existingSession!.claudeSessionId || undefined,
-          existingSession!,
+          existingSession!.linearSessionId,
+          {
+            type: "thought",
+            body: `Auto-starting implementation (ticket moved to In Progress)`,
+          },
         );
-
-        existingSession!.claudeSessionId = claudeSessionId;
-
-        await saveSessionInfo(existingSession!.branch, {
-          claudeSessionId,
-          issueIdentifier: issue.identifier,
-          issueTitle: details.title,
-          worktreeDir: existingSession!.worktreeDir,
-          linearSessionId: existingSession!.linearSessionId,
-          phase: existingSession!.phase,
-          issueId: existingSession!.issueId,
-          issueUrl: existingSession!.issueUrl,
-          participants: existingSession!.participants,
-          lastActiveUser: existingSession!.lastActiveUser,
-          issueCreator: existingSession!.issueCreator,
-          model: existingSession!.model,
-        });
-
-        if (
-          result?.includes("IMPLEMENTATION_COMPLETE") &&
-          existingSession!.linearSessionId
-        ) {
-          const creatorGithub = linearEmailToGithubUsername(
-            existingSession!.issueCreator?.email || null,
-          );
-          const prUrl = await createPrWithAttribution(
-            existingSession!.worktreeDir,
-            issue.identifier,
-            details.url,
-            details.title,
-            existingSession!.participants || [],
-            creatorGithub,
-          );
-
-          await createAgentActivity(
-            accessToken,
-            existingSession!.linearSessionId,
-            {
-              type: "response",
-              body: prUrl
-                ? `Implementation complete! PR: ${prUrl}`
-                : "Implementation complete! PR creation may have failed - please check manually.",
-            },
-          );
-        }
+        await executeLinearTurn(
+          existingSession!,
+          accessToken,
+          implementationPrompt,
+          { reportGeneric: false },
+        );
       } catch (e) {
         console.error(
           `[linear] Error auto-implementing ${issue.identifier}:`,
@@ -287,7 +783,22 @@ export async function handleAgentSession(
       `[linear] Stop signal for issue: ${agentSession.issue.identifier}`,
     );
     const session = activeSessions.get(agentSession.id);
+    try {
+      await markLinearAssignmentStopped(agentSession.id);
+    } catch (e) {
+      console.error(`[linear] Could not record stop ${agentSession.id}:`, e);
+      return Response.json({ error: "Stop not recorded" }, { status: 500 });
+    }
     if (session) {
+      session.stopRequested = true;
+      if (!session.abortController && session.assignmentStart) {
+        const status = session.assignmentStart.status;
+        if (status === "pending" || status === "dispatched") {
+          session.assignmentStart.status = "cancelled";
+          session.assignmentStart.settledAt = new Date().toISOString();
+          await persistActiveSession(session);
+        }
+      }
       if (session.abortController) {
         session.abortController.abort();
         session.abortController = undefined;
@@ -301,18 +812,36 @@ export async function handleAgentSession(
     const prompt = webhook.agentActivity.content.body;
     console.log(`[linear] Prompt from Linear: ${prompt.substring(0, 50)}...`);
 
-    let session = activeSessions.get(agentSession.id);
+    if (await isLinearSessionTerminal(agentSession.id)) {
+      console.log(
+        `[linear] Ignoring prompt for ended agent session ${agentSession.id}`,
+      );
+      return Response.json({ ok: true, ended: true });
+    }
 
-    // Recover from disk
+    let session = activeSessions.get(agentSession.id);
+    if (session?.ended) {
+      activeSessions.delete(agentSession.id);
+      session = undefined;
+    }
+
+    // Recover from disk. The record must belong to THIS agent session: a
+    // branch match alone is not enough, because a reassigned issue generates
+    // the same branch and the previous session's transcript must not be
+    // resumed under the new id.
     if (!session) {
-      const branch = await generateBranchName(
+      const branch = generateBranchName(
         agentSession.issue.title,
         agentSession.issue.identifier,
       );
-      const diskSession = await loadSessionInfo(branch);
-      if (diskSession) {
+      const stored = await findStoredSessionForAgentSession(
+        agentSession.id,
+        branch,
+      );
+      if (stored && !(await isLinearSessionTerminal(agentSession.id))) {
+        const unifiedId = linearUnifiedSessionId(stored.key);
         console.log(
-          `[linear] Recovered session from disk for branch: ${branch}`,
+          `[linear] Recovered session ${stored.key} for agent session ${agentSession.id}`,
         );
         // Older sessions may predate external links — idempotent by url
         getValidToken(organizationId, tokens)
@@ -321,7 +850,7 @@ export async function handleAgentSession(
               updateAgentSession(t, agentSession.id, {
                 addedExternalUrls: [
                   {
-                    url: opensessionSessionUrl(branch),
+                    url: opensessionSessionUrl(unifiedId),
                     label: `Open in ${personaName()}`,
                   },
                 ],
@@ -330,22 +859,67 @@ export async function handleAgentSession(
           })
           .catch(() => {});
         session = {
-          ...diskSession,
-          branch,
+          ...stored.session,
+          sessionKey: stored.key,
           accessToken: "",
           issueTitle: agentSession.issue.title,
           issueId: agentSession.issue.id,
           issueDescription: agentSession.issue.description || "",
           issueUrl: agentSession.issue.url,
           teamId: "",
-          linearSessionId: agentSession.id,
           planningConversation: [],
         };
         activeSessions.set(agentSession.id, session);
+      } else {
+        console.log(
+          `[linear] No owned session record for ${agentSession.id} (branch ${branch}); not reusing another agent session`,
+        );
       }
     }
 
     if (session) {
+      // Linear redelivers a webhook when the first delivery was not
+      // acknowledged. The transcript's stable id makes the row an upsert, but
+      // only this durable claim keeps the turn from running twice after a
+      // restart (in-memory state is gone by then).
+      const promptActivityId = webhook.agentActivity?.id;
+      if (
+        promptActivityId &&
+        session.processedPromptIds?.includes(promptActivityId)
+      ) {
+        console.log(
+          `[linear] Ignoring replayed prompt activity ${promptActivityId} for ${agentSession.id}`,
+        );
+        return Response.json({ ok: true, duplicate: true });
+      }
+      if (await isLinearAssignmentStopped(agentSession.id)) {
+        await clearLinearAssignmentStopped(agentSession.id);
+        if (
+          (session.startMode === "plan" || session.startMode === "implement") &&
+          !session.assignmentStart
+        ) {
+          session.assignmentStart = {
+            mode: session.startMode,
+            status: "cancelled",
+            claimedAt: new Date().toISOString(),
+            settledAt: new Date().toISOString(),
+          };
+          await persistActiveSession(session);
+        }
+      }
+      // A `created` webhook registers its session before the (slow) worktree
+      // setup finishes. Wait for the real path instead of running in a guess.
+      if (session.ready) await session.ready.catch(() => {});
+      if (!session.worktreeDir) {
+        const token = await getValidToken(organizationId, tokens);
+        if (token) {
+          await createAgentActivity(token, agentSession.id, {
+            type: "error",
+            body: `This session could not be prepared. Reassign the issue to retry.`,
+          }).catch(() => {});
+        }
+        return Response.json({ ok: true, unavailable: true });
+      }
       if (!session.participants) session.participants = [];
 
       const accessToken = await getValidToken(organizationId, tokens);
@@ -497,138 +1071,73 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
             .replaceAll("$LATEST_RESPONSE", prompt);
         }
 
-        // Run Claude in background — at most one run per issue. Check-and-set
+        // Run Claude in background — at most one run per checkout. Check-and-set
         // is synchronous, so two concurrent/redelivered prompts can't both
         // start a query() resuming the same claudeSessionId in this worktree.
+        // The key is the checkout, not the issue: a reassigned agent session
+        // gets its own worktree and may run while the previous one unwinds.
         const s = session;
-        const issueId = agentSession.issue.id;
-        if (inFlightPrompts.has(issueId)) {
+        const lockKey = turnLockKey(s);
+        if (inFlightPrompts.has(lockKey)) {
           console.log(
             `[linear] Refusing concurrent prompt for ${s.issueIdentifier} — a run is already in flight`,
           );
           await createAgentActivity(accessToken, agentSession.id, {
             type: "response",
-            body: "I'm still working on the previous message for this issue — I can only run one turn at a time. Please wait for it to finish (or send a stop signal), then prompt me again.",
+            body: "I'm still working on the previous message in this checkout — I can only run one turn at a time. Please wait for it to finish (or send a stop signal), then prompt me again.",
           }).catch(() => {});
           return Response.json({ ok: true, busy: true });
         }
-        inFlightPrompts.add(issueId);
-        (async () => {
-          try {
-            const { result, claudeSessionId } = await runAgentHeadless(
-              s.worktreeDir,
-              effectivePrompt,
-              agentSession.id,
-              accessToken,
-              s.claudeSessionId || undefined,
-              s,
-            );
-
-            s.claudeSessionId = claudeSessionId;
-
-            await saveSessionInfo(s.branch, {
-              claudeSessionId,
-              issueIdentifier: s.issueIdentifier,
-              issueTitle: s.issueTitle,
-              worktreeDir: s.worktreeDir,
-              linearSessionId: s.linearSessionId,
-              phase: s.phase,
-              issueId: s.issueId,
-              issueUrl: s.issueUrl,
-              participants: s.participants,
-              lastActiveUser: s.lastActiveUser,
-              issueCreator: s.issueCreator,
-              model: s.model,
-            });
-
-            if (result) {
-              if (
-                result.includes("PLANNING_COMPLETE") &&
-                s.phase === "planning"
-              ) {
-                const planMatch = result.split("PLANNING_COMPLETE")[0].trim();
-                if (planMatch) {
-                  await postComment(
-                    accessToken,
-                    s.issueId,
-                    `# Implementation Plan\n\n${planMatch}`,
-                  );
-                }
-
-                await moveToStatus(accessToken, s.issueId, s.teamId, "Ready");
-                s.planningConversation = [];
-                s.phase = "awaiting_implementation";
-
-                await saveSessionInfo(s.branch, {
-                  claudeSessionId: s.claudeSessionId,
-                  issueIdentifier: s.issueIdentifier,
-                  issueTitle: s.issueTitle,
-                  worktreeDir: s.worktreeDir,
-                  linearSessionId: s.linearSessionId,
-                  phase: s.phase,
-                  issueId: s.issueId,
-                  issueUrl: s.issueUrl,
-                  participants: s.participants,
-                  lastActiveUser: s.lastActiveUser,
-                  issueCreator: s.issueCreator,
-                  model: s.model,
-                });
-
-                await createAgentActivity(accessToken, agentSession.id, {
-                  type: "elicitation",
-                  body: `${MESSAGES.planningComplete}\n\nReply when you're ready and I'll start implementing.`,
-                });
-              } else if (result.includes("IMPLEMENTATION_COMPLETE")) {
-                const creatorGithub = linearEmailToGithubUsername(
-                  s.issueCreator?.email || null,
+        const activity = webhook.agentActivity;
+        const promptTimestamp = activity?.createdAt ?? new Date().toISOString();
+        const userEntry = linearUserEntry({
+          agentSessionId: agentSession.id,
+          activityId: activity?.id ?? null,
+          text: prompt,
+          timestamp: promptTimestamp,
+          sourceTimestamp: activity?.createdAt ?? null,
+          userId: activity?.userId ?? null,
+        });
+        const promptEntry = {
+          id: userEntry.id,
+          text: prompt,
+          timestamp: promptTimestamp,
+        };
+        s.stopRequested = false;
+        void executeLinearTurn(s, accessToken, effectivePrompt, {
+          promptEntry,
+          onClaimed: async () => {
+            if (promptActivityId) {
+              const seen = s.processedPromptIds ?? [];
+              if (!seen.includes(promptActivityId))
+                s.processedPromptIds = [...seen, promptActivityId].slice(
+                  -PROCESSED_PROMPT_LIMIT,
                 );
-                const prUrl = await createPrWithAttribution(
-                  s.worktreeDir,
-                  s.issueIdentifier,
-                  s.issueUrl,
-                  s.issueTitle,
-                  s.participants || [],
-                  creatorGithub,
-                );
-
-                await createAgentActivity(accessToken, agentSession.id, {
-                  type: "response",
-                  body: prUrl
-                    ? `Implementation complete! PR: ${prUrl}`
-                    : "Implementation complete! PR creation may have failed - please check manually.",
-                });
-              } else {
-                if (s.phase === "planning") {
-                  s.planningConversation.push({
-                    role: "agent",
-                    content: result,
-                    timestamp: new Date().toISOString(),
-                  });
-                }
-                // Planning-interview turns are questions by design → elicitation
-                // (Linear prompts the user to answer); runner failures → error.
-                const type =
-                  s.phase === "planning"
-                    ? "elicitation"
-                    : result.startsWith("Error:")
-                      ? "error"
-                      : "response";
-                await createAgentActivity(accessToken, agentSession.id, {
-                  type,
-                  body: result,
-                });
-              }
+              // Persist before the turn starts: a redelivery after a restart
+              // must see this id even if the process dies mid-run.
+              await persistActiveSession(s);
             }
-          } catch (e) {
-            console.error(`[linear] Error running Claude for prompt:`, e);
-            await createAgentActivity(accessToken, agentSession.id, {
-              type: "error",
-              body: `${e}`,
-            });
-          } finally {
-            inFlightPrompts.delete(issueId);
-          }
-        })();
+            try {
+              await appendLinearTranscript(
+                linearUnifiedSessionId(s.sessionKey),
+                userEntry,
+              );
+            } catch (e) {
+              console.error(`[linear] Failed to append prompt transcript:`, e);
+            }
+          },
+        });
+      } else {
+        // Returning 200 would make Linear drop this prompt for good: with no
+        // usable token nothing was queued or posted. A retryable status lets
+        // Linear redeliver once the token refresh/authorization succeeds.
+        console.error(
+          `[linear] No usable token for org ${organizationId}; retrying prompt for ${agentSession.id}`,
+        );
+        return Response.json(
+          { error: "Not authorized", retryable: true },
+          { status: 503 },
+        );
       }
     } else {
       console.log(`[linear] No active session found for ${agentSession.id}`);
@@ -636,21 +1145,34 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     return Response.json({ ok: true });
   }
 
-  // Dismissed/ended — cleanup
+  // Dismissed/ended — cleanup only what THIS agent session owns
   if (action === "dismissed" || action === "ended") {
     console.log(
       `[linear] Session ${action} for issue: ${agentSession.issue.identifier}`,
     );
-    const branch = await generateBranchName(
+    endedAgentSessions.set(agentSession.id, Date.now());
+    const branch = generateBranchName(
       agentSession.issue.title,
       agentSession.issue.identifier,
     );
     try {
-      deleteWorktree(branch);
-      await deleteSessionFile(branch);
-      activeSessions.delete(agentSession.id);
+      const ended = await endLinearSession(agentSession.id, branch);
+      if (ended.removed && ended.branch && !ended.cleanupDeferred) {
+        // Never remove a checkout another live agent session is using. New
+        // assignments resolve a unique branch, so this only guards shared or
+        // legacy sessions that still point at the same one.
+        await deleteWorktreeIfUnused(
+          ended.branch,
+          agentSession.id,
+          ended.repoId,
+        );
+      }
     } catch (e) {
-      console.log(`[linear] Could not delete worktree ${branch}: ${e}`);
+      console.error(
+        `[linear] Could not clean up session ${agentSession.id}:`,
+        e,
+      );
+      return Response.json({ error: "Cleanup failed" }, { status: 500 });
     }
     return Response.json({ ok: true });
   }
@@ -661,7 +1183,63 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
   }
 
   const sessionId = agentSession.id;
+  const liveSession = activeSessions.get(sessionId);
+  if (liveSession) {
+    // A live session owns the worktree and abort controller. A redelivery may
+    // only finish setup steps that failed earlier; it never replaces the
+    // object or starts another run.
+    if (liveSession.ready) {
+      return Response.json({ ok: true, skipped: true });
+    }
+    const liveToken = await getValidToken(organizationId, tokens);
+    if (!liveToken) {
+      return Response.json({ error: "Not authorized" }, { status: 401 });
+    }
+    let finished = false;
+    try {
+      finished = await completeLinearSessionSetup(
+        liveSession,
+        liveToken,
+        agentSession.issue,
+      );
+    } catch (e) {
+      console.error(`[linear] Failed to finish setup ${sessionId}:`, e);
+      return Response.json(
+        { error: "Setup incomplete", retryable: true },
+        { status: 503 },
+      );
+    }
+    await startAssignmentIfNeeded(liveSession, liveToken).catch((e) => {
+      console.error(`[linear] Assignment start failed ${sessionId}:`, e);
+    });
+    return Response.json(
+      finished ? { ok: true, initialized: true } : { ok: true, skipped: true },
+    );
+  }
   if (processedSessions.has(sessionId)) {
+    return Response.json({ ok: true, skipped: true });
+  }
+  if (isEndedAgentSession(sessionId)) {
+    console.log(
+      `[linear] Ignoring created event for already-ended session ${sessionId}`,
+    );
+    return Response.json({ ok: true, skipped: true });
+  }
+  if (await isLinearSessionTerminal(sessionId)) {
+    endedAgentSessions.set(sessionId, Date.now());
+    console.log(
+      `[linear] Ignoring created event for durably ended session ${sessionId}`,
+    );
+    return Response.json({ ok: true, skipped: true });
+  }
+  // The terminal check yielded. Re-check and claim the intake synchronously:
+  // two concurrent deliveries can both pass the checks above while this await
+  // is pending, and only one may proceed to create a worktree.
+  if (
+    processedSessions.has(sessionId) ||
+    isEndedAgentSession(sessionId) ||
+    activeSessions.has(sessionId)
+  ) {
     return Response.json({ ok: true, skipped: true });
   }
   processedSessions.add(sessionId);
@@ -677,19 +1255,95 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     `[linear] New session for issue: ${issue.identifier} - ${issue.title}`,
   );
 
-  await createAgentActivity(accessToken, agentSession.id, {
-    type: "thought",
-    body: MESSAGES.starting,
-  });
+  const desiredBranch = generateBranchName(issue.title, issue.identifier);
+  let sessionKey: string;
+  try {
+    sessionKey = linearSessionFileKey(sessionId);
+  } catch (e) {
+    console.error(
+      `[linear] Rejecting invalid agent session id ${sessionId}:`,
+      e,
+    );
+    return Response.json({ error: "Invalid session id" }, { status: 400 });
+  }
+
+  // Duplicate delivery after a restart: the agent-session-keyed record is the
+  // idempotency marker. Reuse its worktree and identity instead of creating a
+  // second session for the same Linear agent session.
+  const existing = await findStoredSessionForAgentSession(
+    sessionId,
+    desiredBranch,
+  );
+  if (
+    isEndedAgentSession(sessionId) ||
+    activeSessions.has(sessionId) ||
+    (await isLinearSessionTerminal(sessionId))
+  ) {
+    return Response.json({ ok: true, skipped: true });
+  }
+  if (existing?.session.worktreeDir) {
+    const reused: ActiveSession = {
+      ...existing.session,
+      sessionKey: existing.key,
+      accessToken,
+      issueDescription: issue.description || "",
+      teamId: "",
+      // Disk records have one; a legacy record that omits it still needs a
+      // freshness signal before another record can be picked as newest.
+      updatedAt: existing.session.updatedAt || new Date().toISOString(),
+      greetingAt: existing.session.greetingAt ?? new Date().toISOString(),
+      startMode: existing.session.startMode ?? "ask",
+      planningConversation: [],
+    };
+    activeSessions.set(sessionId, reused);
+    try {
+      await completeLinearSessionSetup(reused, accessToken, issue);
+    } catch (e) {
+      console.error(
+        `[linear] Failed to finish reused setup ${existing.key}:`,
+        e,
+      );
+      return Response.json(
+        { error: "Setup incomplete", retryable: true },
+        { status: 503 },
+      );
+    }
+    await startAssignmentIfNeeded(reused, accessToken).catch((e) => {
+      console.error(
+        `[linear] Assignment start failed for reused ${existing.key}:`,
+        e,
+      );
+    });
+    console.log(
+      `[linear] Reused existing session ${existing.key} for agent session ${sessionId}`,
+    );
+    return Response.json({
+      ok: true,
+      reused: true,
+      branch: reused.branch,
+    });
+  }
 
   const { teamId } = await getIssueStatus(accessToken, issue.id);
   const issueDetails = await getIssueDetails(accessToken, issue.id);
 
-  const branch = await generateBranchName(issue.title, issue.identifier);
-  const worktreeDir = worktreePathFor(branch);
+  // An end can arrive while the Linear API calls above are in flight, before
+  // this session is registered. Re-fence before any worktree is created.
+  if (
+    isEndedAgentSession(sessionId) ||
+    activeSessions.has(sessionId) ||
+    (await isLinearSessionTerminal(sessionId))
+  ) {
+    return Response.json({ ok: true, skipped: true });
+  }
+
+  let finishReady: () => void = () => {};
+  const ready = new Promise<void>((resolve) => {
+    finishReady = resolve;
+  });
 
   const session: ActiveSession = {
-    branch,
+    branch: desiredBranch,
     claudeSessionId: null,
     accessToken,
     issueTitle: issue.title,
@@ -698,69 +1352,97 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     issueDescription: issue.description || "",
     issueUrl: issue.url,
     teamId,
-    worktreeDir,
-    linearSessionId: agentSession.id,
+    // Filled in from createSessionWorktree's real path before any run.
+    worktreeDir: "",
+    linearSessionId: sessionId,
+    sessionKey,
     phase: "awaiting_direction",
+    ready,
+    updatedAt: new Date().toISOString(),
+    greetingAt: agentSession.createdAt ?? new Date().toISOString(),
+    startMode: linearStartMode(),
     planningConversation: [],
     participants: [],
     lastActiveUser: null,
     issueCreator: issueDetails.creator,
   };
-  activeSessions.set(agentSession.id, session);
+  activeSessions.set(sessionId, session);
 
   (async () => {
     try {
-      await createWorktree(
-        branch,
-        issue.identifier,
-        issue.title,
-        issue.description || "",
-        issue.url,
-      );
-
-      await saveSessionInfo(branch, {
-        claudeSessionId: null,
-        issueIdentifier: issue.identifier,
-        issueTitle: issue.title,
-        worktreeDir,
-        linearSessionId: agentSession.id,
-        phase: session.phase,
-        issueId: issue.id,
-        issueUrl: issue.url,
-        participants: session.participants,
-        lastActiveUser: session.lastActiveUser,
-        issueCreator: session.issueCreator,
-        model: session.model,
+      await createAgentActivity(accessToken, sessionId, {
+        type: "thought",
+        body: MESSAGES.starting,
       });
 
-      // Link the Linear session to the web UI session viewer
-      updateAgentSession(accessToken, agentSession.id, {
-        addedExternalUrls: [
-          {
-            url: opensessionSessionUrl(branch),
-            label: `Open in ${personaName()}`,
-          },
-        ],
-      }).catch(() => {});
+      const created = await withIssueCreationLock(issue.id, () =>
+        createSessionWorktree(desiredBranch),
+      );
+      session.branch = created.branch;
+      session.worktreeDir = created.worktreeDir;
+      session.repoId = created.repoId;
+      session.ownsWorktree = created.ownsWorktree;
 
-      const greeting = GREETING_PROMPT.replaceAll(
-        "$ISSUE_ID",
-        issue.identifier,
-      ).replaceAll("$ISSUE_TITLE", issue.title);
+      // Ended while the worktree was being created: endLinearSession could not
+      // remove a path that did not exist yet. Clean it up now, before any
+      // record or greeting, so a slow create cannot leak a checkout.
+      const cleanupOwnCheckout = async () => {
+        if (created.ownsWorktree)
+          await deleteWorktreeIfUnused(
+            created.branch,
+            sessionId,
+            created.repoId,
+          );
+      };
+      if (session.cleanupCreatedWorktree) {
+        session.cleanupCreatedWorktree = false;
+        await cleanupOwnCheckout();
+        return;
+      }
+      if (session.ended || activeSessions.get(sessionId) !== session) return;
 
-      // The greeting asks for direction (plan/implement/other) → elicitation
-      await createAgentActivity(accessToken, agentSession.id, {
-        type: "elicitation",
-        body: greeting,
+      if (!(await persistActiveSession(session))) {
+        // An end can land after the API fence but before the session is
+        // registered. The save refuses then; remove only the checkout this
+        // create just made.
+        await cleanupOwnCheckout();
+        return;
+      }
+      if (
+        session.ended ||
+        activeSessions.get(sessionId) !== session ||
+        (await isLinearSessionTerminal(sessionId))
+      )
+        return;
+
+      try {
+        await completeLinearSessionSetup(session, accessToken, issue);
+      } catch (e) {
+        // The session file and worktree are durable; a later duplicate created
+        // retries workspace/transcript/greeting without minting a second run.
+        console.error(`[linear] Failed to finish setup ${sessionId}:`, e);
+        return;
+      }
+      await startAssignmentIfNeeded(session, accessToken).catch((e) => {
+        console.error(`[linear] Assignment start failed ${sessionId}:`, e);
       });
     } catch (e) {
+      // An ended session's setup failure is not worth an activity; cleanup ran
+      // (or the created path above found no worktree to remove).
+      if (session.ended || (await isLinearSessionTerminal(sessionId))) return;
       console.error(`[linear] Error in session creation:`, e);
-      await createAgentActivity(accessToken, agentSession.id, {
+      // Leave no empty session that would answer the next prompt.
+      if (activeSessions.get(sessionId) === session)
+        activeSessions.delete(sessionId);
+      await createAgentActivity(accessToken, sessionId, {
         type: "error",
         body: `${MESSAGES.error} Failed to initialize: ${e}`,
       });
+    } finally {
+      session.ready = undefined;
+      finishReady();
     }
   })();
 
-  return Response.json({ ok: true, branch });
+  return Response.json({ ok: true, branch: desiredBranch });
 }

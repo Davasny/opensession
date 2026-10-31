@@ -342,6 +342,9 @@ export interface UnifiedSession {
   slackOrigin?: SlackSessionOrigin;
   // Source-specific
   linearIssue?: { identifier: string; title: string; url?: string };
+  /** The Linear agent-session id that owns this row. The row id is derived
+   *  from it for current sessions and from the branch for legacy files. */
+  linearSessionId?: string;
   slackThread?: { channel: string; threadTs: string };
   /** The MCP allowlist this session was created with, copied from its file.
    *  Read by `sessionMcpScopeSource` (session-run-inputs.ts) as the "session"
@@ -455,8 +458,26 @@ export interface LinearSessionFile {
   issueUrl?: string;
   participants?: Array<{ id: string; name: string; email: string | null }>;
   lastActiveUser?: { id: string; name: string; email: string | null } | null;
+  issueCreator?: { id: string; name: string; email: string | null } | null;
   updatedAt?: string;
   model?: string;
+  workspaceId?: string;
+  repoId?: string;
+  ownsWorktree?: boolean;
+  greetingPostedAt?: string;
+  greetingAt?: string;
+  startMode?: "ask" | "plan" | "implement";
+  assignmentStart?: {
+    mode: "plan" | "implement";
+    status: "pending" | "dispatched" | "completed" | "failed" | "cancelled";
+    claimedAt: string;
+    settledAt?: string;
+    noticeAt?: string;
+  };
+  /** Linear agent-activity ids whose prompted turn was already claimed. */
+  processedPromptIds?: string[];
+  /** Pull request opened by this session; reused by later turns. */
+  prUrl?: string;
   /** Pi engine session id (see SlackSessionFile.piSessionId). */
   piSessionId?: string | null;
 }

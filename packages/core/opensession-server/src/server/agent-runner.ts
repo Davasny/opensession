@@ -215,6 +215,11 @@ export interface RunAgentOpts {
    * run token so every model attempt still writes one user bubble.
    */
   promptEntryId?: string;
+  /** Display text for the prompt's user transcript row when the engine prompt
+   *  is a transformed version of what the person sent (Linear direction). */
+  promptEntryText?: string;
+  /** Timestamp for that row; keeps a replayed webhook's ordering stable. */
+  promptEntryTimestamp?: string;
   /**
    * Prior-engine transcript entries accompanying a cross-engine handoff (the
    * same entries the handoff note was built from). The pi runner seeds a
@@ -311,7 +316,7 @@ export interface RunAgentOpts {
   /** Run-lifetime cancellation predicate threaded through engine retries. */
   shouldCancel?: () => boolean;
   /**
-   * Unified session id (e.g. `linear-<branch>`) for the transcript-v2 oc→
+   * Unified session id (e.g. `linear-<store file key>`) for the transcript-v2 oc→
    * unified map ONLY (pi-transcript.ts recordEngineSessionOwner) — lets loop
    * runs whose journal is deliberately kind-only (no crash journal; the loop
    * re-drives its own turns) still key their store appends on their unified

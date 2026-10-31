@@ -18,9 +18,11 @@ routing.
   (unless instance `selfDev` is `"worktree"`). The Linear agent does not request
   an isolated checkout explicitly, so a shared-checkout default repo is edited
   in place and has no dedicated branch for the automatic PR.
-- Give the Open Session service user working Git push credentials and ambient
-  `gh` authentication for that repository. The final PR helper invokes
-  `gh pr create` with the service process's environment and `HOME`.
+- Give the Open Session GitHub App access to the default repository (contents
+  and pull requests write). The final PR helper mints an installation token for
+  that repository and fails closed, with a short reason in the session, when
+  the App is not installed or cannot mint a token. Ambient `gh` authentication
+  is not used for the automatic PR.
 - The issue's Linear team should have workflow statuses named **Ready** and
   **In Progress**. Planning moves the issue to `Ready`; implementation moves it
   to and auto-starts from `In Progress`. Status matching is case-insensitive,
@@ -37,6 +39,7 @@ to load the agent.
 | `LINEAR_CLIENT_ID`         | OAuth                        | Linear OAuth app client ID                                                               |
 | `LINEAR_CLIENT_SECRET`     | OAuth                        | authorization-code exchange and token refresh                                            |
 | `LINEAR_WEBHOOK_SECRET`    | webhooks                     | HMAC secret; unset or empty rejects every webhook with 401                               |
+| `LINEAR_START_MODE`        | optional assignment start    | `ask`, `plan`, or `implement`; overrides `integrations.linear.startMode`                 |
 | `ENABLE_LINEAR_AGENT`      | loading the agent            | optional env override; only the literal `true` enables, and any other set value disables |
 | `LINEAR_API_KEY`           | current Settings enable gate | the Linear session agent does not read it                                                |
 | `OPENSESSION_INGRESS_BASE` | optional global override     | public origin used by the default OAuth callback URL                                     |
@@ -46,6 +49,14 @@ The agent is off by default. If `ENABLE_LINEAR_AGENT` is unset, enable it with
 `integrations.linear.enabled: true` in `~/.opensession/config.json`; the env flag
 wins when present. See [boot guards](integrations-misc.md#boot-guards).
 Restart Open Session after changing the flag or credentials.
+
+Assignments default to `ask`, which keeps the existing greeting. Set
+`integrations.linear.startMode` to `plan` (recommended) to start the planning
+interview as soon as the issue is assigned, or to `implement` to explicitly
+opt into starting implementation and moving the issue to **In Progress**
+without a reply. `LINEAR_START_MODE` overrides the config value. Unknown values
+warn and fall back to `ask`. Planning still waits for approval and moves the
+issue to **Ready**; implementation remains gated by the existing workflow.
 
 The current Settings form marks `LINEAR_API_KEY` as required before its switch
 can be enabled, even though the Linear agent runtime does not use that key.
@@ -103,8 +114,9 @@ Consumed events (`packages/core/opensession-server/src/agents/linear/index.ts`
 and `handlers.ts`):
 
 - `AgentSessionEvent` / `AgentSession`:
-  - `created` prepares the default repo, persists the session, links its Open
-    Session viewer, and asks for plan, implement, or another instruction.
+  - `created` prepares the default repo, persists the session, files its
+    workspace, and starts work according to `startMode`: `ask` posts the
+    legacy greeting, while `plan` and `implement` start one automatic turn.
   - `prompted` runs planning, implementation, or a free-form coding turn.
     `signal: "stop"` cancels the current engine run.
   - Planning completion posts a `# Implementation Plan` issue comment, moves
@@ -116,8 +128,12 @@ and `handlers.ts`):
   an existing Linear session with an engine session and an issue comment whose
   body contains `# Implementation Plan` or `## Implementation Plan`.
 - When a run returns `IMPLEMENTATION_COMPLETE`, Open Session runs `gh pr create`
-  and posts the resulting PR URL to the Linear agent session. A failed PR
-  command is reported in Linear but is not retried automatically.
+  and posts the resulting PR URL to the Linear agent session. An open PR for
+  the checkout's current branch is reused, and the URL is stored in the session
+  file, so a retried implementation does not open a second PR. A failure is
+  reported in Linear with a short reason (the raw command output stays in the
+  server log). A reviewer request that GitHub rejects does not hide a created
+  PR. Failed PR creation is not retried automatically.
 
 Other event types and actions are acknowledged and ignored. Team IDs are
 fetched from each issue; only the workflow status names above are fixed.
@@ -128,11 +144,24 @@ For a non-shared default repo, worktrees live at
 `<paths.worktreesDir>/<wtPrefix>-<branch>`. `paths.worktreesDir` defaults to
 `~/.opensession/worktrees` and can be overridden by
 `OPENSESSION_WORKTREES_DIR`. The branch is based on the first two words of the
-issue title plus its issue identifier.
+issue title plus its issue identifier. Reassigning an issue regenerates that
+branch; when the previous branch still exists it gets a `-2`, `-3`, … suffix so
+the new agent session starts in its own worktree.
 
-Session metadata is stored under `~/.linear-sessions/`. On startup, Open Session
-restores files updated within the last seven days when they have a Linear
-session ID and either an engine session ID or the `awaiting_direction` phase.
-Older files remain on disk but are not restored. An interrupted background turn
-is not restarted automatically; a later prompt can continue the restored
-session.
+Session metadata is stored under `~/.linear-sessions/`. Current files are named
+after the Linear agent-session id, with the generated branch recorded inside the
+file; files written before that change remain named after the branch. This keeps
+two agent sessions on the same issue (same generated branch) separate: their
+Open Session ids, transcripts, worktrees and external links are distinct. Ending
+a session records a terminal marker under `~/.linear-sessions/.ended/` before
+removing its file, so a webhook replay after a restart cannot start a new run
+for the ended id. New sessions are filed into a workspace before the greeting
+is posted, using the repository, branch and checkout that were actually created
+and the issue creator's mapped attribution. The greeting and each incoming
+direction reply are also written to the OpenSession transcript with stable ids;
+a replayed webhook updates those rows instead of duplicating them. On startup,
+Open Session restores files updated within the last seven days when they have a
+Linear session ID and either an engine session ID or the `awaiting_direction`
+phase. Older files remain on disk but are not
+restored. An interrupted background turn is not restarted automatically; a
+later prompt can continue the restored session.

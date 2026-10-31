@@ -3,7 +3,8 @@
  *
  * Slack and Linear sessions are files the agent loops write
  * (`~/.slack-sessions/<channel>-<threadTs>.json`,
- * `~/.linear-sessions/<branch>.json`). The gateway used to discover them by
+ * `~/.linear-sessions/<file key>.json` — the Linear agent-session id for
+ * current files, the branch for legacy ones). The gateway used to discover them by
  * reading those directories on every cold list rebuild. It no longer reads a
  * session directory anywhere: each source file is projected into a namespace
  * of the central catalog documents (`slack-sessions`, `linear-sessions`,
@@ -61,7 +62,8 @@ export const AGENT_SESSION_CATALOG_NAMESPACES: Record<
 /** One agent-owned source file as read from disk: the parsed document plus
  * the file's mtime, which stands in for the timestamps an older loop did not
  * record. `file` is the basename the unified id derives from
- * (`slack-<file without .json>`, `linear-<branch>`). */
+ * (`slack-<file without .json>`, `linear-<store file key>`: the Linear
+ * agent-session id for current files, the branch for legacy ones). */
 export type AgentSessionSource<K extends AgentSessionKind = AgentSessionKind> =
   {
     file: string;
