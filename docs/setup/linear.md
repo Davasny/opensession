@@ -128,12 +128,20 @@ and `handlers.ts`):
   an existing Linear session with an engine session and an issue comment whose
   body contains `# Implementation Plan` or `## Implementation Plan`.
 - When a run returns `IMPLEMENTATION_COMPLETE`, Open Session runs `gh pr create`
-  and posts the resulting PR URL to the Linear agent session. An open PR for
-  the checkout's current branch is reused, and the URL is stored in the session
-  file, so a retried implementation does not open a second PR. A failure is
-  reported in Linear with a short reason (the raw command output stays in the
-  server log). A reviewer request that GitHub rejects does not hide a created
-  PR. Failed PR creation is not retried automatically.
+  and posts the resulting PR URL to the Linear agent session. The implementation
+  prompt asks the agent for a short Linear summary, then a
+  `===OPENSESSION-PR-BODY===` line, then the full reviewer-facing PR
+  description. The wrapper uses that description as the PR body, adds the
+  ticket link, requester metadata, and the session-attribution footer, and
+  refuses to publish a body or title that contains a configured private term on
+  a public repository. A later implementation turn replaces only the managed
+  agent-description section, so human edits elsewhere in the description
+  survive. An open PR for the checkout's current branch is reused, and the URL
+  is stored in the session file, so a retried implementation does not open a
+  second PR. A failure is reported in Linear with a short reason (the raw
+  command output stays in the server log). A reviewer request that GitHub
+  rejects does not hide a created PR. Failed PR creation is not retried
+  automatically.
 
 Other event types and actions are acknowledged and ignored. Team IDs are
 fetched from each issue; only the workflow status names above are fixed.

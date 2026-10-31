@@ -7,7 +7,12 @@ import {
   statSync,
   unlinkSync,
 } from "fs";
-import { lstat, unlink } from "fs/promises";
+import {
+  lstat,
+  readFile as readFileAsync,
+  stat as statAsync,
+  unlink,
+} from "fs/promises";
 import { resolve as resolvePath } from "path";
 import type { UnifiedSession } from "./types";
 import { stopAllPortalServices } from "./portal-supervisor";
@@ -239,6 +244,29 @@ export function worktreeHeadBranch(
       gitDir = resolvePath(dir, m[1].trim());
     }
     const ref = readFileSync(`${gitDir}/HEAD`, "utf-8").match(
+      /^ref: refs\/heads\/(.+)$/m,
+    );
+    return ref ? ref[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Async sibling of `worktreeHeadBranch` for gateway/request paths. The sync
+ *  version is retained for existing callers, but new code that runs on the
+ *  gateway event loop must use this one. */
+export async function worktreeHeadBranchAsync(
+  dir: string | null | undefined,
+): Promise<string | null> {
+  if (!dir) return null;
+  try {
+    let gitDir = `${dir}/.git`;
+    if ((await statAsync(gitDir)).isFile()) {
+      const m = (await readFileAsync(gitDir, "utf-8")).match(/^gitdir: (.+)$/m);
+      if (!m) return null;
+      gitDir = resolvePath(dir, m[1].trim());
+    }
+    const ref = (await readFileAsync(`${gitDir}/HEAD`, "utf-8")).match(
       /^ref: refs\/heads\/(.+)$/m,
     );
     return ref ? ref[1].trim() : null;

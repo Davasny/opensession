@@ -3,6 +3,7 @@
  */
 import { linearEmailToGithubUsername } from "../../server/shared/user-mappings";
 import { defaultRepo, personaName } from "../../server/config";
+import { extractAgentPrBody, extractAgentSummary } from "../../server/pr-body";
 import { fileSessionWorkspace } from "../../server/session-workspace";
 import {
   createAgentActivity,
@@ -27,7 +28,6 @@ import {
   activeSessions,
   processedSessions,
   buildParticipantSections,
-  createPrWithAttribution,
   createSessionWorktree,
   deleteWorktreeIfUnused,
   endLinearSession,
@@ -44,6 +44,7 @@ import {
   type ActiveSession,
   type LinearPromptEntry,
 } from "./session";
+import { createPrWithAttribution, updatePrDescriptionFromAgent } from "./pr";
 import { isLinearSessionTerminal } from "./session-store";
 import {
   clearLinearAssignmentStopped,
@@ -430,10 +431,20 @@ async function runClaimedLinearTurn(
           const creatorGithub = linearEmailToGithubUsername(
             session.issueCreator?.email || null,
           );
+          const agentBody = extractAgentPrBody(result);
+          const summary = extractAgentSummary(result);
+          const summaryBlock = summary
+            ? `\n\n${
+                summary.length > 4000
+                  ? `${summary.slice(0, 4000).replace(/\s+\S*$/, "")}…`
+                  : summary
+              }`
+            : "";
           // A retried or reopened implementation turn must not open a second
           // PR: the URL is persisted in the agent-session file.
           let prUrl = session.prUrl ?? null;
           let failureReason: string | undefined;
+          let createdPr: boolean | undefined;
           if (!prUrl) {
             const pr = await createPrWithAttribution(
               session.worktreeDir,
@@ -442,22 +453,41 @@ async function runClaimedLinearTurn(
               session.issueTitle,
               session.participants || [],
               creatorGithub,
+              {
+                agentBody,
+                sessionId: linearUnifiedSessionId(session.sessionKey),
+                author: session.issueCreator?.name || null,
+              },
             );
             prUrl = pr.url;
             failureReason = pr.reason;
+            createdPr = pr.created;
             if (prUrl) {
               session.prUrl = prUrl;
               await persistActiveSession(session);
             }
           }
+          if (prUrl && agentBody && createdPr !== true) {
+            // A persisted or reused PR keeps its URL. Refresh only the managed
+            // description section; human edits elsewhere survive.
+            const updated = await updatePrDescriptionFromAgent({
+              worktreeDir: session.worktreeDir,
+              prUrl,
+              agentBody,
+            });
+            if (!updated.updated && updated.reason)
+              console.warn(
+                `[linear] ${session.issueIdentifier}: ${updated.reason}`,
+              );
+          }
 
           await createAgentActivity(accessToken, id, {
             type: "response",
             body: prUrl
-              ? `Implementation complete! PR: ${prUrl}`
+              ? `Implementation complete!${summaryBlock}\n\nPR: ${prUrl}`
               : `Implementation complete, but I couldn't open the pull request${
                   failureReason ? `: ${failureReason}` : ""
-                }. Please check manually.`,
+                }.${summaryBlock}\n\nPlease check manually.`,
           });
           outcome = { busy: false, result };
         } else if (options.reportGeneric !== false) {
@@ -743,6 +773,21 @@ export async function handleIssueUpdate(
 
     (async () => {
       try {
+        // A `created` delivery may still be preparing the checkout. Run only
+        // after it settles, and never hand the engine an empty cwd.
+        if (existingSession!.ready)
+          await existingSession!.ready.catch(() => {});
+        if (!existingSession!.worktreeDir) {
+          await createAgentActivity(
+            accessToken,
+            existingSession!.linearSessionId,
+            {
+              type: "error",
+              body: "This session's checkout is not ready. Reassign the issue to retry.",
+            },
+          ).catch(() => {});
+          return;
+        }
         await createAgentActivity(
           accessToken,
           existingSession!.linearSessionId,
@@ -1114,8 +1159,10 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
                   -PROCESSED_PROMPT_LIMIT,
                 );
               // Persist before the turn starts: a redelivery after a restart
-              // must see this id even if the process dies mid-run.
-              await persistActiveSession(s);
+              // must see this id even if the process dies mid-run. A failed
+              // write must not start a turn whose claim cannot be replayed.
+              if (!(await persistActiveSession(s)))
+                throw new Error("The prompt claim could not be persisted");
             }
             try {
               await appendLinearTranscript(

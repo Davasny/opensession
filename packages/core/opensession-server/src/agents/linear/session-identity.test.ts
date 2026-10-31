@@ -66,6 +66,7 @@ const activityCalls: Array<{ sessionId: string; content: any }> = [];
 const linkCalls: Array<{ sessionId: string; urls: string[] }> = [];
 const workspaceCalls: Array<Record<string, unknown>> = [];
 const transcriptCalls: Array<{ sessionId: string; entry: any }> = [];
+const prBodyUpdates: Array<{ branch: string; repo: string; body: string }> = [];
 const movedStatuses: Array<{ issueId: string; status: string }> = [];
 let runResult = "";
 let createGate: Promise<void> | null = null;
@@ -88,6 +89,7 @@ mock.module("../../server/worktree", () => ({
   repoForPathOrNull: (cwd: string) =>
     cwd.startsWith(`${worktreeRoot}/`) ? prRepo : undefined,
   worktreeHeadBranch: () => headBranch,
+  worktreeHeadBranchAsync: async () => headBranch,
   createWorktree: async (branch: string) => {
     const gate = createGate;
     createGate = null;
@@ -116,6 +118,10 @@ mock.module("../../server/github-app", () => ({
     credentialCalls.push(ghRepo);
     return prCredentialEnv;
   },
+}));
+
+mock.module("../../server/repo-visibility", () => ({
+  treatRepoAsPublic: async () => false,
 }));
 
 mock.module("./api", () => ({
@@ -217,6 +223,24 @@ mock.module("../../server/agent-runner", () => ({
 // Persistence is under test; the list index / catalog projection is not.
 mock.module("../../server/session-cache", () => ({
   publishSessionChange: async () => {},
+}));
+
+mock.module("../../server/pr-info", () => ({
+  updatePrBody: async (
+    branch: string,
+    mutate: (body: string) => string,
+    repo: string,
+  ) => {
+    const body = mutate(
+      "<!-- opensession:pr-body -->\nOld description\n<!-- /opensession:pr-body -->\n\nFooter",
+    );
+    prBodyUpdates.push({ branch, repo, body });
+    return {
+      ok: true,
+      number: 55,
+      url: "https://github.com/acme/linear-repo/pull/55",
+    };
+  },
 }));
 
 mock.module("../../server/session-workspace", () => ({
@@ -384,6 +408,7 @@ beforeEach(() => {
   linkCalls.length = 0;
   workspaceCalls.length = 0;
   transcriptCalls.length = 0;
+  prBodyUpdates.length = 0;
   movedStatuses.length = 0;
   runResult = "";
   delete process.env.LINEAR_START_MODE;
@@ -438,7 +463,7 @@ test("automatic PR creation passes fresh repository App credentials to gh", asyn
       [],
       "reviewer",
     );
-    expect(result).toEqual({ url });
+    expect(result).toEqual({ url, created: true });
     expect(credentialCalls).toEqual(["acme/linear-repo"]);
     expect(ghCalls).toHaveLength(3);
     expect(ghCalls[0]!.args.slice(0, 4)).toEqual([
@@ -448,12 +473,9 @@ test("automatic PR creation passes fresh repository App credentials to gh", asyn
       "--repo",
     ]);
     expect(ghCalls[0]!.args).toContain(headBranch!);
-    expect(ghCalls[1]!.args.slice(0, 4)).toEqual([
-      "gh",
-      "pr",
-      "create",
-      "--title",
-    ]);
+    expect(ghCalls[1]!.args.slice(0, 3)).toEqual(["gh", "pr", "create"]);
+    expect(ghCalls[1]!.args).toContain("--title");
+    expect(ghCalls[1]!.args).toContain("--head");
     expect(ghCalls[1]!.args).not.toContain("--reviewer");
     expect(ghCalls[2]!.args).toEqual([
       "gh",
@@ -478,6 +500,41 @@ test("automatic PR creation passes fresh repository App credentials to gh", asyn
   }
 });
 
+test("automatic PR creation uses the agent's description and a session footer", async () => {
+  const url = "https://github.com/acme/linear-repo/pull/43";
+  const spawn = mockGh([{ stdout: "[]" }, { stdout: `${url}\n` }]);
+  try {
+    const result = await createPrWithAttribution(
+      `${worktreeRoot}/task`,
+      "ENG-1",
+      ISSUE.url,
+      ISSUE.title,
+      [{ id: "creator-1", name: "Ada", email: "ada@example.test" }],
+      null,
+      {
+        agentBody: "## What changed\nFixed the bug.",
+        sessionId: "linear-agent~abc",
+        author: "Ada",
+      },
+    );
+    expect(result).toEqual({ url, created: true });
+    const args = ghCalls[1]!.args;
+    const body = args[args.indexOf("--body") + 1]!;
+    expect(body).toContain("## What changed");
+    expect(body).toContain("<!-- opensession:pr-body -->");
+    expect(body).toContain("## Ticket");
+    expect(body).toContain("Implements ENG-1: Fix the bug");
+    expect(body).toContain("**Requested by:** Ada (via Linear)");
+    expect(body).toContain("Started by Ada in [this");
+    expect(body).toContain("/session/linear-agent~abc");
+    expect(body).not.toContain("Generated with Claude Code");
+    expect(args).toContain("--head");
+    expect(args).toContain(headBranch!);
+  } finally {
+    spawn.mockRestore();
+  }
+});
+
 test("automatic PR creation reuses an existing open PR", async () => {
   const url = "https://github.com/acme/linear-repo/pull/7";
   const spawn = mockGh([{ stdout: JSON.stringify([{ url }]) }]);
@@ -489,7 +546,7 @@ test("automatic PR creation reuses an existing open PR", async () => {
       ISSUE.title,
       [],
     );
-    expect(result).toEqual({ url });
+    expect(result).toEqual({ url, created: false });
     expect(ghCalls).toHaveLength(1);
     expect(ghCalls[0]!.args.slice(0, 2)).toEqual(["gh", "pr"]);
     expect(ghCalls[0]!.args[2]).toBe("list");
@@ -513,7 +570,7 @@ test("automatic PR creation recovers a PR that gh created before failing", async
       ISSUE.title,
       [],
     );
-    expect(result).toEqual({ url });
+    expect(result).toEqual({ url, created: false });
     expect(ghCalls).toHaveLength(3);
   } finally {
     spawn.mockRestore();
@@ -536,7 +593,7 @@ test("a rejected reviewer request does not hide a created PR", async () => {
       [],
       "not-a-collaborator",
     );
-    expect(result).toEqual({ url });
+    expect(result).toEqual({ url, created: true });
   } finally {
     spawn.mockRestore();
   }
@@ -606,7 +663,7 @@ test("a repeated implementation turn reuses the stored PR after a restart", asyn
     activeSessions.clear();
     processedSessions.clear();
 
-    runResult = "Implemented again. IMPLEMENTATION_COMPLETE";
+    runResult = `More work.\n===OPENSESSION-PR-BODY===\n## What changed\nMore work.\nIMPLEMENTATION_COMPLETE`;
     await handleAgentSession(
       prompted(id, "implement again", "activity-pr-2"),
       {},
@@ -618,6 +675,12 @@ test("a repeated implementation turn reuses the stored PR after a restart", asyn
         ).length === 2,
       "second PR activity",
     );
+
+    // The existing PR keeps its URL, and only the managed description section
+    // is refreshed for the follow-up work.
+    expect(prBodyUpdates).toHaveLength(1);
+    expect(prBodyUpdates[0]!.body).toContain("More work.");
+    expect(prBodyUpdates[0]!.body).not.toContain("Old description");
 
     // list + create for the first turn only; the retry made no gh calls.
     expect(ghCalls).toHaveLength(2);

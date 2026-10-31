@@ -3,7 +3,7 @@
  */
 import { connectResultPage } from "../../server/connect-result-page";
 import { fetchWithTimeout } from "../../server/shared/fetch-with-timeout";
-import { writeJsonAtomic } from "../../server/shared/atomic-write";
+import { writeJsonAtomicAsync } from "../../server/shared/atomic-write";
 import { randomBytes, timingSafeEqual } from "crypto";
 import {
   configuredIntegration,
@@ -59,7 +59,7 @@ export async function loadTokens(): Promise<LinearTokens> {
 
 export async function saveTokens(tokens: LinearTokens): Promise<void> {
   bindTokens(tokens);
-  writeJsonAtomic(TOKENS_FILE, tokens);
+  await writeJsonAtomicAsync(TOKENS_FILE, tokens);
 }
 
 export function refreshToken(

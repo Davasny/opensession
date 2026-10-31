@@ -14,6 +14,7 @@ import { readFileSync } from "fs";
 import { statePath } from "./paths";
 import { githubLoginToPersonKey, githubLoginFor } from "./shared/user-mappings";
 import { configuredRepos, githubBotLogins } from "./config";
+import { sessionRefFromPrBody } from "./pr-body";
 import { isLockHeld, type LastReviewState } from "../agents/github/state";
 import { ghRateLimited } from "./github-limit";
 import { prKey } from "../agents/github/constants";
@@ -87,24 +88,9 @@ export interface PrInfo {
   sessionRef?: string;
 }
 
-/**
- * The session id out of the attribution footer every session-opened PR carries
- * ("Started by … in [this session](<public base URL>/session/<id>)",
- * written by pi-runner/system-prompt). This is how a session finds the
- * PRs it opened on branches it doesn't own — a second branch of its own repo,
- * or a repo it never attached.
- *
- * Deliberately anchored on the footer's link text: a body that merely links to
- * some session in passing must not claim the PR for it.
- */
-export function sessionRefFromPrBody(
-  body: string | null | undefined,
-): string | undefined {
-  const m = body?.match(
-    /\[this [^\]]*session\]\((?:https?:\/\/[^)\s]+?)?\/session\/([A-Za-z0-9._-]+)/i,
-  );
-  return m?.[1];
-}
+/** The footer parser lives with the body contract (server/pr-body.ts) so the
+ *  writer and the reader cannot drift. Re-exported for existing importers. */
+export { sessionRefFromPrBody };
 function prRepos() {
   return Object.values(configuredRepos())
     .filter((repo) => hostRepoId(repo) && repo.prCache !== false)

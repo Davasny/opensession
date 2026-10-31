@@ -34,6 +34,7 @@ import { findSession, touchNativeSession } from "./session-cache";
 import { transcript } from "./actor-transcript";
 import { resolvePrTarget } from "./session-repos";
 import { prHostFor } from "./pr-host";
+import { PR_ATTRIBUTION_FOOTER_RE } from "./pr-body";
 import { getRepo } from "./worktree";
 import { configuredServer } from "./config";
 
@@ -246,9 +247,7 @@ function spliceWalkthroughSection(body: string, section: string): string {
   if (start !== -1 && end !== -1 && end > start) {
     return body.slice(0, start) + block + body.slice(end + END_MARKER.length);
   }
-  const footer = body.match(
-    /\n*(Started by|Created by) .*\[this [^\]]* session\]\([^)]*\)[^\n]*\s*$/,
-  );
+  const footer = body.match(PR_ATTRIBUTION_FOOTER_RE);
   if (footer && typeof footer.index === "number") {
     return `${body.slice(0, footer.index).trimEnd()}\n\n${block}\n${body.slice(footer.index).trimStart() ? "\n" + body.slice(footer.index).trim() : ""}`;
   }

@@ -2,6 +2,10 @@
  * Prompts and messages for the Linear agent.
  */
 import { personaName } from "../../server/config";
+import {
+  LINEAR_IMPLEMENTATION_COMPLETE,
+  PR_BODY_SENTINEL,
+} from "../../server/pr-body";
 
 export const MESSAGES = {
   starting: "Setting up a worktree for this ticket...",
@@ -83,8 +87,12 @@ $PARTICIPANTS_SECTION
 IMPORTANT: Always push your commits immediately after making them with \`git push -u origin HEAD\` — this worktree branch has no upstream yet, and the automatic PR step needs the branch pushed. Never leave commits unpushed.
 
 When implementation is complete and all acceptance criteria are met:
-1. Commit all changes with a descriptive message and push immediately
-2. Output exactly: IMPLEMENTATION_COMPLETE
+1. Commit all changes with a descriptive message and push immediately.
+2. Write a short summary for the Linear timeline.
+3. Output this exact line on its own:
+${PR_BODY_SENTINEL}
+4. Then write the full pull request description for a reviewer. Cover what changed, why, the key decisions, and how you verified it. Write it as if the repository is public: never include internal hostnames, private repository names, customer details, secrets, or content from other systems. This is the text reviewers read on GitHub, so keep it factual and specific.
+5. Then output exactly: ${LINEAR_IMPLEMENTATION_COMPLETE}
 
 (Do NOT create a PR - it will be created automatically with proper attribution)
 

@@ -10,6 +10,7 @@
 import { join } from "path";
 import { configuredServer, personaName } from "./config";
 import { renderInternalMcpCapabilities } from "./mcp-capabilities";
+import { prAttributionFooter } from "./pr-body";
 import { githubLoginFor, type GitIdentity } from "./shared/user-mappings";
 
 const UI_BASE =
@@ -348,9 +349,10 @@ export function buildSessionContext(input: {
   ) {
     const requester = input.author?.name || null;
     const login = githubLoginFor(input.user || input.author?.name);
-    const footer = requester
-      ? `Started by ${requester} in [this ${personaName()} session](${link})`
-      : `Created by [this ${personaName()} session](${link})`;
+    const footer = prAttributionFooter({
+      sessionUrl: link,
+      author: requester,
+    });
     lines.push(`PR attribution footer: ${footer}`);
     const rule = input.githubUserLogin
       ? `PRs use @${input.githubUserLogin}'s account through gh; do not add an assignee.`
