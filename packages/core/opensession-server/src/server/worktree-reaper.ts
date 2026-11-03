@@ -851,9 +851,7 @@ export async function sweepWorktreeReaper(
     console.log(
       `[worktree-reaper] ${parking ? "parking" : "reaping"} ${e.name} (${reason})${bankDir ? ` [work banked: ${bankDir}]` : ""}`,
     );
-    const slug = e.name.startsWith(`${repo.wtPrefix}-`)
-      ? e.name.slice(repo.wtPrefix.length + 1)
-      : branch;
+    const slug = branch;
     // Parking is reversible session hygiene, not a done signal: keep its Slack
     // channel and tmux metadata. A live tmux shell is already protected by the
     // /proc cwd check above.

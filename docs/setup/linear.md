@@ -27,6 +27,9 @@ routing.
   **In Progress**. Planning moves the issue to `Ready`; implementation moves it
   to and auto-starts from `In Progress`. Status matching is case-insensitive,
   but the names are otherwise exact.
+- Configure the desired **Branch format** in Linear's GitHub/GitLab integration
+  settings. Open Session creates the issue's `Issue.branchName` as-is, so the
+  checkout matches the branch name Linear shows for the issue.
 
 ## Configuration
 
@@ -151,10 +154,16 @@ fetched from each issue; only the workflow status names above are fixed.
 For a non-shared default repo, worktrees live at
 `<paths.worktreesDir>/<wtPrefix>-<branch>`. `paths.worktreesDir` defaults to
 `~/.opensession/worktrees` and can be overridden by
-`OPENSESSION_WORKTREES_DIR`. The branch is based on the first two words of the
+`OPENSESSION_WORKTREES_DIR`. The branch is Linear's suggested branch name for
+the issue (`Issue.branchName`), which follows the branch format configured for
+the issue's team in Linear. Open Session uses it verbatim, so a PR opened from
+the checkout matches Linear's normal branch-based issue linking. If Linear
+returns no usable name, the agent falls back to the first two words of the
 issue title plus its issue identifier. Reassigning an issue regenerates that
 branch; when the previous branch still exists it gets a `-2`, `-3`, … suffix so
-the new agent session starts in its own worktree.
+the new agent session starts in its own worktree. Slashes in the configured
+format are preserved in the git ref, while the on-disk checkout directory
+replaces them with `~` so it stays one level under `paths.worktreesDir`.
 
 Session metadata is stored under `~/.linear-sessions/`. Current files are named
 after the Linear agent-session id, with the generated branch recorded inside the

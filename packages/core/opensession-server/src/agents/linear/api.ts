@@ -208,6 +208,8 @@ export async function getIssueDetails(
   description: string;
   url: string;
   identifier: string;
+  /** Linear's suggested branch name, following the team's branch format. */
+  branchName: string;
   creator: Participant | null;
 }> {
   const result = await gql(
@@ -219,6 +221,7 @@ export async function getIssueDetails(
         title
         description
         url
+        branchName
         state { name }
         team { id }
         creator { id name email }
@@ -237,6 +240,7 @@ export async function getIssueDetails(
     description: issue?.description || "",
     url: issue?.url || "",
     identifier: issue?.identifier || "",
+    branchName: issue?.branchName || "",
     creator: creator
       ? { id: creator.id, name: creator.name, email: creator.email || null }
       : null,

@@ -2,7 +2,7 @@
  * Regression tests for the branch-keyed Linear session collision.
  *
  * A Linear agent session's identity must be its Linear agent-session id, not
- * the branch generated from issue title + identifier. Reassigning the same
+ * the branch generated for the issue. Reassigning the same
  * issue regenerates the branch; the new agent session must get its own store
  * file, worktree, transcript id and external link, and the previous session's
  * late saves or cleanup must never touch it.
@@ -74,6 +74,7 @@ let runGate: Promise<void> | null = null;
 let apiGate: Promise<void> | null = null;
 let apiGateStarted: (() => void) | null = null;
 let issueStatus = "Todo";
+let issueBranchName: string | undefined;
 let issueHasPlanResult = false;
 let workspaceFailures = 0;
 let transcriptFailures = 0;
@@ -90,6 +91,7 @@ mock.module("../../server/worktree", () => ({
     cwd.startsWith(`${worktreeRoot}/`) ? prRepo : undefined,
   worktreeHeadBranch: () => headBranch,
   worktreeHeadBranchAsync: async () => headBranch,
+  worktreeDirNameForBranch: (branch: string) => branch.replace(/[/\\]+/g, "~"),
   createWorktree: async (branch: string) => {
     const gate = createGate;
     createGate = null;
@@ -174,6 +176,7 @@ mock.module("./api", () => ({
       description: "It is broken",
       url: "https://linear.app/example/issue/ENG-1",
       identifier: "ENG-1",
+      branchName: issueBranchName,
       creator: { id: "creator-1", name: "Ada", email: "ada@example.test" },
     };
   },
@@ -417,6 +420,7 @@ beforeEach(() => {
   apiGate = null;
   apiGateStarted = null;
   issueStatus = "Todo";
+  issueBranchName = BRANCH;
   issueHasPlanResult = false;
   workspaceFailures = 0;
   transcriptFailures = 0;
@@ -776,6 +780,33 @@ test("duplicate created for the same agent session is idempotent after a restart
   expect(
     transcriptCalls.filter((call) => call.entry.type === "assistant"),
   ).toHaveLength(1);
+});
+
+test("new session uses Linear's branch name and preserves slashes", async () => {
+  const id = "9a9a9a9a-9a9a-4a9a-8a9a-9a9a9a9a9a9a";
+  issueBranchName = "eng/1/fix-the-bug";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+
+  expect(createdBranches).toEqual([issueBranchName]);
+  expect(readStored(linearSessionFileKey(id))).toMatchObject({
+    branch: issueBranchName,
+    worktreeDir: `${worktreeRoot}/${issueBranchName}`,
+  });
+});
+
+test("new session falls back to the legacy branch when Linear returns none", async () => {
+  const id = "9b9b9b9b-9b9b-4b9b-8b9b-9b9b9b9b9b9b";
+  issueBranchName = "";
+
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+
+  expect(createdBranches).toEqual([BRANCH]);
+  expect(readStored(linearSessionFileKey(id))).toMatchObject({
+    branch: BRANCH,
+  });
 });
 
 test("prompted recovery refuses a branch record owned by another agent session", async () => {

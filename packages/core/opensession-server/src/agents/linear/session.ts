@@ -22,6 +22,7 @@ import {
   removeWorktree,
   resolveUniqueBranch,
   sharedCheckoutForNewSessions,
+  worktreeDirNameForBranch,
 } from "../../server/worktree";
 import { rm } from "fs/promises";
 import {
@@ -243,7 +244,12 @@ Co-Authored-By: ${lastActiveUser.name} <${email}>`;
 
 // --- Branch & Worktree ---
 
-export function generateBranchName(
+/**
+ * Branch name used before Linear supplied `Issue.branchName`. Only for
+ * locating legacy `<branch>.json` records and as the fallback when Linear
+ * returns no usable name. New checkouts use `branchNameFromIssue`.
+ */
+export function legacyBranchName(
   title: string,
   issueIdentifier?: string,
 ): string {
@@ -269,6 +275,46 @@ export function generateBranchName(
 }
 
 /**
+ * Whether Linear's suggested branch name can be handed to `git worktree add`
+ * unchanged. Linear generates it for git, so this only rejects clearly invalid
+ * values (custom formats can be edited by a workspace admin) instead of
+ * rewriting a valid name and breaking Linear's branch matching.
+ */
+function isUsableBranchName(name: string): boolean {
+  if (name.length === 0 || name.length > 200) return false;
+  if (name === "@" || name.startsWith("-")) return false;
+  if (name.includes("..") || name.includes("@{") || name.includes("//"))
+    return false;
+  if (/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(name)) return false;
+  // Git refs are path-like: every slash-separated component must be a valid
+  // file name and cannot look like a lock file or a dot entry.
+  return name
+    .split("/")
+    .every(
+      (part) =>
+        part.length > 0 &&
+        !part.startsWith(".") &&
+        !part.endsWith(".") &&
+        !part.endsWith(".lock"),
+    );
+}
+
+/**
+ * The branch for a new Linear session: Linear's own suggested name, which
+ * follows the issue team's configured branch format. Falls back to the legacy
+ * heuristic only when Linear returns nothing usable.
+ */
+export function branchNameFromIssue(
+  linearBranchName: string | undefined,
+  title: string,
+  issueIdentifier?: string,
+): string {
+  const candidate = linearBranchName?.trim();
+  if (candidate && isUsableBranchName(candidate)) return candidate;
+  return legacyBranchName(title, issueIdentifier);
+}
+
+/**
  * Create the isolated checkout for a new Linear agent session and return the
  * branch and path that actually exist. A reassigned issue regenerates the same
  * branch, so an isolated repo gets a unique suffix instead of reusing (or
@@ -287,7 +333,9 @@ export async function createSessionWorktree(desiredBranch: string): Promise<{
     ? desiredBranch
     : await resolveUniqueBranch(desiredBranch, repo.id);
   try {
-    const worktreeDir = await createRepoWorktree(branch, repo.id);
+    const worktreeDir = await createRepoWorktree(branch, repo.id, {
+      worktreeDirName: worktreeDirNameForBranch(branch),
+    });
     console.log(`[linear] Created worktree: ${branch} at ${worktreeDir}`);
     return { branch, worktreeDir, ownsWorktree: !shared, repoId: repo.id };
   } catch (error) {
@@ -296,7 +344,9 @@ export async function createSessionWorktree(desiredBranch: string): Promise<{
     if (shared) throw error;
     const retry = await resolveUniqueBranch(branch, repo.id);
     if (retry === branch) throw error;
-    const worktreeDir = await createRepoWorktree(retry, repo.id);
+    const worktreeDir = await createRepoWorktree(retry, repo.id, {
+      worktreeDirName: worktreeDirNameForBranch(retry),
+    });
     console.log(`[linear] Created worktree: ${retry} at ${worktreeDir}`);
     return {
       branch: retry,
@@ -766,6 +816,8 @@ export interface EndedLinearSession {
    *  its worktree is only safe behind this flag. */
   owned: boolean;
   branch: string | null;
+  /** Exact checkout directory, so a flattened slash-branch path is removable. */
+  worktreeDir: string | null;
   /** Repository that owns the checkout, so cleanup targets it even when the
    *  instance default repo has changed since this session was created. */
   repoId: string | null;
@@ -804,12 +856,15 @@ export async function endLinearSession(
   );
   const key = active?.sessionKey ?? stored?.key;
   const branch = active?.branch ?? stored?.session.branch ?? null;
+  const worktreeDir =
+    active?.worktreeDir || stored?.session.worktreeDir || null;
   const repoId = active?.repoId ?? stored?.session.repoId ?? null;
   const removed = key ? await deleteSessionFile(key, linearSessionId) : false;
   activeSessions.delete(linearSessionId);
   return {
     owned: !!active || !!stored,
     branch,
+    worktreeDir,
     repoId,
     removed,
     cleanupDeferred: !!active?.cleanupCreatedWorktree,
@@ -821,6 +876,7 @@ export async function deleteWorktreeIfUnused(
   branch: string,
   ownerLinearSessionId: string,
   repoId?: string | null,
+  worktreeDir?: string | null,
 ): Promise<boolean> {
   const inUse = [...activeSessions.entries()].some(
     ([id, session]) =>
@@ -829,7 +885,9 @@ export async function deleteWorktreeIfUnused(
       session.branch === branch,
   );
   if (inUse) return false;
-  await removeWorktree(branch, repoId || defaultRepo().id);
+  await removeWorktree(branch, repoId || defaultRepo().id, {
+    worktreeDir: worktreeDir || undefined,
+  });
   console.log(`[linear] Deleted worktree: ${branch}`);
   return true;
 }

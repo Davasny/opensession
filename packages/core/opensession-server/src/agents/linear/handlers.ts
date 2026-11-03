@@ -33,8 +33,9 @@ import {
   endLinearSession,
   findStoredSessionForAgentSession,
   formatConversationHistory,
-  generateBranchName,
+  branchNameFromIssue,
   latestSessionForIssue,
+  legacyBranchName,
   linearSessionFileKey,
   linearUnifiedSessionId,
   loadSessionInfo,
@@ -148,9 +149,9 @@ function isEndedAgentSession(id: string): boolean {
   return true;
 }
 
-// Per-issue serialization for worktree creation. Branch names are generated
-// from title + identifier, so two concurrent `created` deliveries for one
-// issue would otherwise resolve the same branch.
+// Per-issue serialization for worktree creation. New sessions use the same
+// Linear branch name for one issue, so two concurrent `created` deliveries
+// would otherwise resolve the same branch.
 const issueCreationChains: Map<string, Promise<unknown>> = ((
   globalThis as any
 ).__linearIssueCreationChains ??= new Map<string, Promise<unknown>>());
@@ -765,7 +766,7 @@ export async function handleIssueUpdate(
   let existingSession = latestSessionForIssue(issue);
 
   if (!existingSession) {
-    const branch = generateBranchName(details.title, issue.identifier);
+    const branch = legacyBranchName(details.title, issue.identifier);
     const diskSession = await loadSessionInfo(branch);
     // A legacy branch-named file is adopted only when it records a Linear
     // agent-session id and has no terminal marker. A file without an id, with
@@ -950,7 +951,7 @@ export async function handleAgentSession(
     // the same branch and the previous session's transcript must not be
     // resumed under the new id.
     if (!session) {
-      const branch = generateBranchName(
+      const branch = legacyBranchName(
         agentSession.issue.title,
         agentSession.issue.identifier,
       );
@@ -1274,7 +1275,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
       `[linear] Session ${action} for issue: ${agentSession.issue.identifier}`,
     );
     endedAgentSessions.set(agentSession.id, Date.now());
-    const branch = generateBranchName(
+    const branch = legacyBranchName(
       agentSession.issue.title,
       agentSession.issue.identifier,
     );
@@ -1288,6 +1289,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
           ended.branch,
           agentSession.id,
           ended.repoId,
+          ended.worktreeDir,
         );
       }
     } catch (e) {
@@ -1378,7 +1380,9 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     `[linear] New session for issue: ${issue.identifier} - ${issue.title}`,
   );
 
-  const desiredBranch = generateBranchName(issue.title, issue.identifier);
+  // The legacy name is only for adopting a pre-`Issue.branchName` store file.
+  // The real branch is chosen from Linear's response after the API calls below.
+  const legacyBranch = legacyBranchName(issue.title, issue.identifier);
   let sessionKey: string;
   try {
     sessionKey = linearSessionFileKey(sessionId);
@@ -1395,7 +1399,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
   // second session for the same Linear agent session.
   const existing = await findStoredSessionForAgentSession(
     sessionId,
-    desiredBranch,
+    legacyBranch,
   );
   if (
     isEndedAgentSession(sessionId) ||
@@ -1450,6 +1454,11 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
 
   const { teamId } = await getIssueStatus(accessToken, issue.id);
   const issueDetails = await getIssueDetails(accessToken, issue.id);
+  const desiredBranch = branchNameFromIssue(
+    issueDetails.branchName,
+    issue.title,
+    issue.identifier,
+  );
 
   // An end can arrive while the Linear API calls above are in flight, before
   // this session is registered. Re-fence before any worktree is created.
@@ -1517,6 +1526,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
             created.branch,
             sessionId,
             created.repoId,
+            created.worktreeDir,
           );
       };
       if (session.cleanupCreatedWorktree) {

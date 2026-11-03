@@ -648,13 +648,26 @@ export async function ensureAskCheckout(repoId?: string): Promise<string> {
   });
 }
 
+/**
+ * Directory name for a branch under `worktreesDir`. Git refs may contain `/`,
+ * but the reaper only scans one level below the worktrees root, so a nested
+ * path would be mistaken for a wrapper directory. Replace ref separators with
+ * `~`, which is valid in a path but forbidden in a git ref name, so two
+ * different branches can never flatten to the same directory.
+ */
+export function worktreeDirNameForBranch(branch: string): string {
+  return branch.replace(/[/\\]+/g, "~");
+}
+
 export async function removeWorktree(
   branch: string,
   repoId?: string,
+  opts?: { worktreeDir?: string },
 ): Promise<void> {
   const repo = getRepo(repoId);
   try {
-    const wtPath = `${worktreesDir()}/${repo.wtPrefix}-${branch}`;
+    const wtPath =
+      opts?.worktreeDir ?? `${worktreesDir()}/${repo.wtPrefix}-${branch}`;
     // Stop the workspace's supervised Portals before removing the directory.
     try {
       await stopAllPortalServices({
@@ -1223,10 +1236,11 @@ export function worktreePathFor(
  *     exists — the reported failure: "cannot lock ref … 'test/…' exists"),
  *   - an existing ref is a directory prefix of `desired` (`test/foo` when a
  *     branch `test` exists).
- * Callers pass slug names (sanitizeBranchSlug maps `/`→`-`), and a suffix bump
- * always clears the first two collisions for a slash-free name; the third only
- * arises for slashed names (not produced here), where a parent branch blocks
- * the whole subtree and no suffix escapes it — we then return `desired` and let
+ * Callers pass slug names or Linear's slash-containing branch names
+ * (`sanitizeBranchSlug` maps `/`→`-` for generated sessions). A suffix bump
+ * always clears the first two collisions; the third only arises for slashed
+ * names whose parent ref exists (`eng/247/foo` when `eng` exists), where a
+ * suffix cannot escape the blocked subtree — we then return `desired` and let
  * the worktree add fail loudly rather than loop.
  * Used by the new-session path so a fresh session never dies on a name clash.
  * Reuse paths (existing worktree for the branch, from-PR, orphan adoption in
@@ -1274,7 +1288,13 @@ export async function resolveUniqueBranch(
 export async function createWorktree(
   branch: string,
   repoId?: string,
-  opts?: { base?: string; isolated?: boolean; gitEnv?: Record<string, string> },
+  opts?: {
+    base?: string;
+    isolated?: boolean;
+    gitEnv?: Record<string, string>;
+    /** Directory suffix to use instead of `branch`, for refs with slashes. */
+    worktreeDirName?: string;
+  },
 ): Promise<string> {
   const repo = getRepo(repoId);
   const shell = opts?.gitEnv ? $.env({ ...process.env, ...opts.gitEnv }) : $;
@@ -1290,7 +1310,7 @@ export async function createWorktree(
   // whole instance out the same way (sharedCheckoutForNewSessions).
   if (sharedCheckoutForNewSessions(repo) && !opts?.isolated) return repo.repo;
 
-  const wtPath = `${worktreesDir()}/${repo.wtPrefix}-${branch}`;
+  const wtPath = `${worktreesDir()}/${repo.wtPrefix}-${opts?.worktreeDirName ?? branch}`;
   const base = opts?.base;
 
   await withGitLock(async () => {
