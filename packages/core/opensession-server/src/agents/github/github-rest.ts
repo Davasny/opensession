@@ -322,6 +322,8 @@ export interface ReviewCommentInfo {
   /** GitHub account type ("User", "Bot", "Organization"). */
   userType: string;
   outdated: boolean;
+  /** The formal review this inline comment belongs to, when GitHub reports it. */
+  reviewId?: number;
 }
 
 /** List the inline review comments on a PR (for auto-fix to address + reply to). Newest first. */
@@ -344,6 +346,9 @@ async function listReviewComments(
       login: c.user?.login || "",
       userType: c.user?.type || "",
       outdated: c.line == null && c.original_line != null,
+      ...(typeof c.pull_request_review_id === "number"
+        ? { reviewId: c.pull_request_review_id }
+        : {}),
     }))
     .reverse();
 }
@@ -795,4 +800,21 @@ export async function fetchReviewFindings(
     listReviews(prNumber, ghRepo),
   ]);
   return formatReviewFindings(comments, reviews);
+}
+
+/**
+ * Inline comments belonging to one formal review. Used by the Linear review
+ * autostart so a fix turn reads the feedback that triggered it instead of
+ * every open thread on the PR.
+ */
+export async function fetchReviewFindingsForReview(
+  prNumber: number,
+  reviewId: number,
+  ghRepo?: string,
+): Promise<string> {
+  const comments = await listReviewComments(prNumber, ghRepo);
+  return formatReviewFindings(
+    comments.filter((comment) => comment.reviewId === reviewId),
+    [],
+  );
 }

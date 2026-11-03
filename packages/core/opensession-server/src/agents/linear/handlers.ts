@@ -41,6 +41,8 @@ import {
   opensessionSessionUrl,
   persistActiveSession,
   runAgentHeadless,
+  beginReviewRound,
+  setReviewClaimStatus,
   type ActiveSession,
   type LinearPromptEntry,
 } from "./session";
@@ -309,6 +311,19 @@ interface LinearTurnResult {
   error?: unknown;
 }
 
+export type { LinearTurnOptions, LinearTurnGuard, LinearTurnResult };
+
+/** Start one Linear turn from outside this module (review autostart). The
+ *  claim, in-flight lock, stop fence and persistence stay here. */
+export function startLinearTurn(
+  session: ActiveSession,
+  accessToken: string,
+  prompt: string,
+  options: LinearTurnOptions = {},
+): Promise<LinearTurnResult> {
+  return executeLinearTurn(session, accessToken, prompt, options);
+}
+
 /**
  * The one place a Linear turn is claimed, run, persisted and reported. Prompt
  * replies, issue-status auto-implementation and the assignment starter all use
@@ -348,7 +363,10 @@ async function executeLinearTurn(
         prompt,
         options,
         guard,
-      ).finally(() => inFlightPrompts.delete(lockKey));
+      ).finally(() => {
+        inFlightPrompts.delete(lockKey);
+        void drainPendingReviewFix(session, accessToken);
+      });
       return { busy: false, dispatched: true };
     }
     return await runClaimedLinearTurn(
@@ -366,7 +384,10 @@ async function executeLinearTurn(
     }).catch(() => {});
     return { busy: false, error: e };
   } finally {
-    if (!detached) inFlightPrompts.delete(lockKey);
+    if (!detached) {
+      inFlightPrompts.delete(lockKey);
+      void drainPendingReviewFix(session, accessToken);
+    }
   }
 }
 
@@ -524,6 +545,59 @@ async function runClaimedLinearTurn(
     });
   }
   return outcome;
+}
+
+/**
+ * Start the one review-fix prompt queued while the checkout was busy. Called
+ * only after the in-flight lock is released. The slot is cleared and its
+ * claims are marked dispatched before the runner, so a crash never replays it.
+ */
+async function drainPendingReviewFix(
+  session: ActiveSession,
+  accessToken: string,
+): Promise<void> {
+  const pending = session.pendingReviewFix;
+  if (!pending) return;
+  if (session.ended || session.stopRequested) return;
+  if (inFlightPrompts.has(turnLockKey(session))) return;
+
+  session.pendingReviewFix = undefined;
+  session.phase = "working";
+  beginReviewRound(session);
+  setReviewClaimStatus(session, pending.reviewIds, "dispatched");
+  if (!(await persistActiveSession(session))) return;
+
+  const result = await executeLinearTurn(session, accessToken, pending.prompt, {
+    reportGeneric: true,
+    detachAfterClaim: true,
+    promptEntry: {
+      id: `linear-review:${pending.reviewIds.join(",")}`,
+      text: pending.label,
+      timestamp: pending.claimedAt,
+    },
+    onSettled: async (outcome) => {
+      setReviewClaimStatus(
+        session,
+        pending.reviewIds,
+        outcome.cancelled
+          ? "cancelled"
+          : outcome.error || outcome.result?.startsWith("Error:")
+            ? "failed"
+            : "completed",
+      );
+      await persistActiveSession(session);
+    },
+  });
+
+  if (result.busy || result.cancelled || result.error) {
+    session.pendingReviewFix = result.busy ? pending : undefined;
+    setReviewClaimStatus(
+      session,
+      pending.reviewIds,
+      result.busy ? "pending" : result.cancelled ? "cancelled" : "failed",
+    );
+    await persistActiveSession(session);
+  }
 }
 
 // --- Assignment autostart ---
@@ -705,6 +779,7 @@ export async function handleIssueUpdate(
         ...diskSession,
         sessionKey: branch,
         accessToken,
+        organizationId,
         issueTitle: details.title,
         issueIdentifier: issue.identifier,
         issueId: issue.id,
@@ -907,6 +982,7 @@ export async function handleAgentSession(
           ...stored.session,
           sessionKey: stored.key,
           accessToken: "",
+          organizationId,
           issueTitle: agentSession.issue.title,
           issueId: agentSession.issue.id,
           issueDescription: agentSession.issue.description || "",
@@ -1333,6 +1409,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
       ...existing.session,
       sessionKey: existing.key,
       accessToken,
+      organizationId: existing.session.organizationId ?? organizationId,
       issueDescription: issue.description || "",
       teamId: "",
       // Disk records have one; a legacy record that omits it still needs a
@@ -1402,6 +1479,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     // Filled in from createSessionWorktree's real path before any run.
     worktreeDir: "",
     linearSessionId: sessionId,
+    organizationId,
     sessionKey,
     phase: "awaiting_direction",
     ready,

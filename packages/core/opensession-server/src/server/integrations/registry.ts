@@ -129,6 +129,20 @@ export const INTEGRATIONS: IntegrationSpec[] = [
         description:
           'assignment start mode: "ask" (legacy), "plan" (recommended), or "implement"',
       },
+      {
+        name: "LINEAR_REVIEW_AUTOSTART",
+        description:
+          'start a fix turn when a GitHub review requests changes: "changes-requested"',
+      },
+      {
+        name: "LINEAR_REVIEW_AUTOSTART_ROUNDS",
+        description: "automatic review fix rounds per session (default 4)",
+      },
+      {
+        name: "LINEAR_REVIEW_AUTOSTART_REVIEWERS",
+        description:
+          'who may trigger a fix turn: "trusted" (team roster) or "any-write"',
+      },
     ],
     links: [
       {

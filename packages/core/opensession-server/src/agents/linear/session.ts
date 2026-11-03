@@ -79,6 +79,37 @@ export interface LinearAssignmentStart {
   noticeAt?: string;
 }
 
+/** One GitHub changes-requested review already claimed by a fix turn. */
+export interface LinearReviewClaim {
+  reviewId: string;
+  sha: string;
+  status: "pending" | "dispatched" | "completed" | "failed" | "cancelled";
+  claimedAt: string;
+  settledAt?: string;
+}
+
+/** Durable review-autostart state for one Linear session. */
+export interface LinearReviewAutostart {
+  /** Automatic review-fix turns dispatched for this session's PR. */
+  rounds: number;
+  /** Bounded list of review ids this session already claimed. */
+  claims: LinearReviewClaim[];
+  deliveredAt?: string;
+  cappedAnnounced?: boolean;
+}
+
+/** One review-fix prompt waiting behind the checkout's current turn. */
+export interface PendingReviewFix {
+  reviewIds: string[];
+  prompt: string;
+  label: string;
+  claimedAt: string;
+}
+
+/** Review claims kept per session. Older ids are dropped; the round cap stops
+ *  long before the list could matter. */
+export const MAX_REVIEW_CLAIMS = 20;
+
 /**
  * The fields kept in `<branch>.json`. Saves take a Partial of this and
  * startup hydration spreads the whole record into the live session, so every
@@ -120,6 +151,12 @@ export interface StoredSession {
   /** The pull request this session opened. Reused by a later implementation
    *  turn so a retry never opens a second PR. */
   prUrl?: string;
+  /** Linear organization that owns the token used by this session. */
+  organizationId?: string;
+  /** Changes-requested review fix rounds and their durable claims. */
+  reviewAutostart?: LinearReviewAutostart;
+  /** One review-fix prompt queued behind a running turn. */
+  pendingReviewFix?: PendingReviewFix;
   updatedAt?: string;
 }
 
@@ -272,6 +309,78 @@ export async function createSessionWorktree(desiredBranch: string): Promise<{
 
 // --- Session persistence ---
 
+const REVIEW_CLAIM_STATUSES: readonly LinearReviewClaim["status"][] = [
+  "pending",
+  "dispatched",
+  "completed",
+  "failed",
+  "cancelled",
+];
+
+function normalizeReviewAutostart(
+  raw: unknown,
+): LinearReviewAutostart | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, any>;
+  const claims: LinearReviewClaim[] = [];
+  if (Array.isArray(value.claims)) {
+    for (const item of value.claims.slice(-MAX_REVIEW_CLAIMS)) {
+      if (!item || typeof item !== "object") continue;
+      const reviewId = typeof item.reviewId === "string" ? item.reviewId : "";
+      if (!reviewId) continue;
+      const status = REVIEW_CLAIM_STATUSES.includes(item.status)
+        ? (item.status as LinearReviewClaim["status"])
+        : "failed";
+      claims.push({
+        reviewId,
+        sha: typeof item.sha === "string" ? item.sha : "",
+        status,
+        claimedAt:
+          typeof item.claimedAt === "string"
+            ? item.claimedAt
+            : new Date(0).toISOString(),
+        ...(typeof item.settledAt === "string"
+          ? { settledAt: item.settledAt }
+          : {}),
+      });
+    }
+  }
+  const rounds =
+    typeof value.rounds === "number" && Number.isFinite(value.rounds)
+      ? Math.max(0, Math.floor(value.rounds))
+      : 0;
+  return {
+    rounds,
+    claims,
+    ...(typeof value.deliveredAt === "string"
+      ? { deliveredAt: value.deliveredAt }
+      : {}),
+    ...(value.cappedAnnounced === true ? { cappedAnnounced: true } : {}),
+  };
+}
+
+function normalizePendingReviewFix(raw: unknown): PendingReviewFix | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, any>;
+  const prompt = typeof value.prompt === "string" ? value.prompt : "";
+  const reviewIds = Array.isArray(value.reviewIds)
+    ? value.reviewIds.filter(
+        (id: unknown): id is string => typeof id === "string" && !!id,
+      )
+    : [];
+  const claimedAt = typeof value.claimedAt === "string" ? value.claimedAt : "";
+  if (!prompt || !reviewIds.length || !claimedAt) return undefined;
+  return {
+    reviewIds,
+    prompt,
+    label:
+      typeof value.label === "string" && value.label
+        ? value.label
+        : "Address review feedback",
+    claimedAt,
+  };
+}
+
 /** A blank record, so a partial save always has every field to merge onto. */
 function emptyStored(branch: string): StoredSession {
   return {
@@ -339,6 +448,12 @@ function storedFromFile(
         )
       : undefined,
     prUrl: typeof raw.prUrl === "string" && raw.prUrl ? raw.prUrl : undefined,
+    organizationId:
+      typeof raw.organizationId === "string" && raw.organizationId
+        ? raw.organizationId
+        : undefined,
+    reviewAutostart: normalizeReviewAutostart(raw.reviewAutostart),
+    pendingReviewFix: normalizePendingReviewFix(raw.pendingReviewFix),
     updatedAt: raw.updatedAt,
   };
 }
@@ -441,6 +556,76 @@ export async function loadSessionInfo(
   sessionKey: string,
 ): Promise<StoredSession | null> {
   return readStoredFile(sessionKey);
+}
+
+// --- Review autostart state ---
+
+function ensureReviewAutostart(session: StoredSession): LinearReviewAutostart {
+  session.reviewAutostart ??= { rounds: 0, claims: [] };
+  return session.reviewAutostart;
+}
+
+/** Whether this review id was already claimed (or attempted) by the session. */
+export function reviewClaimSeen(
+  session: Pick<StoredSession, "reviewAutostart">,
+  reviewId: string,
+): boolean {
+  return (
+    session.reviewAutostart?.claims.some(
+      (claim) => claim.reviewId === reviewId,
+    ) ?? false
+  );
+}
+
+/** Record a review id before its turn starts. Re-claiming is a no-op. */
+export function addReviewClaim(
+  session: StoredSession,
+  reviewId: string,
+  sha: string,
+): void {
+  const state = ensureReviewAutostart(session);
+  if (state.claims.some((claim) => claim.reviewId === reviewId)) return;
+  state.claims.push({
+    reviewId,
+    sha,
+    status: "pending",
+    claimedAt: new Date().toISOString(),
+  });
+  if (state.claims.length > MAX_REVIEW_CLAIMS)
+    state.claims.splice(0, state.claims.length - MAX_REVIEW_CLAIMS);
+}
+
+/** Automatic review-fix rounds dispatched so far. */
+export function reviewRoundCount(
+  session: Pick<StoredSession, "reviewAutostart">,
+): number {
+  return session.reviewAutostart?.rounds ?? 0;
+}
+
+/** Reserve one automatic round before a turn starts. */
+export function beginReviewRound(session: StoredSession): void {
+  const state = ensureReviewAutostart(session);
+  state.rounds += 1;
+  state.deliveredAt = new Date().toISOString();
+}
+
+/** Move every listed claim to a new status. */
+export function setReviewClaimStatus(
+  session: StoredSession,
+  reviewIds: readonly string[],
+  status: LinearReviewClaim["status"],
+): void {
+  const state = session.reviewAutostart;
+  if (!state) return;
+  const settled =
+    status === "completed" || status === "failed" || status === "cancelled";
+  const at = new Date().toISOString();
+  for (const claim of state.claims) {
+    if (!reviewIds.includes(claim.reviewId)) continue;
+    claim.status = status;
+    if (settled) claim.settledAt = at;
+    else delete claim.settledAt;
+  }
 }
 
 export interface StoredSessionLocation {
@@ -566,6 +751,9 @@ export async function persistActiveSession(
       assignmentStart: session.assignmentStart,
       processedPromptIds: session.processedPromptIds,
       prUrl: session.prUrl,
+      organizationId: session.organizationId,
+      reviewAutostart: session.reviewAutostart,
+      pendingReviewFix: session.pendingReviewFix,
     },
     live,
   );

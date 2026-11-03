@@ -483,6 +483,29 @@ export interface LinearSessionFile {
   processedPromptIds?: string[];
   /** Pull request opened by this session; reused by later turns. */
   prUrl?: string;
+  /** Linear organization that owns this agent session. Absent on older files;
+   *  a single stored org is used as the fallback. */
+  organizationId?: string;
+  /** Automatic fix rounds started from GitHub changes-requested reviews. */
+  reviewAutostart?: {
+    rounds: number;
+    claims: Array<{
+      reviewId: string;
+      sha: string;
+      status: "pending" | "dispatched" | "completed" | "failed" | "cancelled";
+      claimedAt: string;
+      settledAt?: string;
+    }>;
+    deliveredAt?: string;
+    cappedAnnounced?: boolean;
+  };
+  /** One review-fix prompt waiting for the checkout's current turn to settle. */
+  pendingReviewFix?: {
+    reviewIds: string[];
+    prompt: string;
+    label: string;
+    claimedAt: string;
+  };
   /** Pi engine session id (see SlackSessionFile.piSessionId). */
   piSessionId?: string | null;
 }

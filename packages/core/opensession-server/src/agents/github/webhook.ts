@@ -57,6 +57,7 @@ import {
   archiveClosedPrSessions,
   restoreReopenedPrSessions,
 } from "./pr-session-archive";
+import { linearReviewAutostartEnabled } from "../linear/review-autostart-config";
 
 let onSessionInvalidate: (() => void) | undefined;
 export function setGithubSessionInvalidate(cb: () => void): void {
@@ -152,6 +153,17 @@ export async function resolveReviewConfig(): Promise<{
       model: automation?.model,
     },
   };
+}
+
+/** Lazy so a review in a GitHub-only instance never loads the Linear agent. */
+async function dispatchLinearReviewAutostart(payload: any): Promise<void> {
+  try {
+    const { handlePullRequestReviewWebhook } =
+      await import("../linear/review-autostart");
+    await handlePullRequestReviewWebhook(payload);
+  } catch (error) {
+    console.error("[linear] review autostart dispatch failed:", error);
+  }
 }
 
 export async function handleGithubPrEvent(
@@ -275,11 +287,14 @@ export async function handleGithubPrEvent(
     }
 
     // A formal review submitted, edited or dismissed can open or close the
-    // approval gate. Nothing else here acts on formal reviews.
+    // approval gate. A changes-requested review may also start a Linear fix
+    // turn when the feature is explicitly enabled.
     if (event === "pull_request_review") {
       const number = payload?.pull_request?.number;
       if (typeof number === "number")
         void refreshApprovalGate(number, ghRepo || defaultRepo().ghRepo);
+      if (linearReviewAutostartEnabled())
+        await dispatchLinearReviewAutostart(payload);
       return;
     }
 

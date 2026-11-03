@@ -141,12 +141,15 @@ export async function resolveHandoffOwner(
           .footerSessionRef(pr.number, pr.ghRepo)
           .catch(() => undefined);
   // The PR's own review/fix runs also sit on this branch; never hand off to
-  // those.
+  // those. Linear sessions share the index but are steered by their own agent
+  // loop, not SessionControl.
   const owners = (await deps.branchOwners(workspaceId, pr.headRef)).filter(
-    (s) => !s.id.startsWith("bks-ghpr-"),
+    (s) => !s.id.startsWith("bks-ghpr-") && !s.id.startsWith("linear-"),
   );
   return pickHandoffOwner(
-    sessionRef ? deps.getSession(sessionRef) : undefined,
+    sessionRef && !sessionRef.startsWith("linear-")
+      ? deps.getSession(sessionRef)
+      : undefined,
     canFixOwnPr,
     owners,
   );
