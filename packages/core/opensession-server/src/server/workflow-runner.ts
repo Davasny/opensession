@@ -32,6 +32,7 @@ import {
   controlLiveWorkflowAgent,
   createWorkflowRun,
   getWorkflowRun,
+  liveWorkflowRun,
   pauseLiveWorkflow,
   readWorkflowJournal,
   readWorkflowScript,
@@ -41,6 +42,7 @@ import {
   registerLiveWorkflow,
   resumeLiveWorkflow,
   unregisterLiveWorkflow,
+  updateStoredWorkflowRun,
   updateWorkflowRun,
 } from "./workflow-store";
 import { findSession } from "./session-cache";
@@ -478,7 +480,9 @@ export interface StartWorkflowOpts {
 /** Validate, persist, spawn the Worker and wire its message loop. Returns
  *  immediately; progress streams via workflow_update broadcasts. Throws on
  *  invalid input (script too big, missing/invalid meta). */
-export function startWorkflow(opts: StartWorkflowOpts): { runId: string } {
+export async function startWorkflow(
+  opts: StartWorkflowOpts,
+): Promise<{ runId: string }> {
   const script = opts.script || "";
   if (!script.trim()) throw new Error("workflow script is empty");
   if (script.length > WORKFLOW_LIMITS.maxScriptChars) {
@@ -512,7 +516,7 @@ export function startWorkflow(opts: StartWorkflowOpts): { runId: string } {
   const mcpReplay = new Map<string, WorkflowMcpJournalEntry[]>();
   const sessionReplay = new Map<string, WorkflowSessionJournalEntry[]>();
   if (opts.resumeFromRunId) {
-    for (const entry of readWorkflowJournal(opts.resumeFromRunId)) {
+    for (const entry of await readWorkflowJournal(opts.resumeFromRunId)) {
       if (isSessionJournalEntry(entry)) {
         const queue = sessionReplay.get(entry.hash);
         if (queue) queue.push(entry);
@@ -550,7 +554,7 @@ export function startWorkflow(opts: StartWorkflowOpts): { runId: string } {
   }
 
   const resumed = opts.resumeFromRunId
-    ? getWorkflowRun(opts.resumeFromRunId)
+    ? await getWorkflowRun(opts.resumeFromRunId)
     : undefined;
   const replayRootRunId =
     resumed?.replayRootRunId || opts.resumeFromRunId || runId;
@@ -630,7 +634,7 @@ export async function recoverWorkflow(
   runId: string,
   overrides: Partial<StartWorkflowOpts> = {},
 ): Promise<string | undefined> {
-  const old = getWorkflowRun(runId);
+  const old = await getWorkflowRun(runId);
   if (
     !old ||
     old.status !== "interrupted" ||
@@ -638,9 +642,9 @@ export async function recoverWorkflow(
     !old.recovery
   )
     return undefined;
-  const script = readWorkflowScript(runId);
+  const script = await readWorkflowScript(runId);
   if (!script) {
-    updateWorkflowRun(runId, (snapshot) => {
+    await updateStoredWorkflowRun(runId, (snapshot) => {
       snapshot.recoveryError = "original workflow script is missing";
     });
     return undefined;
@@ -664,7 +668,7 @@ export async function recoverWorkflow(
       stableStringify(currentPolicy) !==
         stableStringify(recovery.automationSessionPolicy)
     ) {
-      updateWorkflowRun(runId, (snapshot) => {
+      await updateStoredWorkflowRun(runId, (snapshot) => {
         snapshot.recoveryError =
           "Automation durable-session authority changed; recovery denied";
       });
@@ -676,7 +680,7 @@ export async function recoverWorkflow(
     inProcessMcp = () => interactiveMcpServers(old.user, old.sessionId);
   }
   try {
-    const recovered = startWorkflow({
+    const recovered = await startWorkflow({
       script,
       args: recovery.args,
       sessionId: old.sessionId,
@@ -696,13 +700,13 @@ export async function recoverWorkflow(
       autoRecover: true,
       ...overrides,
     });
-    updateWorkflowRun(runId, (snapshot) => {
+    await updateStoredWorkflowRun(runId, (snapshot) => {
       snapshot.recoveredAsRunId = recovered.runId;
       snapshot.recoveryError = undefined;
     });
     return recovered.runId;
   } catch (error) {
-    updateWorkflowRun(runId, (snapshot) => {
+    await updateStoredWorkflowRun(runId, (snapshot) => {
       snapshot.recoveryError =
         error instanceof Error ? error.message : String(error);
     });
@@ -832,7 +836,10 @@ function runWorkflow(
   // The session's repo + branch, resolved once per run (write agents branch
   // off it; merge() merges back into it). Explicit opts win — tests pass them.
   let repoInfo: { repo?: string; baseBranch?: string } | undefined;
-  function sessionRepoInfo(): { repo?: string; baseBranch?: string } {
+  async function sessionRepoInfo(): Promise<{
+    repo?: string;
+    baseBranch?: string;
+  }> {
     if (repoInfo) return repoInfo;
     if (opts.repo !== undefined || opts.baseBranch !== undefined) {
       repoInfo = { repo: opts.repo, baseBranch: opts.baseBranch };
@@ -844,7 +851,7 @@ function runWorkflow(
         repo:
           session?.repo ||
           (session?.worktreeDir
-            ? repoForPath(session.worktreeDir).id
+            ? (await repoForPath(session.worktreeDir)).id
             : undefined),
         baseBranch: session?.branch || undefined,
       };
@@ -858,8 +865,10 @@ function runWorkflow(
     return repoInfo;
   }
 
-  function execCtx(extra?: Partial<WorkflowExecCtx>): WorkflowExecCtx {
-    const { repo, baseBranch } = sessionRepoInfo();
+  async function execCtx(
+    extra?: Partial<WorkflowExecCtx>,
+  ): Promise<WorkflowExecCtx> {
+    const { repo, baseBranch } = await sessionRepoInfo();
     return {
       runId,
       sessionId: opts.sessionId,
@@ -1039,7 +1048,7 @@ function runWorkflow(
 
   function controlAgent(seq: number, action: "skip" | "retry"): boolean {
     if (finished) return false;
-    const agent = getWorkflowRun(runId)?.agents.find((row) => row.seq === seq);
+    const agent = liveWorkflowRun(runId)?.agents.find((row) => row.seq === seq);
     if (
       !agent ||
       (agent.status !== "pending" && agent.status !== "running") ||
@@ -1237,7 +1246,7 @@ function runWorkflow(
       // Carry the entry into this run's journal so resuming the resumed
       // run replays too (with this run's seq — seq is display-only).
       try {
-        appendWorkflowJournal(runId, { ...journaled, seq: msg.seq });
+        await appendWorkflowJournal(runId, { ...journaled, seq: msg.seq });
       } catch (e) {
         console.warn(`[workflow] ${runId} journal append failed:`, e);
       }
@@ -1315,7 +1324,7 @@ function runWorkflow(
           const executor = await executorPromise;
           outcome = await executor.execute(
             { prompt: msg.prompt, opts: msg.opts, seq: msg.seq },
-            execCtx({
+            await execCtx({
               signal: attemptController.signal,
               // The engine session id lands on the row as soon as it exists,
               // so the UI can drill into a RUNNING agent's conversation.
@@ -1397,7 +1406,7 @@ function runWorkflow(
           (s.totals.agentToolCalls || 0) + outcome.toolCalls;
     });
     try {
-      appendWorkflowJournal(runId, {
+      await appendWorkflowJournal(runId, {
         seq: msg.seq,
         hash,
         prompt: msg.prompt,
@@ -1445,7 +1454,7 @@ function runWorkflow(
       if (!executor.merge) {
         throw new Error("this workflow executor cannot merge write agents");
       }
-      result = await executor.merge(execCtx(), items);
+      result = await executor.merge(await execCtx(), items);
     } catch (e) {
       result = {
         merged: [],
@@ -1531,7 +1540,7 @@ function runWorkflow(
   }
 
   async function refreshSessionRows(): Promise<void> {
-    const rows = (getWorkflowRun(runId)?.sessions || []).filter((row) =>
+    const rows = ((await getWorkflowRun(runId))?.sessions || []).filter((row) =>
       ["running", "waiting"].includes(row.status),
     );
     if (!rows.length || finished) return;
@@ -1561,7 +1570,7 @@ function runWorkflow(
   }
 
   function sessionBudgetTotals(): { tokens: number; cost: number } {
-    const rows = getWorkflowRun(runId)?.sessions || [];
+    const rows = liveWorkflowRun(runId)?.sessions || [];
     let tokens = sessionReservedTokensInFlight;
     let cost = sessionReservedCostInFlight;
     for (const row of rows) {
@@ -1687,7 +1696,7 @@ function runWorkflow(
     }
     const supervisor = await sessionController();
     if (operation === "spawn") {
-      const existing = getWorkflowRun(runId)?.sessions?.find(
+      const existing = (await getWorkflowRun(runId))?.sessions?.find(
         (row) => row.requestKey === requestKey,
       );
       if (existing) {
@@ -1769,8 +1778,8 @@ function runWorkflow(
           "OPENSESSION_WORKFLOW_MAX_ACTIVE_SESSIONS",
           WORKFLOW_LIMITS.maxConcurrentSessions,
         );
-      const active = (getWorkflowRun(runId)?.sessions || []).filter((row) =>
-        ["running", "waiting"].includes(row.status),
+      const active = ((await getWorkflowRun(runId))?.sessions || []).filter(
+        (row) => ["running", "waiting"].includes(row.status),
       ).length;
       if (active + sessionSpawnsInFlight >= maxConcurrent)
         throw new Error(
@@ -1985,7 +1994,7 @@ function runWorkflow(
             if (current) applySessionStatus(msg.seq, current);
           }
         }
-        appendWorkflowJournal(runId, { ...journaled, seq: msg.seq });
+        await appendWorkflowJournal(runId, { ...journaled, seq: msg.seq });
       } catch (e) {
         console.warn(`[workflow] ${runId} session replay failed:`, e);
       }
@@ -2029,7 +2038,7 @@ function runWorkflow(
     if (finished) return;
     const endedAt = new Date().toISOString();
     try {
-      appendWorkflowJournal(runId, {
+      await appendWorkflowJournal(runId, {
         kind: "session",
         seq: msg.seq,
         hash,
@@ -2151,7 +2160,7 @@ function runWorkflow(
         cached: true,
       });
       try {
-        appendWorkflowJournal(runId, {
+        await appendWorkflowJournal(runId, {
           ...journaled,
           seq: msg.seq,
           ...(msg.phase ? { phase: msg.phase } : {}),
@@ -2198,7 +2207,7 @@ function runWorkflow(
       error,
     });
     try {
-      appendWorkflowJournal(runId, {
+      await appendWorkflowJournal(runId, {
         kind: "mcp",
         seq: msg.seq,
         hash,
@@ -2385,7 +2394,7 @@ function runWorkflow(
     // spawn call is revisited; journal replay would otherwise bypass the
     // operation branch that used to perform this cleanup.
     void (async () => {
-      const pending = (getWorkflowRun(runId)?.sessions || []).filter(
+      const pending = ((await getWorkflowRun(runId))?.sessions || []).filter(
         (row) => row.cancelPending,
       );
       if (pending.length) {

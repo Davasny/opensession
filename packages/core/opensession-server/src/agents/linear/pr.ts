@@ -22,10 +22,7 @@ import {
 } from "../../server/pr-body";
 import { treatRepoAsPublic } from "../../server/repo-visibility";
 import { sessionLink } from "../../server/run-instructions";
-import {
-  repoForPathOrNull,
-  worktreeHeadBranchAsync,
-} from "../../server/worktree";
+import { repoForPathOrNull, worktreeHeadBranch } from "../../server/worktree";
 import type { Participant } from "./session";
 
 export interface PrCreateResult {
@@ -85,7 +82,7 @@ export async function createPrWithAttribution(
   reviewer?: string | null,
   options: CreateLinearPrOptions = {},
 ): Promise<PrCreateResult> {
-  const repo = repoForPathOrNull(worktreeDir);
+  const repo = await repoForPathOrNull(worktreeDir);
   if (!repo?.ghRepo || repo.host === "codestorage") {
     console.error(
       "[linear] Cannot create PR: worktree has no registered GitHub repository",
@@ -98,7 +95,7 @@ export async function createPrWithAttribution(
 
   // The agent can switch branches inside its worktree, and gh targets HEAD:
   // look up the branch that actually exists, not the session's original claim.
-  const branch = await worktreeHeadBranchAsync(worktreeDir);
+  const branch = await worktreeHeadBranch(worktreeDir);
   if (!branch) {
     console.error("[linear] Cannot create PR: checkout is not on a branch");
     return { url: null, reason: "the checkout is not on a branch" };
@@ -286,13 +283,13 @@ export async function updatePrDescriptionFromAgent(input: {
   const agentBody = input.agentBody.trim();
   if (!agentBody) return { updated: false };
 
-  const repo = repoForPathOrNull(input.worktreeDir);
+  const repo = await repoForPathOrNull(input.worktreeDir);
   if (!repo?.ghRepo || repo.host === "codestorage")
     return {
       updated: false,
       reason: "this workspace has no registered GitHub repository",
     };
-  const branch = await worktreeHeadBranchAsync(input.worktreeDir);
+  const branch = await worktreeHeadBranch(input.worktreeDir);
   if (!branch)
     return { updated: false, reason: "the checkout is not on a branch" };
 

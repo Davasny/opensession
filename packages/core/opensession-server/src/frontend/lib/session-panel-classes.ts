@@ -68,12 +68,28 @@
 export const PANEL_SHELL =
   "viewer-panel @container relative flex min-h-0 w-[var(--panel-w,32%)] min-w-[320px] shrink-0 flex-col " +
   "max-w-[max(480px,calc(100vw-620px))] border-l border-divider bg-panel-surface [--bg-panel:var(--panel-plate)] " +
+  // A width change the person did not drag (opening Review or Browser, which
+  // take half the window, or going back to a tool tab) glides rather than
+  // jumps. The drag itself stays 1:1 with the pointer.
+  "transition-[width,min-width] duration-[var(--dur-lg)] ease-[var(--ease)] " +
+  "[body.resizing-panel_&]:transition-none " +
   // From 920px down it stops being a column in the layout and becomes an
   // overlay over the session, anchored under the top bar (--header-h is 0 on
   // desktop, the bar's height on a phone) with PANEL_OVERLAY dimming behind it.
   "max-[920px]:fixed max-[920px]:top-[var(--header-h)] max-[920px]:right-0 max-[920px]:bottom-0 " +
   "max-[920px]:z-30 max-[920px]:w-[min(480px,94vw)] max-[920px]:max-w-none max-[920px]:min-w-0 " +
   "max-[920px]:shadow-[-12px_0_32px_rgba(0,0,0,0.5)]";
+
+/**
+ * The panel sliding in when an action opens it: it grows from nothing at the
+ * window's right edge while the conversation gives way beside it. Only for an
+ * action (the toggle, a Review or Browser request), not for a panel that was
+ * already open in the session switched to. Reduced motion drops the
+ * transition in base-theme.css, so it simply appears.
+ */
+export const PANEL_ENTER =
+  "overflow-hidden starting:w-0 starting:min-w-0 starting:opacity-0 " +
+  "transition-[width,min-width,opacity]";
 
 /**
  * Left-edge drag handle — the mirror of the sidebar's. The hairline it paints
@@ -137,6 +153,12 @@ export const PANEL_PR_PLATE =
  */
 export const PANEL_INFO_TOP = "pt-2 [.panel-pr-plate:not(:empty)~*_&]:pt-0";
 
+/** The accent outline over the open panel while a tab is dragged onto it,
+ *  the same paint as the main strip's split preview. */
+export const PANEL_DROP_PREVIEW =
+  "pointer-events-none absolute inset-2 z-[7] rounded-lg border-2 border-accent " +
+  "bg-[color-mix(in_srgb,var(--accent)_18%,transparent)]";
+
 /** The panel's scrolling content. */
 export const PANEL_BODY = "min-h-0 flex-1 overflow-y-auto";
 
@@ -150,9 +172,39 @@ export const PANEL_TABS =
 
 /** One tab: an icon, a word, and whatever that destination wants to report. */
 export const PANEL_TAB =
-  "focus-ring flex min-w-0 items-center gap-1.5 rounded-control px-2 py-1 " +
+  "focus-ring flex min-w-0 shrink-0 items-center gap-1 rounded-control px-2 py-1 " +
   "text-label text-dim transition-colors hover:bg-hover hover:text-fg " +
-  "@max-[380px]:flex-1 @max-[380px]:justify-center @max-[380px]:px-1";
+  "@max-[380px]:justify-center @max-[380px]:px-1";
+
+/** The selected tab keeps the hover wash, so the strip reads as one choice. */
+export const PANEL_TAB_ACTIVE = "bg-hover text-fg";
+
+/** The tab's own select button: everything but the close ×. */
+export const PANEL_TAB_SELECT =
+  "focus-ring flex min-w-0 max-w-[160px] items-center gap-1.5 rounded-sm";
+
+/**
+ * A tab's ×. It shows on hover, like the main strip's, and keeps its slot
+ * otherwise so tabs do not shift under the pointer. A touch client has no
+ * hover, so it always shows there. The selected tab adds PANEL_TAB_CLOSE_ACTIVE
+ * from JS rather than a group-has variant, which compiles to a `:has()` Chrome
+ * cannot scope (see styles/has-selectors.test.ts): every keystroke in the
+ * composer restyled the whole document.
+ */
+export const PANEL_TAB_CLOSE =
+  "focus-ring -mr-1 grid size-5 shrink-0 place-items-center rounded-sm text-faint " +
+  "opacity-0 transition-opacity hover:bg-hover hover:text-fg focus-visible:opacity-100 " +
+  "group-hover/ptab:opacity-100 [@media(hover:none)]:opacity-100";
+
+export const PANEL_TAB_CLOSE_ACTIVE = "opacity-100";
+
+/** The new-tab page's list: what the panel can open, one row each. */
+export const PANEL_NEW_ROWS =
+  "grid gap-px overflow-hidden rounded-lg bg-panel p-1";
+
+export const PANEL_NEW_ROW =
+  "focus-ring flex min-h-9 w-full items-center gap-2.5 rounded-md px-2 py-1.5 " +
+  "text-left text-label text-fg transition-colors hover:bg-hover";
 
 /**
  * The scrim behind the panel once it stops being a column and starts being an

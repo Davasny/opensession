@@ -21,7 +21,7 @@
  */
 
 import { createSdkMcpServer, tool } from "../../server/inprocess-mcp";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   cancelWorkflow,
@@ -61,7 +61,10 @@ export interface WorkflowsToolContext {
   workspace: (
     repo?: string,
     hint?: string,
-  ) => { cwd: string; repo?: string; baseBranch?: string } | undefined;
+  ) =>
+    | { cwd: string; repo?: string; baseBranch?: string }
+    | undefined
+    | Promise<{ cwd: string; repo?: string; baseBranch?: string } | undefined>;
   /** Overrides WORKFLOW_DEFAULT_MODEL for agent() calls that name no model.
    *  Left unset in production — agents default to Opus, not the session's model. */
   defaultModel?: () => string | undefined;
@@ -205,7 +208,7 @@ export function createWorkflowsMcpServer(ctx: WorkflowsToolContext) {
             );
           }
         }
-        const workspace = ctx.workspace(args.repo, args.script);
+        const workspace = await ctx.workspace(args.repo, args.script);
         if (!workspace) {
           return text(
             args.repo
@@ -214,7 +217,7 @@ export function createWorkflowsMcpServer(ctx: WorkflowsToolContext) {
           );
         }
         try {
-          const { runId } = startWorkflow({
+          const { runId } = await startWorkflow({
             script: args.script,
             args: parsedArgs,
             sessionId: ctx.sessionId,
@@ -250,7 +253,7 @@ export function createWorkflowsMcpServer(ctx: WorkflowsToolContext) {
           ),
       },
       async (args: { run_id: string; include_result?: boolean }) => {
-        const run = getWorkflowRun(args.run_id);
+        const run = await getWorkflowRun(args.run_id);
         if (!run) return text(`No workflow run ${args.run_id}.`);
         const lines: string[] = [];
         const livePhaseStats = workflowPhaseStats(run);
@@ -330,9 +333,9 @@ export function createWorkflowsMcpServer(ctx: WorkflowsToolContext) {
             let spillPath = "";
             try {
               const dir = "/tmp/pi/workflow-results";
-              mkdirSync(dir, { recursive: true });
+              await mkdir(dir, { recursive: true });
               spillPath = `${dir}/${run.runId}.txt`;
-              writeFileSync(spillPath, result);
+              await writeFile(spillPath, result);
             } catch {
               spillPath = "";
             }
@@ -437,7 +440,7 @@ export function createWorkflowsMcpServer(ctx: WorkflowsToolContext) {
         args_json?: string;
         repo?: string;
       }) => {
-        const old = getWorkflowRun(args.run_id);
+        const old = await getWorkflowRun(args.run_id);
         if (!old) return text(`No workflow run ${args.run_id}.`);
         if (old.status === "running")
           return text(
@@ -455,7 +458,7 @@ export function createWorkflowsMcpServer(ctx: WorkflowsToolContext) {
           return text(
             `${args.run_id} is paused — resume it unchanged, or cancel it before relaunching with edits.`,
           );
-        const script = args.script ?? readWorkflowScript(args.run_id);
+        const script = args.script ?? (await readWorkflowScript(args.run_id));
         if (!script)
           return text(
             `Couldn't read the original script for ${args.run_id} — pass one explicitly via the script param.`,
@@ -474,12 +477,12 @@ export function createWorkflowsMcpServer(ctx: WorkflowsToolContext) {
         // Re-resolve the old cwd as a hint so an attached-repo workflow
         // resumes with the correct repo/base branch for write agents too.
         const workspace = args.repo
-          ? ctx.workspace(args.repo, script)
-          : ctx.workspace(undefined, old.cwd);
+          ? await ctx.workspace(args.repo, script)
+          : await ctx.workspace(undefined, old.cwd);
         if (args.repo && !workspace)
           return text(`Repo "${args.repo}" is not attached to this session.`);
         try {
-          const { runId } = startWorkflow({
+          const { runId } = await startWorkflow({
             script,
             args: parsedArgs,
             sessionId: ctx.sessionId,

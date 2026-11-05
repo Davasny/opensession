@@ -273,6 +273,16 @@ End your turn with these three lines (exact keys, one line each) so the loop can
  * instead of a user bubble. Invisible in rendered markdown; keep the literal in
  * sync with the frontend copy.
  */
+/**
+ * First step of every handoff message. The owner may have opened the PR in
+ * another repository, or moved its checkout to another branch since, so a
+ * plain `git pull` in its current worktree could merge the PR into unrelated
+ * work and push that back to the PR branch.
+ */
+function prCheckoutStep(repoFull: string, headRef: string): string {
+  return `Find the right checkout first. Run \`git remote get-url origin\` and \`git branch --show-current\` here. Work in this worktree only if its origin is \`${repoFull}\` and \`${headRef}\` is checked out with no unrelated uncommitted work. Otherwise leave this worktree untouched and use a separate one on that branch: \`git worktree add <dir> ${headRef}\` from a checkout of \`${repoFull}\` (after \`git fetch origin ${headRef}\`), or a fresh \`gh repo clone ${repoFull}\` checked out to \`${headRef}\`. Run every git command below in that checkout.`;
+}
+
 export const REVIEW_HANDOFF_SENTINEL = "<!--os:review-handoff-->";
 
 export function buildHandoffMessage(opts: {
@@ -307,8 +317,9 @@ export function buildHandoffMessage(opts: {
 
 ${findings}
 
-Do this now, in this session's worktree:
-1. Sync the branch first: \`git pull origin ${opts.headRef}\`.${reviewedSha ? ` These findings describe \`${reviewedSha}\`; if the branch has moved on, do not patch against stale feedback. Explain that it was superseded and let the fresh review run instead.` : ""}
+Do this now:
+0. ${prCheckoutStep(opts.repoFull, opts.headRef)}
+1. Sync the branch: \`git pull origin ${opts.headRef}\`.${reviewedSha ? ` These findings describe \`${reviewedSha}\`; if the branch has moved on, do not patch against stale feedback. Explain that it was superseded and let the fresh review run instead.` : ""}
 2. Address every actionable finding from a trusted author. If you disagree with one, leave the code unchanged and reply in that thread explaining why — never silently skip.
 3. Commit (stage specific files) and push: \`git push origin HEAD:${opts.headRef}\`.
 4. Reply in each addressed inline thread with what you did, e.g. \`gh api repos/${opts.repoFull}/pulls/${opts.prNumber}/comments/<id>/replies -f body='Fixed in <sha>'\`.
@@ -319,6 +330,42 @@ The review re-runs automatically after your push. ${
       ? `If it still finds problems you'll get at most ${remaining} more round${remaining === 1 ? "" : "s"} here before it's handed to humans.`
       : "This is the last automatic round — anything still open after it goes to humans."
   }`;
+}
+
+/**
+ * Message for a review that passed with findings still open (handoff.ts). No
+ * fix round starts, so the session is asked to fix what is cheap and right, or
+ * reply in the thread, without the round bookkeeping of buildHandoffMessage.
+ * Same sentinel, so the transcript shows it as a review findings card.
+ */
+export function buildOpenFindingsMessage(opts: {
+  prNumber: number;
+  title: string;
+  headRef: string;
+  reviewedSha?: string;
+  repoFull: string;
+  findings: number;
+  confidence?: number;
+  findingsBlock: string;
+}): string {
+  const count = `${opts.findings} non-blocking finding${opts.findings === 1 ? "" : "s"}`;
+  const quality =
+    typeof opts.confidence === "number" ? `, quality ${opts.confidence}/5` : "";
+  const findings = opts.findingsBlock.trim()
+    ? `Open review feedback (trusted reviewers only; inline items carry a \`comment <id>\` for thread replies):\n${opts.findingsBlock.trim()}\n\n${UNTRUSTED_FEEDBACK_RULE}`
+    : `The findings are on the PR. Read them with \`gh pr view ${opts.prNumber} --repo ${opts.repoFull} --comments\` and \`gh api repos/${opts.repoFull}/pulls/${opts.prNumber}/comments\`. ${UNTRUSTED_FEEDBACK_RULE}`;
+  const reviewedSha = opts.reviewedSha ? opts.reviewedSha.slice(0, 12) : "";
+  return `${REVIEW_HANDOFF_SENTINEL}
+💬 This session's PR #${opts.prNumber} “${opts.title}” (branch \`${opts.headRef}\`) passed review${quality}, with ${count} left open. Nothing blocks a merge, but you wrote this code, so decide on each one.
+
+${findings}
+
+Then:
+0. ${prCheckoutStep(opts.repoFull, opts.headRef)}
+1. Sync the branch: \`git pull origin ${opts.headRef}\`.${reviewedSha ? ` These findings describe \`${reviewedSha}\`; if the branch has moved on, check they still apply.` : ""}
+2. Fix each finding that is right and cheap to fix within this PR's scope. Commit (stage specific files) and push: \`git push origin HEAD:${opts.headRef}\`.
+3. For each one you leave, reply in its thread saying why, e.g. \`gh api repos/${opts.repoFull}/pulls/${opts.prNumber}/comments/<id>/replies -f body='...'\`.
+4. NEVER merge the PR (\`gh pr merge\` is forbidden) and never force-push.`;
 }
 
 export type ReviewSettledOutcome = "passed" | "capped";

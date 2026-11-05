@@ -198,7 +198,7 @@ interface PaneRegion {
   previewStatus: PreviewStatus | null;
 }
 
-interface ReviewRegion {
+export interface ReviewRegion {
   openPr: PrPanelProps["onOpenPr"];
   allSessions: SessionViewerProps["workspace"]["allSessions"];
   workspaceSessions: SessionViewerProps["workspace"]["workspaceSessions"];
@@ -207,7 +207,8 @@ interface ReviewRegion {
   isBusy: boolean;
   noEngine: boolean;
   openCurrentWorkspace: PrPanelProps["onOpenSession"];
-  openNewSession: PrPanelProps["onStartSession"];
+  /** Review's "New session": a session sharing this workspace. */
+  openNewSession?: (mode: "share") => Promise<void> | void;
   setComposerPrefill: Dispatch<SetStateAction<ComposerPrefill>>;
   panelReviewRepos: PrPanelProps["repos"];
   discoveredPrs: PrPanelProps["discoveredPrs"];
@@ -229,7 +230,6 @@ interface TranscriptState {
   isBusy: boolean;
   shouldMaintainEnd: TranscriptProps["shouldMaintainEnd"];
   reviewResult: TranscriptProps["reviewResult"];
-  sessionWalkthrough: TranscriptProps["walkthrough"];
   /** Every comment thread on the session, and the team notes among them
    *  (threads with no passage) that the timeline interleaves. */
   comments: SessionComments;
@@ -517,7 +517,6 @@ export function SessionViewerMainRegion({
     transcriptRangeRetryGeneration,
     shouldMaintainEnd,
     reviewResult,
-    sessionWalkthrough,
     comments: { threads, notes },
     safety,
   } = transcript.state;
@@ -814,7 +813,9 @@ export function SessionViewerMainRegion({
             onOpenPr={openPr}
             sessionId={session.id}
             sessions={allSessions || workspaceSessions || []}
-            onStartSession={openNewSession}
+            onStartSession={
+              openNewSession ? () => void openNewSession("share") : undefined
+            }
             sessionActionTarget={
               isPhone ? undefined : reviewSessionActionTarget
             }
@@ -1078,7 +1079,6 @@ export function SessionViewerMainRegion({
                         ? continueAfterFailure
                         : undefined
                     }
-                    walkthrough={sessionWalkthrough}
                     notes={notes}
                     slackShare={shippedChangeShare}
                     onFork={canForkSession ? handleFork : undefined}

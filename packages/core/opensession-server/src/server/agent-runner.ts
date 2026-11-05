@@ -546,7 +546,7 @@ export async function* runAgent(
   const scratchDir = remote
     ? remote.scratchDir
     : (opts.scratchDir ??
-      (osSessionId ? ensureSessionScratch(osSessionId) : undefined));
+      (osSessionId ? await ensureSessionScratch(osSessionId) : undefined));
   const stageWriter = remote ? remoteAttachmentWriter(remote) : undefined;
   const effectiveOpts: RunAgentOpts = {
     ...opts,
@@ -1628,7 +1628,9 @@ export async function resumeInterruptedRuns(
     | Record<string, unknown>
     | Promise<Record<string, unknown> | undefined>
     | undefined,
-  reposNoteFor?: (osSessionId: string) => string | undefined,
+  reposNoteFor?: (
+    osSessionId: string,
+  ) => string | undefined | Promise<string | undefined>,
   onEvent?: (osSessionId: string, event: StreamEvent) => void | Promise<void>,
   snapshotLocalHostRuns: ActiveRunRecord[] = [],
   deferRecovery?: (run: ActiveRunRecord) => boolean | Promise<boolean>,
@@ -1893,7 +1895,7 @@ export async function resumeInterruptedRuns(
   // claim so resumeLocalHostRun owns them synchronously and the generic
   // drained-session wake cannot start a second host for the same turn.
   const { interrupted, quarantined } = sanitizeInterruptedRuns(taken);
-  journalQuarantine(quarantined);
+  await journalQuarantine(quarantined);
   for (const entry of quarantined) {
     if (!entry.notify || !entry.run.osSessionId) continue;
     await reportRecoveryFailure(entry.run, recoveryQuarantineMessage(entry));
@@ -2141,7 +2143,7 @@ export async function resumeInterruptedRuns(
                     ? await inProcessMcpFor?.(run.osSessionId, run.user)
                     : undefined,
                   reposNote: run.osSessionId
-                    ? reposNoteFor?.(run.osSessionId)
+                    ? await reposNoteFor?.(run.osSessionId)
                     : undefined,
                   user: run.user,
                   accountUser: run.accountUser,
@@ -2255,7 +2257,7 @@ export async function resumeInterruptedRuns(
                   ? await inProcessMcpFor?.(run.osSessionId, run.user)
                   : undefined,
                 reposNote: run.osSessionId
-                  ? reposNoteFor?.(run.osSessionId)
+                  ? await reposNoteFor?.(run.osSessionId)
                   : undefined,
                 user: run.user,
                 accountUser: run.accountUser,
@@ -2361,7 +2363,7 @@ export async function resumeInterruptedRuns(
                 ? await inProcessMcpFor?.(run.osSessionId, run.user)
                 : undefined,
               reposNote: run.osSessionId
-                ? reposNoteFor?.(run.osSessionId)
+                ? await reposNoteFor?.(run.osSessionId)
                 : undefined,
               user: run.user,
               accountUser: run.accountUser,

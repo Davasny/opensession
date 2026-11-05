@@ -177,6 +177,7 @@ import { BrandMark } from "./BrandMark";
 import { SessionHeader } from "./session/SessionHeader";
 import { SidePanelHost } from "./session/SidePanelHost";
 import { SessionPreviewSurface } from "./session/SessionPreviewSurface";
+import { useSidePanelTabs } from "../hooks/useSidePanelTabs";
 import { TranscriptView } from "./session/TranscriptView";
 import { splitAttachments, type FileAttachment } from "../lib/images";
 import { cropImageRegionFile } from "../lib/image-region-comment";
@@ -400,6 +401,7 @@ import { SessionViewerChrome } from "./session-viewer/SessionViewerChrome";
 import { SessionViewerDialogs } from "./session-viewer/SessionViewerDialogs";
 import { SessionViewerMainRegion } from "./session-viewer/SessionViewerMainRegion";
 import { SessionViewerSidePanel } from "./session-viewer/SessionViewerSidePanel";
+import type { ReviewRegion } from "./session-viewer/SessionViewerMainRegion";
 import { runningAgentCount } from "./session-viewer/runtime-controller";
 import {
   commitSessionQueueReorder,
@@ -734,7 +736,7 @@ export function SessionViewer({
   const { infoPageScrolled, setInfoPageScrolled } = viewState.chrome;
   const infoPageSettersRef = useRef({ setInfoPageOpen, setInfoPageScrolled });
   const { openSubagent, nameSubagent } = viewState.subagents;
-  const { sessionWalkthrough, reviewResult } = viewState.presentation;
+  const { reviewResult } = viewState.presentation;
   const { panelOpen, setPanelOpen } = viewState.panel;
   const { desktopPanelPage, setDesktopPanelPage } = viewState.panel;
   const { panelStyle, panelResizeHandle } = viewState.panel;
@@ -742,7 +744,7 @@ export function SessionViewer({
   const { panelPage, setPanelPage } = viewState.panel;
   const { panelTerminalMounted, setPanelTerminalMounted } = viewState.panel;
   const { pinnedPortal, pinPortal, autoPinPortal } = viewState.panel;
-  const { closePinnedPortal, expandPinnedPortal } = viewState.panel;
+  const { expandPinnedPortal } = viewState.panel;
   const { assetFiles, refreshAssets, assetPaths } = viewState.assets;
   const { selectedAssetPath, setSelectedAssetPath } = viewState.assets;
   const { overlayAssetPath, setOverlayAssetPath } = viewState.assets;
@@ -1315,6 +1317,32 @@ export function SessionViewer({
       );
     },
   });
+
+  const reviewRegion: ReviewRegion = {
+    openPr,
+    allSessions,
+    workspaceSessions,
+    reviewSessionActionTarget,
+    connected: presentedConnected,
+    isBusy,
+    noEngine,
+    openCurrentWorkspace,
+    openNewSession,
+    setComposerPrefill,
+    panelReviewRepos,
+    discoveredPrs,
+    reviewFocus,
+    reviewPage,
+    setReviewPage,
+  };
+  const sidePanelTabs = useSidePanelTabs({
+    canHost: focused && panelAvailable && !isPhone,
+    hasWorkspace,
+    navigation: reviewController.navigation,
+    review: reviewRegion,
+    preview: { staging, stagingUrl, shareLink, sessionId: session.id },
+    panel: { ...viewState.panel, setPanelTerminalMounted },
+  });
   const handleTranscriptClick = (e: MouseEvent<HTMLDivElement>) => {
     if (!transcriptBlocks.handleClick(e)) handleMessagesClick(e);
   };
@@ -1688,25 +1716,7 @@ export function SessionViewer({
             terminalTabOpen,
             previewStatus,
           }}
-          review={{
-            openPr,
-            allSessions,
-            workspaceSessions,
-            reviewSessionActionTarget,
-            connected: presentedConnected,
-            isBusy,
-            noEngine,
-            openCurrentWorkspace,
-            openNewSession: openNewSession
-              ? () => void openNewSession("share")
-              : undefined,
-            setComposerPrefill,
-            panelReviewRepos,
-            discoveredPrs,
-            reviewFocus,
-            reviewPage,
-            setReviewPage,
-          }}
+          review={reviewRegion}
           transcript={{
             state: {
               loading,
@@ -1721,7 +1731,6 @@ export function SessionViewer({
               isBusy,
               shouldMaintainEnd,
               reviewResult,
-              sessionWalkthrough,
               comments,
               safety,
             },
@@ -1873,6 +1882,8 @@ export function SessionViewer({
             it opens as a full-height column beside the left sidebar (not just
             below the session header). */}
         <SessionViewerSidePanel
+          summaryCardVisible={summaryVisible}
+          {...sidePanelTabs}
           shell={{
             hidden: hideRightPanel,
             isPhone,
@@ -1919,7 +1930,7 @@ export function SessionViewer({
             send: connected ? send : undefined,
             refreshTick: gitRefreshTick,
             liveMedia: liveOverviewMedia,
-            close: () => setActivePanelOpen(false),
+            close: () => {}, // Not a popup: routing leaves the panel open.
           }}
           changes={{
             waitingForWorkspace,
@@ -1946,17 +1957,6 @@ export function SessionViewer({
                   setActivePanelOpen(true);
                   openSession?.(session.id);
                 },
-            pinnedPortal,
-            onClosePinnedPortal: () => {
-              closePinnedPortal();
-              setActivePanelOpen(false);
-            },
-            onExpandPinnedPortal: () => {
-              const target = expandPinnedPortal();
-              if (!target) return;
-              setActivePanelOpen(false);
-              openPortal?.(target);
-            },
             onStartPortal: startDeclaredPortal,
             onPortalAction: async (name, action) => {
               setPreviewStatus(await portalActionApi(session.id, name, action));

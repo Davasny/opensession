@@ -195,8 +195,10 @@ function toolEntries(): LibraryEntry[] {
   }));
 }
 
-function automationEntries(installedNames: Set<string>): LibraryEntry[] {
-  const recipes = listRecipes().map((recipe) => ({
+async function automationEntries(
+  installedNames: Set<string>,
+): Promise<LibraryEntry[]> {
+  const recipes = (await listRecipes()).map((recipe) => ({
     id: `automation:${recipe.id}`,
     type: "automation" as const,
     slug: recipe.id,
@@ -308,9 +310,9 @@ function connectionEntries(): LibraryEntry[] {
   ];
 }
 
-function packageEntries(): LibraryEntry[] {
+async function packageEntries(): Promise<LibraryEntry[]> {
   try {
-    return listInstalledPackages().map((pkg) => ({
+    return (await listInstalledPackages()).map((pkg) => ({
       id: `package:${pkg.name}`,
       type: "package" as const,
       slug: pkg.name,
@@ -332,9 +334,9 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
   const installedNames = await installedAutomationNames();
   return [
     ...toolEntries(),
-    ...automationEntries(installedNames),
+    ...(await automationEntries(installedNames)),
     ...integrationEntries(),
     ...connectionEntries(),
-    ...packageEntries(),
+    ...(await packageEntries()),
   ];
 }

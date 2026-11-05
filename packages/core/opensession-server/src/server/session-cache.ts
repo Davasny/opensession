@@ -23,6 +23,8 @@ import {
   readAgentSessionListRowAsync,
   readNativeSession,
   readSlackSession,
+  readSlackSessionAsync,
+  readNativeSessionFileAsync,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathAsync,
   sessionListSourcesFromDocuments,
@@ -89,6 +91,7 @@ import {
   hasSessionRunningHold,
 } from "./session-state-events";
 import { advanceSessionListResponseRevision } from "./session-list-response-revision";
+import { ORPHANED_RUN_QUARANTINE_REASON } from "./orphaned-run-proof";
 
 export const SESSIONS_DIR = OPENSESSION_SESSIONS_DIR;
 
@@ -728,7 +731,7 @@ function checkRunStateWedge(
   if (!missingOwner) return;
   void quarantineSessionForSafety(
     sessionId,
-    "The active run no longer has a live execution owner or recovery claim",
+    ORPHANED_RUN_QUARANTINE_REASON,
     `run_state:${state}`,
   )
     .then((quarantine) => {
@@ -737,7 +740,8 @@ function checkRunStateWedge(
         type: "session_status",
         sessionId,
         isRunning: false,
-        safety: publicSessionSafety(quarantine),
+        // This fence is itself the orphaned-run proof the release needs.
+        safety: publicSessionSafety(quarantine, undefined, true),
       });
     })
     .catch((error) => {
@@ -863,7 +867,8 @@ export async function readNativeSessionAsync(
       const stored = await sessionMetadata({ op: "catalog_get", sessionId });
       if (stored) {
         const data = JSON.parse(stored.doc) as NativeSessionFile;
-        if (data?.id === sessionId) return nativeSessionDetailFromData(data);
+        if (data?.id === sessionId)
+          return await nativeSessionDetailFromData(data);
       }
     } catch (error) {
       console.warn(
@@ -872,7 +877,7 @@ export async function readNativeSessionAsync(
       );
     }
   }
-  return readNativeSession(sessionId);
+  return readNativeSessionFileAsync(sessionId);
 }
 
 export async function findSessionAsync(
@@ -883,7 +888,8 @@ export async function findSessionAsync(
   // before the materialized list projection has observed it. Historical
   // aliases still need the merged list.
   const direct =
-    (await readNativeSessionAsync(sessionId)) ?? readSlackSession(sessionId);
+    (await readNativeSessionAsync(sessionId)) ??
+    (await readSlackSessionAsync(sessionId));
   if (direct) return enrichSessionRuntime([direct])[0];
   const listed = (await getCachedSessionsAsync()).find(
     (s) => s.id === sessionId || s.aliasIds?.includes(sessionId),

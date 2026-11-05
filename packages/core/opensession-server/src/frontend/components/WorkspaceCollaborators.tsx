@@ -20,24 +20,15 @@ import {
   publishWorkspaceRecord,
   useWorkspaceRecord,
 } from "../lib/workspace-records";
-import {
-  WS_SUMMARY_ACTION,
-  WS_SUMMARY_ICON,
-  WS_SUMMARY_LABEL,
-  WS_SUMMARY_RAIL,
-  WS_SUMMARY_ROW,
-  WS_SUMMARY_SECTION,
-  WS_SUMMARY_STATE,
-} from "../lib/workspace-summary-classes";
 import { cn } from "../ui/cn";
-import { Menu } from "../ui/menu";
-import { IconChevronDown, IconPeople } from "./icons";
+import { Menu, MENU_ICON } from "../ui/menu";
+import { IconChevronDown, IconChevronRight, IconPeople } from "./icons";
 import { UserAvatar } from "./UserAvatar";
 import { getCurrentUser, TEAM } from "./UserPicker";
 
 /**
  * Add/remove state for a workspace's collaborators, shared by the info
- * panel's row and the summary card's section. Null when there is no
+ * panel's row and the session header's ⋯ menu. Null when there is no
  * workspace record or nobody to add.
  */
 export function useWorkspaceCollaborators(
@@ -96,7 +87,11 @@ export function useWorkspaceCollaborators(
   };
 }
 
-function CollaboratorMenuItems({
+export type WorkspaceCollaboratorsState = NonNullable<
+  ReturnType<typeof useWorkspaceCollaborators>
+>;
+
+export function CollaboratorMenuItems({
   candidates,
   isOn,
   toggle,
@@ -180,62 +175,28 @@ export function WorkspaceCollaborators({
 }
 
 /**
- * The same control in the header's summary card, in that card's row grammar:
- * one row per collaborator, then an Add row that opens the picker.
+ * Collaborators in the header's ⋯ menu. The presence pile stays presence
+ * only, so this submenu is where collaborators are seen and changed.
  */
-export function WorkspaceSummaryCollaborators({
+export function CollaboratorsSubmenu({
   workspaceId,
   sessionId,
-  groupClass,
 }: {
   workspaceId: string | null;
   sessionId?: string;
-  groupClass: string;
 }) {
   const state = useWorkspaceCollaborators(workspaceId, sessionId);
   if (!state) return null;
-  const { collaborators, error } = state;
   return (
-    <div className={groupClass}>
-      <div className={WS_SUMMARY_SECTION}>Collaborators</div>
-      {collaborators.map((c) => (
-        <div
-          key={c.name}
-          className={cn(WS_SUMMARY_ROW, "cursor-default hover:bg-transparent")}
-          title={`${c.name}, added by ${c.by}`}
-        >
-          <span className={WS_SUMMARY_RAIL}>
-            <UserAvatar name={c.name} size={16} edge={false} />
-          </span>
-          <span className={WS_SUMMARY_LABEL}>{c.name}</span>
-          <span className={cn(WS_SUMMARY_STATE, "text-dim")}>added</span>
-        </div>
-      ))}
-      <Menu.Root>
-        <Menu.Trigger className={WS_SUMMARY_ROW} aria-label="Add collaborator">
-          <span className={WS_SUMMARY_RAIL}>
-            <IconPeople size={20} className={WS_SUMMARY_ICON} />
-          </span>
-          <span className={WS_SUMMARY_LABEL}>
-            {collaborators.length ? "Add another" : "No collaborators"}
-          </span>
-          <span
-            className={cn(
-              WS_SUMMARY_ACTION,
-              "inline-flex items-center gap-0.5",
-            )}
-          >
-            Add
-            <IconChevronDown size={14} />
-          </span>
-        </Menu.Trigger>
-        <Menu.Popup align="end" sideOffset={6} className="min-w-[200px]">
-          <CollaboratorMenuItems {...state} />
-        </Menu.Popup>
-      </Menu.Root>
-      {error && (
-        <div className="px-4 py-1 text-meta font-medium text-red">{error}</div>
-      )}
-    </div>
+    <Menu.SubmenuRoot>
+      <Menu.SubmenuTrigger title="Teammates who get this workspace in their sidebar">
+        <IconPeople size={20} className={MENU_ICON} />
+        <span className="grow">Collaborators</span>
+        <IconChevronRight size={16} className="text-faint" />
+      </Menu.SubmenuTrigger>
+      <Menu.Popup className="min-w-[200px]">
+        <CollaboratorMenuItems {...state} />
+      </Menu.Popup>
+    </Menu.SubmenuRoot>
   );
 }

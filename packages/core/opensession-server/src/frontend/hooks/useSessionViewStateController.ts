@@ -63,7 +63,10 @@ import type { LiveTurnStore } from "../lib/live-turn-store";
 import type { TranscriptViewStore } from "../lib/transcript-view-store";
 import type { SessionPrRef } from "../lib/types";
 import type { PortalTarget } from "../lib/portals";
-import { onPortalPinRequest } from "../lib/portal-pin";
+import {
+  onPanelBrowserRequest,
+  type PanelBrowserTarget,
+} from "../lib/portal-pin";
 import type { SessionViewerProps } from "../lib/session-viewer-bindings";
 
 type WorkspaceSummaryStyle = CSSProperties & {
@@ -259,39 +262,6 @@ export function useSessionViewStateController({
       onSubagentLabel?.(session.id, agentId, label),
     [onSubagentLabel, session.id],
   );
-  const wt = session.walkthrough;
-  const wtSummary = wt?.summary ?? "";
-  const wtVideo = wt?.video;
-  const wtVideoTitle = wt?.videoTitle;
-  const wtShots = wt?.shots;
-  const wtPublishedAt = wt?.publishedAt ?? "";
-  const wtPublishedBy = wt?.publishedBy;
-  const wtPublishedEntryId = wt?.publishedEntryId;
-  const hasWalkthrough = !!wt;
-  const sessionWalkthrough = useMemo(
-    () =>
-      hasWalkthrough
-        ? {
-            summary: wtSummary,
-            video: wtVideo,
-            videoTitle: wtVideoTitle,
-            shots: wtShots,
-            publishedAt: wtPublishedAt,
-            publishedBy: wtPublishedBy,
-            publishedEntryId: wtPublishedEntryId,
-          }
-        : undefined,
-    [
-      hasWalkthrough,
-      wtSummary,
-      wtVideo,
-      wtVideoTitle,
-      wtShots,
-      wtPublishedAt,
-      wtPublishedBy,
-      wtPublishedEntryId,
-    ],
-  );
   const reviewResultValue = reviewLoopResult(session);
   const reviewStatus = reviewResultValue?.status;
   const reviewConfidence = reviewResultValue?.confidence;
@@ -315,7 +285,7 @@ export function useSessionViewStateController({
     reviewConfidence,
     reviewStatus,
   ]);
-  const sidePanel = useSidePanel();
+  const sidePanel = useSidePanel(session.id);
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const activePanelOpen = showReview ? reviewPanelOpen : sidePanel.open;
   const setActivePanelOpen = showReview
@@ -327,18 +297,28 @@ export function useSessionViewStateController({
   const [panelTerminalMounted, setPanelTerminalMounted] = useState(
     () => activePanelOpen && sidePanel.page === "terminal",
   );
-  const [pinnedPortal, setPinnedPortal] = useState<PortalTarget | null>(null);
+  // What the side panel's Browser tab shows for this session: a pinned Portal,
+  // a link, or the PR's preview. It is the session's own and outlives the
+  // viewer (see lib/side-panel-store): coming back to a session with a page
+  // attached finds its panel open on it. Review and Browser open here by
+  // default, so a request from the app shell arrives as an event.
+  const panelBrowser = sidePanel.browser;
+  const pinnedPortal =
+    panelBrowser?.kind === "portal" ? panelBrowser.target : null;
   const handledSidebarPortalsRef = useRef(new Set<string>());
   useEffect(() => {
     handledSidebarPortalsRef.current.clear();
   }, [session.id]);
   const sidebarPortalIdentity = (target: PortalTarget) =>
     `${target.sessionId}\u0000${target.key}\u0000${target.name}`;
+  const showInPanelBrowser = (target: PanelBrowserTarget) => {
+    sidePanel.setBrowser(target);
+  };
   const pinPortal = (target: PortalTarget) => {
     if (target.sessionId !== session.id) return;
     const identity = sidebarPortalIdentity(target);
     handledSidebarPortalsRef.current.add(identity);
-    setPinnedPortal(target);
+    showInPanelBrowser({ kind: "portal", target });
   };
   const autoPinPortal = (target: PortalTarget) => {
     if (
@@ -349,24 +329,43 @@ export function useSessionViewStateController({
     const identity = sidebarPortalIdentity(target);
     if (handledSidebarPortalsRef.current.has(identity)) return false;
     handledSidebarPortalsRef.current.add(identity);
-    setPinnedPortal(target);
+    showInPanelBrowser({ kind: "portal", target });
     return true;
   };
-  // A Portal tab dropped on the side panel (see useSessionTabs) lands here.
-  const pinDroppedPortal = useEffectEvent((target: PortalTarget) => {
-    if (target.sessionId !== session.id) return;
-    pinPortal(target);
-    setActivePanelOpen(true);
-  });
-  useEffect(() => onPortalPinRequest(pinDroppedPortal), []);
+  // A Portal tab dropped on the side panel (see useSessionTabs), or a Browser
+  // request routed to the panel (see useOnDemandViewTabs), lands here. Only
+  // the focused viewer owns the panel on screen.
+  const takePanelBrowserRequest = useEffectEvent(
+    (target: PanelBrowserTarget) => {
+      if (target.kind === "portal") {
+        if (target.target.sessionId !== session.id) return;
+        pinPortal(target.target);
+      } else {
+        if (!identity.focused) return;
+        showInPanelBrowser(target);
+      }
+      setActivePanelOpen(true);
+    },
+  );
+  useEffect(() => onPanelBrowserRequest(takePanelBrowserRequest), []);
+  const closePanelBrowser = () => {
+    sidePanel.setBrowser(null);
+    sidePanel.closeTab("browser");
+  };
   const closePinnedPortal = () => {
     if (pinnedPortal?.sessionId !== session.id) return;
-    setPinnedPortal(null);
+    closePanelBrowser();
+  };
+  /** Hand the Browser tab's page over (to the main strip) and close the tab. */
+  const takePanelBrowser = () => {
+    const target = panelBrowser;
+    closePanelBrowser();
+    return target;
   };
   const expandPinnedPortal = () => {
     if (pinnedPortal?.sessionId !== session.id) return null;
     const target = pinnedPortal;
-    setPinnedPortal(null);
+    closePanelBrowser();
     return target;
   };
   const assets = useSessionAssets(session.id, addHandler);
@@ -499,7 +498,7 @@ export function useSessionViewStateController({
       setInfoPageScrolled,
     },
     subagents: { openSubagent, nameSubagent },
-    presentation: { sessionWalkthrough, reviewResult },
+    presentation: { reviewResult },
     panel: {
       panelOpen: sidePanel.open,
       setPanelOpen: sidePanel.setOpen,
@@ -515,6 +514,12 @@ export function useSessionViewStateController({
       setPanelTerminalMounted,
       pinnedPortal:
         pinnedPortal?.sessionId === session.id ? pinnedPortal : null,
+      panelBrowser,
+      closePanelBrowser,
+      takePanelBrowser,
+      panelTabs: sidePanel.tabs,
+      panelEntering: sidePanel.entering,
+      closePanelTab: sidePanel.closeTab,
       pinPortal,
       autoPinPortal,
       closePinnedPortal,
@@ -592,13 +597,13 @@ export function useSessionHeaderLayoutController(
       setPanelTerminalMounted(true);
     }
   }, [activePanelOpen, desktopPanelPage, isPhone, setPanelTerminalMounted]);
-  const summaryHasRoom = headerW === 0 || headerW >= WS_SUMMARY_ROOM_W;
+  // The open side panel narrows the conversation below the card's room, but
+  // the two are not either/or: a pinned card stays up beside the panel, over
+  // the conversation's edge, rather than the panel shutting it.
+  const summaryHasRoom =
+    headerW === 0 || headerW >= WS_SUMMARY_ROOM_W || activePanelOpen;
   const summaryVisible =
-    summaryOpen &&
-    summaryHasRoom &&
-    !activePanelOpen &&
-    !isPhone &&
-    hasRepoWork;
+    summaryOpen && summaryHasRoom && !isPhone && hasRepoWork;
   const summaryStep = summaryVisible ? workspaceSummaryShift(headerW) : 0;
   const summaryStepStyle: WorkspaceSummaryStyle | undefined =
     summaryStep > 0 ? { "--ws-summary-step": `-${summaryStep}px` } : undefined;

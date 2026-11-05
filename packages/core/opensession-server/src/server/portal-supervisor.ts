@@ -6,7 +6,6 @@
  * agent can inspect services without becoming their process manager.
  */
 
-import { existsSync, readFileSync } from "fs";
 import {
   mkdir,
   open,
@@ -225,11 +224,10 @@ function parsePortalRegistry(contents: string): PortalRecord[] {
   return records;
 }
 
-export function readPortalRegistry(worktreeDir: string): PortalRecord[] {
-  const path = registryPath(worktreeDir);
-  return existsSync(path)
-    ? parsePortalRegistry(readFileSync(path, "utf8"))
-    : [];
+export function readPortalRegistry(
+  worktreeDir: string,
+): Promise<PortalRecord[]> {
+  return readHostPortalRegistry(worktreeDir);
 }
 
 async function readHostRegistryText(worktreeDir: string): Promise<string> {
@@ -695,7 +693,7 @@ async function startPortal(
     allocatePort: (records: PortalRecord[]) => Promise<number>;
     /** Extra, side-specific qualification of the chosen port (published Sandbox ports). */
     qualifyPort?: (port: number, records: PortalRecord[]) => Promise<void>;
-    urlFor: (port: number) => string;
+    urlFor: (port: number) => string | Promise<string>;
     /** Where the service's stdout/stderr land. Named in failure messages so
      *  an agent can read why a Portal died; the tail is inlined when the file
      *  is readable from here (host Portals). */
@@ -726,7 +724,7 @@ async function startPortal(
       current.key === key &&
       (input.port == null || current.port === input.port);
     if (current.state === "awake" && sameService)
-      return { ...current, url: input.urlFor(current.port) };
+      return { ...current, url: await input.urlFor(current.port) };
     throw new Error(`Portal '${name}' already exists. Restart it instead.`);
   }
   // A dead record can leave its process group behind (a crashed dev server's
@@ -755,7 +753,7 @@ async function startPortal(
   )
     throw new Error(`Port ${port} is already in use.`);
   await input.qualifyPort?.(port, records);
-  const url = input.urlFor(port);
+  const url = await input.urlFor(port);
   const base: PortalRecord = {
     name,
     key: validateKey(input.key) ?? portalKey(name),
@@ -976,7 +974,7 @@ async function startHostPortal(
           // during shutdown. Portals do not need telemetry, so never create it.
           NEXT_TELEMETRY_DISABLED: "1",
         };
-        const scoped = previewScopeCommand(
+        const scoped = await previewScopeCommand(
           directCommand,
           input.worktreeDir,
           name,
@@ -1208,7 +1206,7 @@ export async function sleepIdlePortalServices(
 
 export function portalsNeedingContainment(
   records: readonly PortalRecord[],
-  scopesAvailable = systemdUserScopesAvailable(),
+  scopesAvailable: boolean,
 ): PortalRecord[] {
   if (!scopesAvailable) return [];
   return records.filter(
@@ -1661,7 +1659,7 @@ async function findMergedSession(
 export async function migrateUnscopedPortalServices(
   sessions: readonly PortalOwnerSession[],
 ): Promise<PortalContainmentMigrationResult> {
-  if (!systemdUserScopesAvailable()) return { migrated: [] };
+  if (!(await systemdUserScopesAvailable())) return { migrated: [] };
   const owners = new Map<string, Set<string>>();
   const addOwner = async (
     dir: string | null | undefined,
@@ -1888,7 +1886,8 @@ function sandboxPortalOps(sandbox: Sandbox, sessionId?: string): PortalOps {
       (await readSandboxPortalRegistry(sandbox)).records,
     writeRegistry: async (records) => {
       await writeSandboxPortalRegistry(sandbox, records);
-      if (sessionId) cacheSandboxPortalRecords(sessionId, sandbox.id, records);
+      if (sessionId)
+        await cacheSandboxPortalRecords(sessionId, sandbox.id, records);
     },
     probePort: async (port) =>
       (await probeSandboxPort(sandbox, port)) === "listening",
@@ -1961,7 +1960,7 @@ export async function ensureRemoteSandboxPortalAgent(input: {
     // into session scratch on every launch; the app workspace stays untouched.
     const agentPath = `${logDir}/sandbox-portal-agent.ts`;
     const agentPayload = Buffer.from(
-      readFileSync(SANDBOX_PORTAL_AGENT_ENTRY, "utf8"),
+      await readFile(SANDBOX_PORTAL_AGENT_ENTRY, "utf8"),
     ).toString("base64");
     const relayLaunch = `mkdir -p ${shellQuoteWord(logDir)} && printf %s ${shellQuoteWord(agentPayload)} | base64 -d > ${shellQuoteWord(agentPath)} && OPENSESSION_SANDBOX_PORTAL_WS_URL=${shellQuoteWord(endpoint)} OPENSESSION_SANDBOX_PORTAL_TOKEN=${shellQuoteWord(grant.token)} OPENSESSION_SANDBOX_PORTAL_PORT=${shellQuoteWord(String(input.port))} OPENSESSION_SANDBOX_PORTAL_EXPIRES_AT=${shellQuoteWord(String(grant.expiresAt))} exec ${guest.bun} run ${shellQuoteWord(agentPath)} </dev/null >${shellQuoteWord(logPath)} 2>&1`;
     const started = await input.sandbox.exec(["bash", "-c", relayLaunch], {
@@ -2315,8 +2314,8 @@ async function startSandboxPortalServiceInner(
         if (Object.keys(published).length && !(port in published))
           throw new Error(`Port ${port} is not published for this Sandbox.`);
       },
-      urlFor: (port) =>
-        `https://${configuredServer().previewHost}:${sandboxHttpsPortFor(input.sandbox.id, port)}`,
+      urlFor: async (port) =>
+        `https://${configuredServer().previewHost}:${await sandboxHttpsPortFor(input.sandbox.id, port)}`,
       logPath: `${sandboxRuntimeDir}/${input.name}.log`,
       launch: async ({ name, command, port, url }) => {
         const runtimeDir = sandboxRuntimeDir;

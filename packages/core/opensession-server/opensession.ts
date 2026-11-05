@@ -158,7 +158,8 @@ import {
 import { sweepArchivedWorktrees } from "./src/server/worktree";
 import { type WSClientData, broadcastToAll } from "./src/server/ws-hub";
 import { clientAcceptsCompressedFrames } from "./src/server/ws-compression";
-import { mkdirSync, watch, writeFileSync } from "fs";
+import { watch } from "fs";
+import { access, mkdir, writeFile } from "fs/promises";
 import { join } from "node:path";
 
 // Side-effect modules: these must be loaded even when the entry references
@@ -185,16 +186,23 @@ import {
   stopSessionKernelRuntime,
 } from "./src/server/session-kernel";
 import { activeRunRecords } from "./src/server/run-journal";
+import { refreshWorkloadScoping } from "./src/server/workload-scope";
 import {
   markInterruptedWorkflows,
   pauseWorkflowsForShutdown,
+  flushWorkflowWrites,
 } from "./src/server/workflow-store";
 import { recoverInterruptedWorkflows } from "./src/server/workflow-runner";
 import { ensureSlackLinkIndex } from "./src/server/session-control-wiring"; // opensession-sessions MCP + Slack-link bridge
 import "./src/server/keychain"; // registers the keychain human-ask domain handler
-import { websocketHandlers } from "./src/server/ws-handlers";
+import { loadLastRestartBy, websocketHandlers } from "./src/server/ws-handlers";
+import { loadTitleOverrides } from "./src/server/title-overrides";
+import { loadStatusOverrides } from "./src/server/status-overrides";
 import { routeHandlers, type RouteContext } from "./src/server/routes";
 import { isRetiredKeychainBrokerPath } from "./src/server/routes/keychain";
+import { loadReviewRequests } from "./src/server/review-requests";
+import { warmGeneratedTitles } from "./src/server/generated-titles";
+import { warmPapercutsConfig } from "./src/server/papercuts";
 
 // Under the stable supervisor, PORT/HOST remain the public address while the
 // child binds the private backend override. Direct and dev launches keep the
@@ -228,7 +236,7 @@ const precheckRuntimePeers =
 // must log, not exit the gateway (see process-guards.ts).
 installUnhandledRejectionGuard();
 if (process.env.OPENSESSION_GATEWAY_ROLE === "standby")
-  preloadPreparedFrontend();
+  await preloadPreparedFrontend();
 if (precheckRuntimePeers)
   await waitForRuntimePeerGeneration({ timeoutMs: 5_000 });
 // A supervised standby is allowed to preload this import graph, but it cannot
@@ -286,7 +294,7 @@ registerSandboxSessionPredicate((sessionId) =>
 // evaluation, which is exactly when a hot reload may have killed the timers.
 startTimerPoisonHeartbeat();
 
-mkdirSync(SESSIONS_DIR, { recursive: true });
+await mkdir(SESSIONS_DIR, { recursive: true });
 
 // --- Hot-reload support (bun --hot) ---------------------------------------
 // Under `bun --hot`, editing a module re-evaluates this entry file in the SAME
@@ -303,6 +311,8 @@ const g = globalThis as any;
 
 // The actor owns the writable kernel store before any gateway projection hydrates.
 if (!g.__opensessionBooted) await startSessionKernelActor();
+// Classify this process's cgroup before any request can start a workload.
+if (!g.__opensessionBooted) await refreshWorkloadScoping();
 // Import legacy application documents before any sidebar or scheduler reads.
 // After cutover, their catalog is authoritative; requests never read the files.
 if (!g.__opensessionBooted) {
@@ -324,6 +334,22 @@ await (await import("./src/server/archive")).warmArchiveRegistry();
 // the catalogs first, because the list is primed from the catalogs alone.
 if (!g.__opensessionBooted && process.env.OPENSESSION_DEMO === "1")
   await (await import("./src/server/demo")).seedDemoDataset();
+// Small registries the list overlays and the hello frame read synchronously:
+// load them into memory before the first reader (also after a hot reload,
+// which resets module state).
+await Promise.all([
+  loadTitleOverrides(),
+  loadStatusOverrides(),
+  loadLastRestartBy(),
+]);
+// Review requests and generated titles overlay every listed row; load them
+// before the first list.
+if (!g.__opensessionBooted)
+  await Promise.all([
+    loadReviewRequests(),
+    warmGeneratedTitles(),
+    warmPapercutsConfig(),
+  ]);
 if (!g.__opensessionBooted) await primeSessionListIndex();
 void ensureSlackLinkIndex();
 
@@ -336,7 +362,7 @@ let agents: AgentModule[] = (g.__agents as AgentModule[] | undefined) ?? [];
 // request that persists these globalThis-backed maps. Hot reloads reuse the
 // live maps and skip this branch.
 if (!g.__opensessionBooted && !isDevInstance()) {
-  initHumanAsks();
+  await initHumanAsks();
   await restorePendingAsks();
   await hydratePersistedQueueState();
 }
@@ -547,7 +573,7 @@ const server: import("bun").Server<WSClientData> = hotServe({
     // reconnect instead of a sign-in it thinks it already did.
     let reconnectRequired = false;
     if (webAuthRequired()) {
-      authUser = resolveWebAuth(req);
+      authUser = await resolveWebAuth(req);
       // Server-local CDP/CLI traffic has its own machine principal. A
       // teammate's cookie must never let automation act as that person.
       if (hostedLoopback && authUser?.automation !== true) authUser = null;
@@ -782,11 +808,19 @@ if (!g.__opensessionBooted) {
   // restarting a dead server.
   {
     const { configuredPaths } = await import("./src/server/config");
-    const { existsSync } = await import("fs");
+    const { whichAsync } = await import("./src/server/shared/which-async");
     const configured = configuredPaths().claudeBin;
     const claudeBin =
-      configured && configured !== "claude" ? configured : Bun.which("claude");
-    if (!claudeBin || !existsSync(claudeBin)) {
+      configured && configured !== "claude"
+        ? configured
+        : await whichAsync("claude");
+    const claudeExists =
+      !!claudeBin &&
+      (await access(claudeBin).then(
+        () => true,
+        () => false,
+      ));
+    if (!claudeExists) {
       console.error(
         "[engine] the `claude` CLI is not installed — Anthropic turns cannot run.\n" +
           "[engine] install it: curl -fsSL https://claude.ai/install.sh | bash",
@@ -823,15 +857,22 @@ if (!g.__opensessionBooted) {
   // devInstanceBootError guard at the top of this file enforces it).
   const devInstance = isDevInstance();
   startSessionListRuntimeSync();
+  // Read the sandbox kill switch once before serving; it refreshes itself
+  // asynchronously after that.
+  await import("./src/server/sandbox/config").then(
+    ({ refreshSandboxKillSwitch }) => refreshSandboxKillSwitch(),
+  );
   if (!devInstance) {
     startLiveActivitySync();
 
     // Restore completed sandbox prewarms and maintain any explicit keep-ready
     // targets. This is a boot hook rather than a module-scope side effect.
     void import("./src/server/sandbox/prewarm")
-      .then(async ({ startPrewarmPool }) => {
-        // Restoration happens synchronously before the first sweep await. Do not
-        // make snapshot maintenance wait behind slow provider orphan cleanup.
+      .then(async ({ restoreReadyPrewarms, startPrewarmPool }) => {
+        // Restore ready prewarms before maintenance can request new ones. Do
+        // not make snapshot maintenance wait behind slow provider orphan
+        // cleanup: the first sweep runs alongside it.
+        await restoreReadyPrewarms();
         const poolStartup = startPrewarmPool();
         const { startSandboxEnvironmentMaintenance } =
           await import("./src/server/sandbox/environments");
@@ -877,7 +918,9 @@ if (!g.__opensessionBooted) {
     configureWebhookRoutes(agents, webhookRoutes);
     try {
       startPublicIngress();
-      ensureCloudflareTunnel();
+      void ensureCloudflareTunnel().catch((e) =>
+        console.error("[public-ingress] Cloudflare Tunnel failed to start:", e),
+      );
       startPrivateAppCertificateRenewal();
     } catch (e) {
       console.error("[public-ingress] failed to start:", e);
@@ -918,7 +961,7 @@ if (!g.__opensessionBooted) {
 
     // Scheduled prompts are durable SessionKernel timers. The runtime starts
     // after run recovery below; hydrate their rows before that gate opens.
-    hydrateScheduledPromptTimers();
+    await hydrateScheduledPromptTimers();
 
     // Archive triage sessions when their Plain ticket is done.
     startPlainArchiveSweep();
@@ -1055,7 +1098,7 @@ if (!g.__opensessionBooted) {
           // sweep has already skipped the quarantined lineage and its terminal host
           // receipt can remain stranded behind a ghost owner until another restart.
           await reconcileRecoverableSafetyFences();
-          const shutdownRecords = readActiveShutdownSnapshot();
+          const shutdownRecords = await readActiveShutdownSnapshot();
           const resumedIds = await resumeInterruptedRuns(
             async (bksSessionId, terminalEvent, recoveredRun) => {
               if (bksSessionId && terminalEvent) {
@@ -1186,7 +1229,7 @@ if (!g.__opensessionBooted) {
                 return undefined;
               }
             },
-            (bksSessionId) => {
+            async (bksSessionId) => {
               const session = findSession(bksSessionId);
               if (
                 !session ||
@@ -1194,10 +1237,10 @@ if (!g.__opensessionBooted) {
                 session.automation
               )
                 return undefined;
-              return buildReposNote(session);
+              return await buildReposNote(session);
             },
             recordRecoveredRunEvent,
-            recoverableLocalHostSnapshotRecords(shutdownRecords),
+            await recoverableLocalHostSnapshotRecords(shutdownRecords),
             (run) =>
               !!run.osSessionId &&
               !!run.promptEntryId &&
@@ -1210,7 +1253,7 @@ if (!g.__opensessionBooted) {
             );
             invalidateSessionsCache();
           }
-          resumeDrainedSessions(new Set(resumedIds), shutdownRecords);
+          await resumeDrainedSessions(new Set(resumedIds), shutdownRecords);
           // Re-deliver messages that were queued/steered when the process went down.
           await restorePromptQueues(new Set(resumedIds));
           const ownedSessionIds = new Set(
@@ -1366,7 +1409,7 @@ if (!g.__opensessionBooted) {
     // record of sessions that should be woken on the next boot. Dev
     // instances skip it (nothing resumes them, and a snapshot must never
     // make the production boot try to wake dev sessions).
-    if (!devInstance) snapshotActiveSessions();
+    if (!devInstance) await snapshotActiveSessions();
     // Script runs keep going; save their latest credential call counts so
     // the next boot reattaches them with nothing lost.
     void import("./src/server/script-runs")
@@ -1377,6 +1420,9 @@ if (!g.__opensessionBooted) {
       console.log(
         `[shutdown] paused ${pausedWorkflows} workflow(s) for journal recovery`,
       );
+    // Their snapshots are written asynchronously; the drain below gives the
+    // writes time to land.
+    void flushWorkflowWrites().catch(() => {});
     // Best-effort attribution: a session-triggered `systemctl restart` shows
     // up as an in-flight run in this checkout (sharedCheckoutEditors). The
     // marker file lets the NEXT boot's hello frame name the culprit in the
@@ -1385,7 +1431,7 @@ if (!g.__opensessionBooted) {
     try {
       // A dev instance must not overwrite the production restart marker.
       if (!devInstance) {
-        writeFileSync(
+        await writeFile(
           stateDir("last-restart.json"),
           JSON.stringify({
             by: restartBy || "",
@@ -1483,7 +1529,7 @@ if (!g.__opensessionBooted) {
   // (we're on 6.17) — fine here.
   // A prebuilt bundle (compiled binary's embedded assets, or a release
   // tarball's .frontend-dist) has no src/frontend tree to watch.
-  if (!IS_DEV && frontend && isPrebuiltFrontend()) {
+  if (!IS_DEV && frontend && (await isPrebuiltFrontend())) {
     console.log("[frontend] Prebuilt bundle: source rebuilds are off");
   } else if (!IS_DEV && frontend) {
     try {
@@ -1506,7 +1552,7 @@ if (!g.__opensessionBooted) {
   // (scripts/migrate-session-github-users.ts), never a boot-time fleet writer.
   try {
     if (!devInstance) {
-      ensureAutomationWebSession();
+      await ensureAutomationWebSession();
     }
   } catch (e) {
     console.error("[web-auth] automation identity initialization failed:", e);

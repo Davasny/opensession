@@ -95,7 +95,7 @@ export async function handlePrefsRoutes(
 
   // ── Warm preview templates (per-repo prebuilt worktrees, scheduled) ──
   if (path === "/api/warm-templates" && req.method === "GET") {
-    return Response.json({ repos: warmTemplateStatus() });
+    return Response.json({ repos: await warmTemplateStatus() });
   }
 
   {
@@ -119,14 +119,14 @@ export async function handlePrefsRoutes(
           patch.warmRoutes = body.warmRoutes.filter(
             (r: unknown): r is string => typeof r === "string",
           );
-        setWarmTemplateConfig(repoId, patch);
-        return Response.json({ repos: warmTemplateStatus() });
+        await setWarmTemplateConfig(repoId, patch);
+        return Response.json({ repos: await warmTemplateStatus() });
       }
       if (m[2] && req.method === "POST") {
         // Fire-and-forget: a refresh boots a real dev server (minutes);
         // the UI polls GET for progress via `refreshing`.
         void refreshWarmTemplate(repoId, { force: true }).catch(() => {});
-        return Response.json({ repos: warmTemplateStatus() });
+        return Response.json({ repos: await warmTemplateStatus() });
       }
     }
   }
@@ -346,7 +346,7 @@ export async function handlePrefsRoutes(
   // drafts.
   if (path === "/api/drafts" && req.method === "GET") {
     const user = requestUser(ctx, url.searchParams.get("user")) || "Anonymous";
-    return conditionalJsonResponse(req, { drafts: getDrafts(user) });
+    return conditionalJsonResponse(req, { drafts: await getDrafts(user) });
   }
 
   if (path === "/api/drafts" && req.method === "PUT") {
@@ -380,7 +380,12 @@ export async function handlePrefsRoutes(
     const updatedAt = new Date(
       Math.min(parsedAt, Date.now() + 5 * 60_000),
     ).toISOString();
-    const result = upsertDraft(user, body.sessionId, body.text, updatedAt);
+    const result = await upsertDraft(
+      user,
+      body.sessionId,
+      body.text,
+      updatedAt,
+    );
     return Response.json(result);
   }
 

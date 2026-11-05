@@ -23,6 +23,7 @@ import {
   useSessionPrResource,
   useWorkspaceOverviewResource,
 } from "../hooks/useApiResources";
+import { useSessionPendingCreation } from "../hooks/useSessionPendingCreation";
 import { PatchDiffs, PatchFileDiff } from "./DeferredDiff";
 import { patchFileNames } from "../lib/patch-file-names";
 import { assetPreviewKind, isVisualAsset } from "../lib/asset-preview";
@@ -40,12 +41,16 @@ import { PR_WEBHOOK_FALLBACK_POLL_MS } from "../lib/poll";
 import { PrStatusBar } from "./PrStatusBar";
 import { StagingLink } from "./StagingLink";
 import { UserAvatar } from "./UserAvatar";
-import { WorkspaceSummaryCollaborators } from "./WorkspaceCollaborators";
+import {
+  WorkspaceSummaryAdd,
+  WorkspaceSummaryAddRow,
+} from "./WorkspaceSummaryAdd";
 import { usePeople, useReviewTeams } from "../lib/people";
 import { type ReviewLine, reviewLines } from "../lib/review-lines";
 import { Popover } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Menu } from "../ui/menu";
+import { Segmented, SegmentedOption } from "../ui/segmented";
 import { Tooltip } from "../ui/tooltip";
 import { cn } from "../ui/cn";
 import type {
@@ -86,7 +91,6 @@ import {
   IconFile,
   IconGitCommit,
   IconListCircles,
-  IconPeople,
   IconPlay,
   IconPlayRectangle,
   IconRobot,
@@ -482,19 +486,23 @@ export function WorkspaceSummaryBody({
   // Pictures or rows. One preference, shared with the Workspace panel's own
   // Assets section, so the same folder is not drawn two ways in one window.
   const [assetView, setAssetView] = useAssetViewMode();
-  const [changesOpen, setChangesOpen] = useState(false);
+  // Commits and changed files share one row. Open, it lists one or the other.
+  const [workOpen, setWorkOpen] = useState(false);
+  const [workTab, setWorkTab] = useState<"files" | "commits">("files");
   const [openCommit, setOpenCommit] = useState<OpenCommitDetails | null>(null);
   const diffTheme = useResolvedTheme();
   // `session` follows the session-list poll; the viewer's explicit value follows
   // the workspace_status socket event and wins when it is available.
   const workspaceIsPreparing =
     workspacePreparing ?? Boolean(session.workspacePreparing);
+  // A new tab's id is unknown to the server until its create lands.
+  const pendingCreation = useSessionPendingCreation();
   const prResource = useSessionPrResource(
     session.id,
     session.repo || undefined,
     undefined,
     {
-      enabled: !workspaceIsPreparing,
+      enabled: !workspaceIsPreparing && !pendingCreation,
       refreshInterval: PR_WEBHOOK_FALLBACK_POLL_MS,
       revision: refreshTick,
     },
@@ -503,7 +511,7 @@ export function WorkspaceSummaryBody({
     session.id,
     session.repo || undefined,
     {
-      enabled: !workspaceIsPreparing,
+      enabled: !workspaceIsPreparing && !pendingCreation,
       refreshInterval: PR_WEBHOOK_FALLBACK_POLL_MS,
       revision: refreshTick,
     },
@@ -541,7 +549,9 @@ export function WorkspaceSummaryBody({
     session.repo || undefined,
     undefined,
     {
-      enabled: (changesOpen || Boolean(openCommit)) && Boolean(pr),
+      enabled:
+        ((workOpen && workTab === "files") || Boolean(openCommit)) &&
+        Boolean(pr),
       revision: `${pr?.headRefOid || ""}\0${refreshTick || 0}`,
     },
   );
@@ -573,7 +583,6 @@ export function WorkspaceSummaryBody({
       { additions: 0, deletions: 0, files: 0 },
     ) ?? null;
   const [prompted, setPrompted] = useState(false);
-  const [commitsOpen, setCommitsOpen] = useState(false);
   const [selectedReview, setSelectedReview] = useState(reviewRequest ?? null);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -726,6 +735,10 @@ export function WorkspaceSummaryBody({
   const passiveReviewers = humanReviewers.filter(
     (_, index) => index !== pickerIndex,
   );
+  // With no automated review and nobody asked, Review is one add row rather
+  // than a heading with nothing under it.
+  const reviewEmpty =
+    !showOsReview && otherReviewers.length === 0 && humanReviewers.length === 0;
 
   // A capture is shown, not listed: `contact-dark.png` names a file without
   // saying what is in it. A report or a data file is the other way round, and
@@ -918,37 +931,6 @@ export function WorkspaceSummaryBody({
           </Popover.Popup>
         )}
       </Popover.Root>
-    );
-  }
-
-  function diffChangeRow(label: string) {
-    return (
-      <>
-        <button
-          className={WS_SUMMARY_ROW}
-          onClick={() => setChangesOpen((open) => !open)}
-          aria-expanded={changesOpen}
-        >
-          <span className={WS_SUMMARY_RAIL}>
-            <IconFile size={20} className={WS_SUMMARY_ICON} />
-          </span>
-          <span className={WS_SUMMARY_LABEL}>{label}</span>
-          <span className={WS_SUMMARY_COUNT}>
-            <span className="text-green">+{additions}</span>{" "}
-            <span className="text-red">−{deletions}</span>
-          </span>
-          <IconChevronDown
-            size={14}
-            className={cn(
-              "shrink-0 text-faint transition-transform motion-reduce:transition-none",
-              changesOpen && "rotate-180",
-            )}
-          />
-        </button>
-        {changesOpen && changeFiles.length > 0 ? (
-          <div className="pb-1">{changeFiles.map(fileChangeRow)}</div>
-        ) : null}
-      </>
     );
   }
 
@@ -1163,11 +1145,11 @@ export function WorkspaceSummaryBody({
     );
   }
 
-  /** A long session can commit dozens of times. Keep the completed-work totals
-   *  folded, then let the section heading reveal every commit in this card. */
-  function committedSummaryRow() {
-    if (commits.length === 0) return null;
-    const stats = commits.reduce(
+  /** Everything this work changed, in one row: "Changes" and the line totals.
+   *  Open, it lists the files or the commits, each with its count. */
+  function workRow() {
+    if (!hasCommitDetails && !showDiffChanges) return null;
+    const commitStats = commits.reduce(
       (sum, commit) => ({
         files: sum.files + commit.filesChanged,
         additions: sum.additions + commit.additions,
@@ -1175,42 +1157,117 @@ export function WorkspaceSummaryBody({
       }),
       { files: 0, additions: 0, deletions: 0 },
     );
-    const label = `${commits.length} commit${commits.length === 1 ? "" : "s"}`;
+    const files = showDiffChanges ? changedFiles : commitStats.files;
+    const added = showDiffChanges ? additions : commitStats.additions;
+    const removed = showDiffChanges ? deletions : commitStats.deletions;
+    const view = !hasCommitDetails
+      ? "files"
+      : !showDiffChanges
+        ? "commits"
+        : workTab;
     return (
-      <button
-        type="button"
-        className={WS_SUMMARY_ROW}
-        onClick={() => setCommitsOpen(true)}
-        aria-expanded={false}
-        title={`View ${label}`}
-      >
-        <span className={WS_SUMMARY_RAIL}>
-          <IconGitCommit size={20} className={WS_SUMMARY_ICON} />
-        </span>
-        <span className={WS_SUMMARY_LABEL}>{label}</span>
-        <span
-          className={cn(
-            WS_SUMMARY_STATE,
-            "flex items-baseline gap-2 text-dim tabular-nums",
-          )}
+      <div className={groupClass}>
+        <button
+          type="button"
+          className={WS_SUMMARY_ROW}
+          onClick={() => setWorkOpen((open) => !open)}
+          aria-expanded={workOpen}
         >
-          <span>
-            {stats.files} file{stats.files === 1 ? "" : "s"}
+          <span className={WS_SUMMARY_RAIL}>
+            <IconFile size={20} className={WS_SUMMARY_ICON} />
           </span>
-          <span className="text-green">+{stats.additions}</span>
-          <span className="text-red">−{stats.deletions}</span>
-        </span>
-      </button>
+          <span className={WS_SUMMARY_LABEL}>Changes</span>
+          {(added > 0 || removed > 0) && (
+            <span className={WS_SUMMARY_COUNT}>
+              <span className="text-green">+{added}</span>{" "}
+              <span className="text-red">−{removed}</span>
+            </span>
+          )}
+          <IconChevronDown
+            size={14}
+            className={cn(
+              "shrink-0 text-faint transition-transform motion-reduce:transition-none",
+              workOpen && "rotate-180",
+            )}
+          />
+        </button>
+        {workOpen && hasCommitDetails && showDiffChanges && (
+          <div className="flex shrink-0 px-4 pt-1 pb-1.5">
+            <Segmented
+              label="Show files or commits"
+              size="sm"
+              value={workTab}
+              onValueChange={(next) =>
+                setWorkTab(next === "commits" ? "commits" : "files")
+              }
+            >
+              <SegmentedOption value="files">
+                Files <span className="text-faint tabular-nums">{files}</span>
+              </SegmentedOption>
+              <SegmentedOption value="commits">
+                Commits{" "}
+                <span className="text-faint tabular-nums">{commitCount}</span>
+              </SegmentedOption>
+            </Segmented>
+          </div>
+        )}
+        {workOpen &&
+          (view === "files" ? (
+            <div className="pb-1">{changeFiles.map(fileChangeRow)}</div>
+          ) : prCommits.length > 0 ? (
+            prCommits.map(prCommittedRow)
+          ) : (
+            commits.map(committedRow)
+          ))}
+      </div>
     );
   }
 
-  const groupClass = embedded
-    ? "flex flex-col overflow-hidden rounded-2xl bg-raised py-2 empty:hidden"
-    : "contents";
+  function reviewerMenuItems() {
+    return (
+      <>
+        {people.map((person) => (
+          <Menu.Item
+            key={person.name}
+            onClick={() => pickReviewer(person.name)}
+          >
+            <UserAvatar name={person.name} size={22} />
+            <span className="min-w-0 flex-1 truncate">{person.name}</span>
+            <Menu.Check
+              on={selectedReview?.to === person.name}
+              size={20}
+              className="text-dim"
+            />
+          </Menu.Item>
+        ))}
+        {reviewTeams.length > 0 && <Menu.Separator />}
+        {reviewTeams.map((team) => (
+          <Menu.Item
+            key={team.github}
+            onClick={() => pickReviewer(team.github, team.members)}
+          >
+            <span className="grid size-[22px] place-items-center text-dim">
+              <IconStack size={20} />
+            </span>
+            <span className="min-w-0 flex-1 truncate">{team.name}</span>
+            <Menu.Check
+              on={selectedReview?.to === team.github}
+              size={20}
+              className="text-dim"
+            />
+          </Menu.Item>
+        ))}
+      </>
+    );
+  }
+
+  // On a phone every group under the PR band shares one card. A card per
+  // section stacked grey plates down the page and outweighed their rows.
+  const groupClass = embedded ? "flex flex-col empty:hidden" : "contents";
   const prGroupClass = embedded
     ? cn(
-        groupClass,
-        "py-0 [&_.ws-summary-band]:mx-0 [&_.ws-summary-band]:mb-0 [&_.ws-summary-band]:px-2 [&_.ws-summary-band]:py-3 [&_.ws-summary-band]:[border-radius:inherit]",
+        "flex flex-col overflow-hidden rounded-2xl bg-raised py-0",
+        " [&_.ws-summary-band]:mx-0 [&_.ws-summary-band]:mb-0 [&_.ws-summary-band]:px-2 [&_.ws-summary-band]:py-3 [&_.ws-summary-band]:[border-radius:inherit]",
       )
     : prGroupRef
       ? "sticky top-0 z-10 flex flex-col bg-panel-surface pt-2"
@@ -1266,67 +1323,157 @@ export function WorkspaceSummaryBody({
         )}
       </div>
 
-      <div
-        className={cn(
-          groupClass,
-          "ws-summary-review-group",
-          !hasConnectedPr && "hidden!",
-        )}
-      >
-        {/* One review section for both the automated reading and the people asked
-				    to review. Its action opens the complete workspace review; the final row
-				    owns the picker, so neither action requires the workspace panel. */}
+      <SummaryRest embedded={embedded}>
         <div
           className={cn(
-            WS_SUMMARY_SECTION,
-            "ws-summary-review-heading",
-            embedded
-              ? "h-11"
-              : cn(
-                  "h-7",
-                  // Match the sibling group wrappers, then reach into Review. Keep a
-                  // small breath after the PR without splitting the two groups apart.
-                  "[.ws-summary-pr-group:has(>.ws-summary-band:last-child)+.ws-summary-review-group_&]:mt-1",
-                ),
+            groupClass,
+            "ws-summary-review-group",
+            !hasConnectedPr && "hidden!",
           )}
         >
-          {reviewMode ? (
-            <span>Review</span>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="group/review h-full min-h-0 gap-0 rounded-sm p-0 [color:inherit] [font-size:inherit] [font-weight:inherit] hover:bg-transparent hover:[color:inherit] active:scale-100"
-              onClick={() => go(onOpenPr)}
-              aria-label="Open review"
+          {/* One review section for both the automated reading and the people asked
+				    to review. Its action opens the complete workspace review; the final row
+				    owns the picker, so neither action requires the workspace panel. */}
+          {reviewEmpty && (
+            <WorkspaceSummaryAddRow
+              label="Reviewers"
+              action="Ask for review"
+              disabled={reviewBusy}
             >
-              <span>Review</span>
-              <IconChevronRight
-                size={14}
-                className="text-faint opacity-50 transition-[color,opacity,transform] group-hover/review:translate-x-0.5 group-hover/review:text-fg group-hover/review:opacity-100 phone:opacity-100"
-              />
-            </Button>
+              {reviewerMenuItems()}
+            </WorkspaceSummaryAddRow>
           )}
-        </div>
-        {showOsReview && (
-          <>
-            {canRerunOsReview && !osReviewActive ? (
-              <div className="mx-2 flex h-[31px] w-[calc(100%_-_16px)] min-w-0 shrink-0 items-stretch gap-1 phone:h-11">
+          <div
+            className={cn(
+              WS_SUMMARY_SECTION,
+              "ws-summary-review-heading gap-2",
+              reviewEmpty && "hidden",
+              embedded
+                ? "h-11"
+                : cn(
+                    "h-7",
+                    // Match the sibling group wrappers, then reach into Review. Keep a
+                    // small breath after the PR without splitting the two groups apart.
+                    "[.ws-summary-pr-group:has(>.ws-summary-band:last-child)+.ws-summary-review-group_&]:mt-1",
+                  ),
+            )}
+          >
+            {reviewMode ? (
+              <span>Review</span>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="group/review h-full min-h-0 gap-0 rounded-sm p-0 [color:inherit] [font-size:inherit] [font-weight:inherit] hover:bg-transparent hover:[color:inherit] active:scale-100"
+                onClick={() => go(onOpenPr)}
+                aria-label="Open review"
+              >
+                <span>Review</span>
+                <IconChevronRight
+                  size={14}
+                  className="text-faint opacity-50 transition-[color,opacity,transform] group-hover/review:translate-x-0.5 group-hover/review:text-fg group-hover/review:opacity-100 phone:opacity-100"
+                />
+              </Button>
+            )}
+            {!pickerReviewer && (
+              <WorkspaceSummaryAdd label="Ask for review" disabled={reviewBusy}>
+                {reviewerMenuItems()}
+              </WorkspaceSummaryAdd>
+            )}
+          </div>
+          {showOsReview && (
+            <>
+              {canRerunOsReview && !osReviewActive ? (
+                <div className="mx-2 flex h-[31px] w-[calc(100%_-_16px)] min-w-0 shrink-0 items-stretch gap-1 phone:h-11">
+                  <button
+                    type="button"
+                    className={cn(
+                      WS_SUMMARY_ROW,
+                      "mx-0 h-full w-auto min-w-0 flex-1",
+                    )}
+                    onClick={() => go(() => onOpenPanelTab("info"))}
+                    title={`${AGENT_NAME}${osScore ? ` · ${osScore}/5` : ""} · ${osReviewState}`}
+                  >
+                    <span className={WS_SUMMARY_RAIL}>
+                      <IconRobot size={20} className={WS_SUMMARY_ICON} />
+                    </span>
+                    <span className={WS_SUMMARY_LABEL}>
+                      {AGENT_NAME}
+                      {osScore ? (
+                        <>
+                          <span className="text-faint"> · </span>
+                          <span className={cn("tabular-nums", osScoreTone)}>
+                            {osScore}/5
+                          </span>
+                        </>
+                      ) : null}
+                    </span>
+                    <span className={cn(WS_SUMMARY_STATE, "text-faint")}>
+                      New commits
+                    </span>
+                  </button>
+                  <span
+                    className="self-center text-meta text-faint"
+                    aria-hidden="true"
+                  >
+                    ·
+                  </span>
+                  <button
+                    type="button"
+                    className={cn(
+                      WS_SUMMARY_ACTION,
+                      "focus-ring shrink-0 cursor-pointer rounded-row border-none bg-transparent px-1 transition-[color,scale] hover:text-accent active:scale-[0.96] disabled:cursor-default disabled:opacity-50",
+                    )}
+                    onClick={() => void rerunOsReview()}
+                    disabled={reviewStarting}
+                  >
+                    Re-review
+                  </button>
+                </div>
+              ) : (
                 <button
-                  type="button"
                   className={cn(
                     WS_SUMMARY_ROW,
-                    "mx-0 h-full w-auto min-w-0 flex-1",
+                    "disabled:cursor-default disabled:opacity-70",
                   )}
-                  onClick={() => go(() => onOpenPanelTab("info"))}
-                  title={`${AGENT_NAME}${osScore ? ` · ${osScore}/5` : ""} · ${osReviewState}`}
+                  onClick={
+                    osReviewActive
+                      ? () => void cancelOsReview()
+                      : canFixOsReview
+                        ? () => void fixOsReview()
+                        : () => go(() => onOpenPanelTab("info"))
+                  }
+                  disabled={reviewStarting || reviewCancelling || fixBusy}
+                  aria-label={
+                    osReviewActive
+                      ? `Cancel ${AGENT_NAME} review`
+                      : canFixOsReview
+                        ? `Fix ${AGENT_NAME} review findings`
+                        : undefined
+                  }
+                  title={`${AGENT_NAME}${osScore ? ` · ${osScore}/5` : ""} · ${
+                    reviewCancelling ? "Cancelling…" : osReviewState
+                  }`}
                 >
                   <span className={WS_SUMMARY_RAIL}>
-                    <IconRobot size={20} className={WS_SUMMARY_ICON} />
+                    <IconRobot
+                      size={20}
+                      className={cn(
+                        WS_SUMMARY_ICON,
+                        osReviewActive && "animate-pulse",
+                      )}
+                    />
                   </span>
                   <span className={WS_SUMMARY_LABEL}>
                     {AGENT_NAME}
-                    {osScore ? (
+                    {osReviewActive ? (
+                      <>
+                        <span className="text-faint"> · </span>
+                        <span className="text-dim">
+                          {reviewCancelling ? "Cancelling…" : "Reviewing…"}
+                        </span>
+                      </>
+                    ) : osScore ? (
                       <>
                         <span className="text-faint"> · </span>
                         <span className={cn("tabular-nums", osScoreTone)}>
@@ -1335,449 +1482,183 @@ export function WorkspaceSummaryBody({
                       </>
                     ) : null}
                   </span>
-                  <span className={cn(WS_SUMMARY_STATE, "text-faint")}>
-                    New commits
-                  </span>
+                  {osReviewActive ? (
+                    <span className={WS_SUMMARY_ACTION}>
+                      {reviewCancelling ? "Stopping" : "Cancel"}
+                    </span>
+                  ) : canFixOsReview ? (
+                    <span className={cn(WS_SUMMARY_ACTION, "text-red")}>
+                      {fixBusy ? "Starting…" : "Fix"}
+                    </span>
+                  ) : (
+                    <span
+                      className={cn(
+                        WS_SUMMARY_STATE,
+                        osReview?.blocking ? "text-red" : "text-dim",
+                      )}
+                    >
+                      {osReviewState}
+                    </span>
+                  )}
                 </button>
-                <span
-                  className="self-center text-meta text-faint"
-                  aria-hidden="true"
+              )}
+              {fixError && (
+                <div
+                  className="px-4 py-1 text-supporting text-red"
+                  role="alert"
                 >
-                  ·
+                  {fixError}
+                </div>
+              )}
+            </>
+          )}
+          {otherReviewers.map((reviewer) => (
+            <button
+              key={reviewer.key}
+              className={WS_SUMMARY_ROW}
+              onClick={() => go(onOpenPr)}
+              title={`${reviewer.name} · ${reviewer.state}`}
+            >
+              <span className={WS_SUMMARY_RAIL}>
+                <ReviewerAvatar reviewer={reviewer} />
+              </span>
+              <span className={WS_SUMMARY_LABEL}>{reviewer.name}</span>
+              <span className={cn(WS_SUMMARY_STATE, reviewer.tone)}>
+                {reviewer.state}
+              </span>
+            </button>
+          ))}
+
+          {pickerReviewer && (
+            <Menu.Root>
+              <Menu.Trigger className={WS_SUMMARY_ROW} disabled={reviewBusy}>
+                <span className={WS_SUMMARY_RAIL}>
+                  <ReviewerAvatar reviewer={pickerReviewer} />
                 </span>
+                <span className={WS_SUMMARY_LABEL}>{pickerReviewer.name}</span>
+                <span className={cn(WS_SUMMARY_STATE, pickerReviewer.tone)}>
+                  {pickerReviewer.state}
+                </span>
+                <IconChevronDown size={14} className="shrink-0 text-faint" />
+              </Menu.Trigger>
+              <Menu.Popup align="end" sideOffset={6} className="min-w-[200px]">
+                {reviewerMenuItems()}
+                <Menu.Separator />
+                <Menu.Item
+                  className="text-dim"
+                  onClick={() => pickReviewer(null)}
+                >
+                  Clear review request
+                </Menu.Item>
+              </Menu.Popup>
+            </Menu.Root>
+          )}
+          {passiveReviewers.map((reviewer) => (
+            <button
+              key={reviewer.key}
+              className={WS_SUMMARY_ROW}
+              onClick={() => go(() => onOpenPanelTab("info"))}
+              title={`${reviewer.name} · ${reviewer.state}`}
+            >
+              <span className={WS_SUMMARY_RAIL}>
+                <ReviewerAvatar reviewer={reviewer} />
+              </span>
+              <span className={WS_SUMMARY_LABEL}>{reviewer.name}</span>
+              <span className={cn(WS_SUMMARY_STATE, reviewer.tone)}>
+                {reviewer.state}
+              </span>
+            </button>
+          ))}
+          {reviewError && (
+            <div className="px-4 py-1 text-meta font-medium text-red">
+              {reviewError}
+            </div>
+          )}
+        </div>
+
+        {workRow()}
+
+        {dirty > 0 && (
+          <div className={groupClass}>
+            <div className={WS_SUMMARY_SECTION}>Uncommitted</div>
+            <div className="mx-2 flex h-[31px] w-[calc(100%_-_16px)] min-w-0 shrink-0 items-stretch gap-1 phone:h-11">
+              <button
+                type="button"
+                className={cn(
+                  WS_SUMMARY_ROW,
+                  "mx-0 h-full w-auto min-w-0 flex-1",
+                )}
+                onClick={openUncommittedChanges}
+                title="View uncommitted changes"
+              >
+                <span className={WS_SUMMARY_RAIL}>
+                  <IconClock size={20} className={WS_SUMMARY_ICON} />
+                </span>
+                <span className={WS_SUMMARY_LABEL}>
+                  {dirty} file{dirty === 1 ? "" : "s"} uncommitted
+                </span>
+              </button>
+              {send && (
                 <button
                   type="button"
                   className={cn(
                     WS_SUMMARY_ACTION,
-                    "focus-ring shrink-0 cursor-pointer rounded-row border-none bg-transparent px-1 transition-[color,scale] hover:text-accent active:scale-[0.96] disabled:cursor-default disabled:opacity-50",
+                    "focus-ring shrink-0 cursor-pointer rounded-row border-none bg-transparent px-2 hover:bg-hover disabled:cursor-default disabled:hover:bg-transparent",
                   )}
-                  onClick={() => void rerunOsReview()}
-                  disabled={reviewStarting}
+                  onClick={askCommit}
+                  disabled={prompted}
+                  title={`Ask ${AGENT_NAME} to commit the uncommitted changes and push`}
                 >
-                  Re-review
+                  {prompted ? "Asked" : "Commit"}
                 </button>
-              </div>
-            ) : (
-              <button
-                className={cn(
-                  WS_SUMMARY_ROW,
-                  "disabled:cursor-default disabled:opacity-70",
-                )}
-                onClick={
-                  osReviewActive
-                    ? () => void cancelOsReview()
-                    : canFixOsReview
-                      ? () => void fixOsReview()
-                      : () => go(() => onOpenPanelTab("info"))
-                }
-                disabled={reviewStarting || reviewCancelling || fixBusy}
-                aria-label={
-                  osReviewActive
-                    ? `Cancel ${AGENT_NAME} review`
-                    : canFixOsReview
-                      ? `Fix ${AGENT_NAME} review findings`
-                      : undefined
-                }
-                title={`${AGENT_NAME}${osScore ? ` · ${osScore}/5` : ""} · ${
-                  reviewCancelling ? "Cancelling…" : osReviewState
-                }`}
-              >
-                <span className={WS_SUMMARY_RAIL}>
-                  <IconRobot
-                    size={20}
-                    className={cn(
-                      WS_SUMMARY_ICON,
-                      osReviewActive && "animate-pulse",
-                    )}
-                  />
-                </span>
-                <span className={WS_SUMMARY_LABEL}>
-                  {AGENT_NAME}
-                  {osReviewActive ? (
-                    <>
-                      <span className="text-faint"> · </span>
-                      <span className="text-dim">
-                        {reviewCancelling ? "Cancelling…" : "Reviewing…"}
-                      </span>
-                    </>
-                  ) : osScore ? (
-                    <>
-                      <span className="text-faint"> · </span>
-                      <span className={cn("tabular-nums", osScoreTone)}>
-                        {osScore}/5
-                      </span>
-                    </>
-                  ) : null}
-                </span>
-                {osReviewActive ? (
-                  <span className={WS_SUMMARY_ACTION}>
-                    {reviewCancelling ? "Stopping" : "Cancel"}
-                  </span>
-                ) : canFixOsReview ? (
-                  <span className={cn(WS_SUMMARY_ACTION, "text-red")}>
-                    {fixBusy ? "Starting…" : "Fix"}
-                  </span>
-                ) : (
-                  <span
-                    className={cn(
-                      WS_SUMMARY_STATE,
-                      osReview?.blocking ? "text-red" : "text-dim",
-                    )}
-                  >
-                    {osReviewState}
-                  </span>
-                )}
-              </button>
-            )}
-            {fixError && (
-              <div className="px-4 py-1 text-supporting text-red" role="alert">
-                {fixError}
-              </div>
-            )}
-          </>
-        )}
-        {otherReviewers.map((reviewer) => (
-          <button
-            key={reviewer.key}
-            className={WS_SUMMARY_ROW}
-            onClick={() => go(onOpenPr)}
-            title={`${reviewer.name} · ${reviewer.state}`}
-          >
-            <span className={WS_SUMMARY_RAIL}>
-              <ReviewerAvatar reviewer={reviewer} />
-            </span>
-            <span className={WS_SUMMARY_LABEL}>{reviewer.name}</span>
-            <span className={cn(WS_SUMMARY_STATE, reviewer.tone)}>
-              {reviewer.state}
-            </span>
-          </button>
-        ))}
-
-        {pickerReviewer && (
-          <Menu.Root>
-            <Menu.Trigger className={WS_SUMMARY_ROW} disabled={reviewBusy}>
-              <span className={WS_SUMMARY_RAIL}>
-                <ReviewerAvatar reviewer={pickerReviewer} />
-              </span>
-              <span className={WS_SUMMARY_LABEL}>{pickerReviewer.name}</span>
-              <span className={cn(WS_SUMMARY_STATE, pickerReviewer.tone)}>
-                {pickerReviewer.state}
-              </span>
-              <IconChevronDown size={14} className="shrink-0 text-faint" />
-            </Menu.Trigger>
-            <Menu.Popup align="end" sideOffset={6} className="min-w-[200px]">
-              {people.map((person) => (
-                <Menu.Item
-                  key={person.name}
-                  onClick={() => pickReviewer(person.name)}
-                >
-                  <UserAvatar name={person.name} size={22} />
-                  <span className="min-w-0 flex-1 truncate">{person.name}</span>
-                  <Menu.Check
-                    on={selectedReview?.to === person.name}
-                    size={20}
-                    className="text-dim"
-                  />
-                </Menu.Item>
-              ))}
-              {reviewTeams.length > 0 && <Menu.Separator />}
-              {reviewTeams.map((team) => (
-                <Menu.Item
-                  key={team.github}
-                  onClick={() => pickReviewer(team.github, team.members)}
-                >
-                  <span className="grid size-[22px] place-items-center text-dim">
-                    <IconStack size={20} />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{team.name}</span>
-                  <Menu.Check
-                    on={selectedReview?.to === team.github}
-                    size={20}
-                    className="text-dim"
-                  />
-                </Menu.Item>
-              ))}
-              <Menu.Separator />
-              <Menu.Item
-                className="text-dim"
-                onClick={() => pickReviewer(null)}
-              >
-                Clear review request
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Root>
-        )}
-        {passiveReviewers.map((reviewer) => (
-          <button
-            key={reviewer.key}
-            className={WS_SUMMARY_ROW}
-            onClick={() => go(() => onOpenPanelTab("info"))}
-            title={`${reviewer.name} · ${reviewer.state}`}
-          >
-            <span className={WS_SUMMARY_RAIL}>
-              <ReviewerAvatar reviewer={reviewer} />
-            </span>
-            <span className={WS_SUMMARY_LABEL}>{reviewer.name}</span>
-            <span className={cn(WS_SUMMARY_STATE, reviewer.tone)}>
-              {reviewer.state}
-            </span>
-          </button>
-        ))}
-        {!pickerReviewer && (
-          <Menu.Root>
-            <Menu.Trigger className={WS_SUMMARY_ROW} disabled={reviewBusy}>
-              <span className={WS_SUMMARY_RAIL}>
-                <IconPeople size={20} className={WS_SUMMARY_ICON} />
-              </span>
-              <span className={WS_SUMMARY_LABEL}>
-                {passiveReviewers.length > 0
-                  ? "Ask for review"
-                  : "No reviewers"}
-              </span>
-              <span
-                className={cn(
-                  WS_SUMMARY_ACTION,
-                  "inline-flex items-center gap-0.5",
-                )}
-              >
-                Add
-                <IconChevronDown size={14} />
-              </span>
-            </Menu.Trigger>
-            <Menu.Popup align="end" sideOffset={6} className="min-w-[200px]">
-              {people.map((person) => (
-                <Menu.Item
-                  key={person.name}
-                  onClick={() => pickReviewer(person.name)}
-                >
-                  <UserAvatar name={person.name} size={22} />
-                  <span className="min-w-0 flex-1 truncate">{person.name}</span>
-                  <Menu.Check
-                    on={selectedReview?.to === person.name}
-                    size={20}
-                    className="text-dim"
-                  />
-                </Menu.Item>
-              ))}
-              {reviewTeams.length > 0 && <Menu.Separator />}
-              {reviewTeams.map((team) => (
-                <Menu.Item
-                  key={team.github}
-                  onClick={() => pickReviewer(team.github, team.members)}
-                >
-                  <span className="grid size-[22px] place-items-center text-dim">
-                    <IconStack size={20} />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{team.name}</span>
-                  <Menu.Check
-                    on={selectedReview?.to === team.github}
-                    size={20}
-                    className="text-dim"
-                  />
-                </Menu.Item>
-              ))}
-            </Menu.Popup>
-          </Menu.Root>
-        )}
-        {reviewError && (
-          <div className="px-4 py-1 text-meta font-medium text-red">
-            {reviewError}
+              )}
+            </div>
           </div>
         )}
-      </div>
 
-      <WorkspaceSummaryCollaborators
-        workspaceId={session.workspaceId || null}
-        sessionId={session.id}
-        groupClass={groupClass}
-      />
-
-      {hasCommitDetails && (
-        <div className={groupClass}>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              WS_SUMMARY_SECTION,
-              "w-full cursor-pointer justify-between gap-2 border-none bg-transparent text-left hover:bg-transparent hover:text-faint active:scale-100",
-            )}
-            onClick={() => setCommitsOpen((open) => !open)}
-            aria-expanded={commitsOpen}
-          >
-            <span className="flex items-baseline gap-1.5">
-              <span>Committed</span>
-              <span className="text-meta tabular-nums">{commitCount}</span>
-            </span>
-            <IconChevronRight
-              size={14}
-              className={cn(
-                "shrink-0 transition-transform motion-reduce:transition-none",
-                commitsOpen && "rotate-90",
-              )}
-            />
-          </Button>
-          {commitsOpen
-            ? prCommits.length > 0
-              ? prCommits.map(prCommittedRow)
-              : commits.map(committedRow)
-            : committedSummaryRow()}
-        </div>
-      )}
-
-      {showDiffChanges && (
-        <div className={groupClass}>
-          <div className={WS_SUMMARY_SECTION}>Changes</div>
-          {diffChangeRow(
-            `${changedFiles} file${changedFiles === 1 ? "" : "s"} changed`,
-          )}
-        </div>
-      )}
-
-      {dirty > 0 && (
-        <div className={groupClass}>
-          <div className={WS_SUMMARY_SECTION}>Uncommitted</div>
-          <div className="mx-2 flex h-[31px] w-[calc(100%_-_16px)] min-w-0 shrink-0 items-stretch gap-1 phone:h-11">
-            <button
-              type="button"
-              className={cn(
-                WS_SUMMARY_ROW,
-                "mx-0 h-full w-auto min-w-0 flex-1",
-              )}
-              onClick={openUncommittedChanges}
-              title="View uncommitted changes"
-            >
-              <span className={WS_SUMMARY_RAIL}>
-                <IconClock size={20} className={WS_SUMMARY_ICON} />
-              </span>
-              <span className={WS_SUMMARY_LABEL}>
-                {dirty} file{dirty === 1 ? "" : "s"} uncommitted
-              </span>
-            </button>
-            {send && (
-              <button
-                type="button"
-                className={cn(
-                  WS_SUMMARY_ACTION,
-                  "focus-ring shrink-0 cursor-pointer rounded-row border-none bg-transparent px-2 hover:bg-hover disabled:cursor-default disabled:hover:bg-transparent",
-                )}
-                onClick={askCommit}
-                disabled={prompted}
-                title={`Ask ${AGENT_NAME} to commit the uncommitted changes and push`}
-              >
-                {prompted ? "Asked" : "Commit"}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {media.length > 0 && (
-        <div className={groupClass}>
-          {/* The strip carries recordings too, but screenshots are what
+        {media.length > 0 && (
+          <div className={groupClass}>
+            {/* The strip carries recordings too, but screenshots are what
 					    people call the set, so that is the word to head it with. What
 					    separates this band from the assets under it is still the
 					    source: one is what appeared in the conversation, the other is
 					    what the session wrote. Same word the Workspace panel uses. */}
-          <div className={cn(WS_SUMMARY_SECTION, "gap-1.5")}>
-            <span>Screenshots</span>
-            {/* Every frame is available in the strip. Keep the count beside
+            <div className={cn(WS_SUMMARY_SECTION, "gap-1.5")}>
+              <span>Screenshots</span>
+              {/* Every frame is available in the strip. Keep the count beside
 						    the label so the heading reads as one fact rather than two
 						    ends of a row. */}
-            <span className={cn(WS_SUMMARY_COUNT, "text-faint")}>
-              {media.length}
-            </span>
-          </div>
-          {/* No view toggle on this band, unlike Assets: a picture someone
+              <span className={cn(WS_SUMMARY_COUNT, "text-faint")}>
+                {media.length}
+              </span>
+            </div>
+            {/* No view toggle on this band, unlike Assets: a picture someone
 					    pasted into the conversation has no filename, so a row of one
 					    would be a timestamp and nothing you could act on. */}
-          <div className={WS_SUMMARY_STRIP}>
-            {media.map((item, index) => (
-              <button
-                key={`${item.sessionId}:${item.at}:${index}`}
-                type="button"
-                // One width for every frame, a lone one included. A single
-                // picture taken up to the card's width reads as a hero in a
-                // list of quiet rows, and pushes everything under it a
-                // screenshot's height down for no more information.
-                className={cn(WS_SUMMARY_FRAME, "w-[calc((100%_-_30px)/2)]")}
-                // Open the same complete set shown in the strip. The card stays
-                // up behind it while the lightbox pages between frames.
-                onClick={(event) =>
-                  openLightbox(media, index, event.currentTarget)
-                }
-                title={[item.sessionTitle, fullTime(item.at)]
-                  .filter(Boolean)
-                  .join(" · ")}
-              >
-                <span className={WS_SUMMARY_FRAME_MEDIA}>
-                  {item.kind === "video" ? (
-                    <>
-                      <video
-                        src={`${item.src}#t=0.1`}
-                        muted
-                        playsInline
-                        preload="metadata"
-                        className="h-full w-full object-contain"
-                      />
-                      <span className="pointer-events-none absolute inset-0 grid place-items-center">
-                        <span className="grid size-7 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm">
-                          <IconPlay size={16} />
-                        </span>
-                      </span>
-                    </>
-                  ) : (
-                    <img
-                      src={item.src}
-                      alt=""
-                      loading="lazy"
-                      className="h-full w-full object-contain"
-                    />
-                  )}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {assets.length > 0 && (
-        <div className={groupClass}>
-          <div
-            className={cn(
-              WS_SUMMARY_SECTION,
-              "group/assets justify-between gap-2",
-            )}
-          >
-            <span className="flex items-center gap-1.5">
-              <span>Assets</span>
-              <span className={cn(WS_SUMMARY_COUNT, "text-faint")}>
-                {assets.length}
-              </span>
-            </span>
-            <AssetViewToggle mode={assetView} onChange={setAssetView} />
-          </div>
-          {assetView === "preview" ? (
             <div className={WS_SUMMARY_STRIP}>
-              {shown.map((file) => (
+              {media.map((item, index) => (
                 <button
-                  key={file.path}
+                  key={`${item.sessionId}:${item.at}:${index}`}
                   type="button"
-                  // One width, however many there are: two frames plus a
-                  // sliver of the next is what says the strip scrolls, and a
-                  // lone picture blown up to the card reads as a hero in a
-                  // list of quiet rows. It also keeps the two strips the same
-                  // size when a card shows both.
+                  // One width for every frame, a lone one included. A single
+                  // picture taken up to the card's width reads as a hero in a
+                  // list of quiet rows, and pushes everything under it a
+                  // screenshot's height down for no more information.
                   className={cn(WS_SUMMARY_FRAME, "w-[calc((100%_-_30px)/2)]")}
-                  onClick={() => openAsset(file.path)}
-                  title={file.path}
+                  // Open the same complete set shown in the strip. The card stays
+                  // up behind it while the lightbox pages between frames.
+                  onClick={(event) =>
+                    openLightbox(media, index, event.currentTarget)
+                  }
+                  title={[item.sessionTitle, fullTime(item.at)]
+                    .filter(Boolean)
+                    .join(" · ")}
                 >
                   <span className={WS_SUMMARY_FRAME_MEDIA}>
-                    {assetPreviewKind(file.path) === "video" ? (
+                    {item.kind === "video" ? (
                       <>
                         <video
-                          // #t=0.1 seeks to the first frame and paints it as
-                          // a poster; without it the tile stays blank.
-                          src={`${sessionAssetPreviewUrl(session.id, file)}#t=0.1`}
+                          src={`${item.src}#t=0.1`}
                           muted
                           playsInline
                           preload="metadata"
@@ -1789,72 +1670,163 @@ export function WorkspaceSummaryBody({
                           </span>
                         </span>
                       </>
-                    ) : isVisualAsset(file.path) ? (
+                    ) : (
                       <img
-                        src={sessionAssetPreviewUrl(session.id, file)}
+                        src={item.src}
                         alt=""
                         loading="lazy"
                         className="h-full w-full object-contain"
                       />
-                    ) : (
-                      // A report or a data file has no picture to show, so it
-                      // holds the same tile with a glyph in it rather than
-                      // dropping out of the set and stranding itself below.
-                      <span className="grid h-full w-full place-items-center text-faint">
-                        <IconFile size={22} />
-                      </span>
                     )}
-                  </span>
-                  <span className={WS_SUMMARY_FRAME_CAPTION}>
-                    {/* The folder is usually shared across a set of
-										    variants; the filename is what tells them apart. */}
-                    {file.path.split("/").pop() || file.path}
                   </span>
                 </button>
               ))}
             </div>
-          ) : (
-            shown.map((file) => (
-              <button
-                key={file.path}
-                className={WS_SUMMARY_ROW}
-                onClick={() => openAsset(file.path)}
-                title={file.path}
-              >
-                <span className={WS_SUMMARY_RAIL}>
-                  {assetPreviewKind(file.path) === "image" ? (
-                    <img
-                      src={sessionAssetPreviewUrl(session.id, file)}
-                      alt=""
-                      loading="lazy"
-                      className={WS_SUMMARY_THUMB}
-                    />
-                  ) : assetPreviewKind(file.path) === "video" ? (
-                    // A poster frame at 16px is a smudge, so a recording
-                    // says what it is instead.
-                    <IconPlayRectangle size={20} className={WS_SUMMARY_ICON} />
-                  ) : (
-                    <IconFile size={20} className={WS_SUMMARY_ICON} />
-                  )}
+          </div>
+        )}
+
+        {assets.length > 0 && (
+          <div className={groupClass}>
+            <div
+              className={cn(
+                WS_SUMMARY_SECTION,
+                "group/assets justify-between gap-2",
+              )}
+            >
+              <span className="flex items-center gap-1.5">
+                <span>Assets</span>
+                <span className={cn(WS_SUMMARY_COUNT, "text-faint")}>
+                  {assets.length}
                 </span>
-                <span className={WS_SUMMARY_LABEL}>{file.path}</span>
-              </button>
-            ))
-          )}
-          {/* Only under the list, where the last row is the only thing that
+              </span>
+              <AssetViewToggle mode={assetView} onChange={setAssetView} />
+            </div>
+            {assetView === "preview" ? (
+              <div className={WS_SUMMARY_STRIP}>
+                {shown.map((file) => (
+                  <button
+                    key={file.path}
+                    type="button"
+                    // One width, however many there are: two frames plus a
+                    // sliver of the next is what says the strip scrolls, and a
+                    // lone picture blown up to the card reads as a hero in a
+                    // list of quiet rows. It also keeps the two strips the same
+                    // size when a card shows both.
+                    className={cn(
+                      WS_SUMMARY_FRAME,
+                      "w-[calc((100%_-_30px)/2)]",
+                    )}
+                    onClick={() => openAsset(file.path)}
+                    title={file.path}
+                  >
+                    <span className={WS_SUMMARY_FRAME_MEDIA}>
+                      {assetPreviewKind(file.path) === "video" ? (
+                        <>
+                          <video
+                            // #t=0.1 seeks to the first frame and paints it as
+                            // a poster; without it the tile stays blank.
+                            src={`${sessionAssetPreviewUrl(session.id, file)}#t=0.1`}
+                            muted
+                            playsInline
+                            preload="metadata"
+                            className="h-full w-full object-contain"
+                          />
+                          <span className="pointer-events-none absolute inset-0 grid place-items-center">
+                            <span className="grid size-7 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm">
+                              <IconPlay size={16} />
+                            </span>
+                          </span>
+                        </>
+                      ) : isVisualAsset(file.path) ? (
+                        <img
+                          src={sessionAssetPreviewUrl(session.id, file)}
+                          alt=""
+                          loading="lazy"
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        // A report or a data file has no picture to show, so it
+                        // holds the same tile with a glyph in it rather than
+                        // dropping out of the set and stranding itself below.
+                        <span className="grid h-full w-full place-items-center text-faint">
+                          <IconFile size={22} />
+                        </span>
+                      )}
+                    </span>
+                    <span className={WS_SUMMARY_FRAME_CAPTION}>
+                      {/* The folder is usually shared across a set of
+										    variants; the filename is what tells them apart. */}
+                      {file.path.split("/").pop() || file.path}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              shown.map((file) => (
+                <button
+                  key={file.path}
+                  className={WS_SUMMARY_ROW}
+                  onClick={() => openAsset(file.path)}
+                  title={file.path}
+                >
+                  <span className={WS_SUMMARY_RAIL}>
+                    {assetPreviewKind(file.path) === "image" ? (
+                      <img
+                        src={sessionAssetPreviewUrl(session.id, file)}
+                        alt=""
+                        loading="lazy"
+                        className={WS_SUMMARY_THUMB}
+                      />
+                    ) : assetPreviewKind(file.path) === "video" ? (
+                      // A poster frame at 16px is a smudge, so a recording
+                      // says what it is instead.
+                      <IconPlayRectangle
+                        size={20}
+                        className={WS_SUMMARY_ICON}
+                      />
+                    ) : (
+                      <IconFile size={20} className={WS_SUMMARY_ICON} />
+                    )}
+                  </span>
+                  <span className={WS_SUMMARY_LABEL}>{file.path}</span>
+                </button>
+              ))
+            )}
+            {/* Only under the list, where the last row is the only thing that
 					    says the folder ends here. The strip answers it three times over:
 					    the heading carries the count, the sliver of the next frame says
 					    it scrolls, and each tile previews its file on top. */}
-          {assetView === "list" && assetsHidden > 0 && (
-            <button className={WS_SUMMARY_ROW} onClick={() => go(onOpenAssets)}>
-              <span className={WS_SUMMARY_RAIL} />
-              <span className={cn(WS_SUMMARY_LABEL, "text-dim")}>
-                View all {assets.length}
-              </span>
-            </button>
-          )}
-        </div>
-      )}
+            {assetView === "list" && assetsHidden > 0 && (
+              <button
+                className={WS_SUMMARY_ROW}
+                onClick={() => go(onOpenAssets)}
+              >
+                <span className={WS_SUMMARY_RAIL} />
+                <span className={cn(WS_SUMMARY_LABEL, "text-dim")}>
+                  View all {assets.length}
+                </span>
+              </button>
+            )}
+          </div>
+        )}
+      </SummaryRest>
+    </div>
+  );
+}
+
+/** On a phone, one card under the PR band for every other group. On desktop
+ *  no element at all, so the groups stay siblings of the PR band. */
+function SummaryRest({
+  embedded,
+  children,
+}: {
+  embedded: boolean;
+  children: React.ReactNode;
+}) {
+  if (!embedded) return <>{children}</>;
+  return (
+    <div className="flex flex-col gap-2 overflow-hidden rounded-2xl bg-raised py-2 empty:hidden">
+      {children}
     </div>
   );
 }

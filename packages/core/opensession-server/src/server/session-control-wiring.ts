@@ -148,7 +148,8 @@ import {
   githubCredentialForPrincipal,
   githubCredentialForRun,
 } from "./github-auth";
-import { existsSync, watch } from "fs";
+import { watch } from "fs";
+import { pathExists } from "./shared/path-exists";
 import { branchNameFromPrompt } from "./suggest-branch";
 import {
   getRunner,
@@ -761,7 +762,7 @@ registerSessionControl({
         durableCreation.state === "ready" ||
         durableCreation.state === "cancelled"
       )
-        clearCreatePlan(bksId);
+        await clearCreatePlan(bksId);
       return {
         id: bksId,
         createdBy:
@@ -779,7 +780,7 @@ registerSessionControl({
       completedCreate?.codexThreadId ||
       completedCreate?.piSessionId
     ) {
-      clearCreatePlan(bksId);
+      await clearCreatePlan(bksId);
       return {
         id: completedCreate.id,
         createdBy:
@@ -878,7 +879,7 @@ registerSessionControl({
     // exact repo context. This is load-bearing for reviewers of in-progress
     // attached-repo work: a fresh ask checkout cannot see those changes.
     const parentRepoContext = parentSession
-      ? resolveSessionRepoContext(parentSession, repoInput, prompt)
+      ? await resolveSessionRepoContext(parentSession, repoInput, prompt)
       : null;
     // A joined workspace's repo outranks the global default: a caller that
     // names only a workspace means "a session in there", and defaulting to the
@@ -938,7 +939,7 @@ registerSessionControl({
     if (requestedRunnerId && sandbox !== undefined && sandbox !== false)
       throw new Error("Choose either Sandbox or a Runner for this session");
     const selectedRunner = requestedRunnerId
-      ? getRunner(requestedRunnerId)
+      ? await getRunner(requestedRunnerId)
       : undefined;
     if (requestedRunnerId) {
       if (!selectedRunner || !isRunnerConnected(selectedRunner.id))
@@ -991,7 +992,7 @@ registerSessionControl({
       parentSession.mode !== "ask" &&
       parentSession.mode !== "scratch" &&
       parentRepoContext?.repo === repo.id &&
-      existsSync(parentRepoContext.dir)
+      (await pathExists(parentRepoContext.dir))
         ? parentRepoContext
         : null;
     if (selectedRunner) {
@@ -1014,7 +1015,7 @@ registerSessionControl({
       // Repo-less sessions share their workspace's scratch dir when there is
       // one; standalone creates get a fresh directory. Ask remains read-only,
       // while scratch keeps its normal write permissions.
-      wtPath = ensureScratchDir(
+      wtPath = await ensureScratchDir(
         joinedWorkspace?.id ||
           parentSession?.workspaceId ||
           createPlanWorkspaceId(bksId),
@@ -1043,8 +1044,9 @@ registerSessionControl({
             }
           : !isolatedWorktree &&
               contextWorkspace?.worktreeDir &&
-              repoForPath(contextWorkspace.worktreeDir).id === repo.id &&
-              existsSync(contextWorkspace.worktreeDir)
+              (await repoForPath(contextWorkspace.worktreeDir)).id ===
+                repo.id &&
+              (await pathExists(contextWorkspace.worktreeDir))
             ? {
                 dir: contextWorkspace.worktreeDir,
                 branch: contextWorkspace.branch,
@@ -1052,8 +1054,8 @@ registerSessionControl({
             : !isolatedWorktree &&
                 parentSession?.worktreeDir &&
                 parentSession.mode !== "ask" &&
-                repoForPath(parentSession.worktreeDir).id === repo.id &&
-                existsSync(parentSession.worktreeDir)
+                (await repoForPath(parentSession.worktreeDir)).id === repo.id &&
+                (await pathExists(parentSession.worktreeDir))
               ? { dir: parentSession.worktreeDir, branch: parentSession.branch }
               : null;
       if (shared) {
@@ -1106,7 +1108,7 @@ registerSessionControl({
       !joinedWorkspace.worktreeDir &&
       !isAsk &&
       !isScratch &&
-      ownedWorktree(wtPath)
+      (await ownedWorktree(wtPath))
     ) {
       await materializeWorkspaceWorktree(joinedWorkspace.id, {
         repo: repo.id,
@@ -1187,7 +1189,8 @@ registerSessionControl({
         // Only an isolated worktree is owned — never a shared main/ask
         // checkout, which every other session there uses too.
         const dir =
-          ownedWorktree(wsParent?.worktreeDir) ?? ownedWorktree(wtPath);
+          (await ownedWorktree(wsParent?.worktreeDir)) ??
+          (await ownedWorktree(wtPath));
         const wsName =
           wsParent?.title || wsParent?.branch || title || "Workspace";
         await requestCreationWorkspace({
@@ -1342,7 +1345,7 @@ ${createMentionsNote}`;
       repoId: isRepoLess
         ? undefined
         : fork
-          ? repoForPathOrNull(wtPath)?.id
+          ? (await repoForPathOrNull(wtPath))?.id
           : repo.id,
       memoryRepoIds: [repo.id],
       workspaceId: resolvedWorkspaceId || undefined,

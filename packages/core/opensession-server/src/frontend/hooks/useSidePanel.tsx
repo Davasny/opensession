@@ -1,32 +1,49 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { PanelBrowserTarget } from "../lib/portal-pin";
 import { PANEL_RESIZE } from "../lib/session-panel-classes";
 import {
-  SIDE_PANEL_OPEN_KEY,
-  SIDE_PANEL_PAGE_KEY,
-  sidePanelOpen,
-  sidePanelPage,
-  storeSidePanelOpen,
-  storeSidePanelPage,
+  isWideSidePanelPage,
+  type SidePanelDock,
   type SidePanelPage,
+  type SidePanelTab,
 } from "../lib/side-panel-open";
+import {
+  closeSidePanelTab,
+  finishSidePanelOpening,
+  getSidePanelState,
+  selectSidePanelPage,
+  setSidePanelBrowser,
+  setSidePanelOpen,
+  sidePanelViewOf,
+  subscribeSidePanel,
+} from "../lib/side-panel-store";
 import { suppressLayoutAnimations } from "../ui/motion";
 
 /**
- * The right side panel's open state and width, shared by every surface that
- * shows one: the session viewer and the session-less workspace route.
+ * The right side panel's open state, tabs and width, shared by every surface
+ * that shows one: the session viewer and the session-less workspace route.
  *
- * Open state and selected tool are browser-wide view choices. The summary card
- * and Changes are the defaults; once the person opens the panel or changes its
- * tab, that choice follows them between sessions, workspaces, and reloads. A
- * window event keeps simultaneous panel hosts in sync, while the storage event
- * does the same across browser tabs.
+ * Open state, the selected tab and the Browser tab's page are each session's
+ * own (`key`), kept in one module store (lib/side-panel-store) with the shared
+ * tab strip, so a Review or Browser request from the app shell lands in
+ * whichever panel is on screen, across browser tabs too.
  *
- * Width also remains in localStorage. The handle drags from the panel's left
- * edge, so its width is the pointer's distance from the container's right side.
+ * Width also remains in localStorage, once for the tool tabs and once for the
+ * wide ones (Review, Browser), so opening a page beside the conversation makes
+ * room for it and switching back to Changes gives that room back. The handle
+ * drags from the panel's left edge, so its width is the pointer's distance
+ * from the container's right side.
  */
-const OPEN_CHANGE_EVENT = "opensession-panel-open-changed";
-const PAGE_CHANGE_EVENT = "opensession-panel-page-changed";
 const WIDTH_KEY = "opensession-panel-w";
+const WIDE_WIDTH_KEY = "opensession-panel-w-wide";
+/** A wide tab's share of the window until someone drags it. */
+const WIDE_DEFAULT = "50%";
 const MIN_W = 320;
 const MAX_W = 2400;
 
@@ -38,69 +55,50 @@ export interface SidePanel {
   open: boolean;
   setOpen: (open: boolean) => void;
   page: SidePanelPage;
+  /** Select a page; a tab that is not in the strip yet is added. */
   setPage: (page: SidePanelPage) => void;
+  tabs: SidePanelTab[];
+  closeTab: (tab: SidePanelTab) => void;
+  /** The page this session's Browser tab shows, if one is attached. */
+  browser: PanelBrowserTarget | null;
+  setBrowser: (target: PanelBrowserTarget | null) => void;
+  dock: SidePanelDock;
+  /** An action just opened the panel: slide it in (see PANEL_ENTER). */
+  entering: boolean;
   /** `--panel-w` for PANEL_SHELL; undefined while no width is stored. */
   style: React.CSSProperties | undefined;
   /** The panel's left-edge drag handle — render it inside PANEL_SHELL. */
   resizeHandle: React.ReactNode;
 }
 
-export function useSidePanel(): SidePanel {
-  const [open, setOpenState] = useState(sidePanelOpen);
-  useEffect(() => {
-    const syncOpen = (event: Event) => {
-      if (!(event instanceof CustomEvent)) return;
-      if (event.detail === true) setOpenState(true);
-      else if (event.detail === false) setOpenState(false);
-    };
-    const syncStorage = (event: StorageEvent) => {
-      if (event.key === SIDE_PANEL_OPEN_KEY) setOpenState(sidePanelOpen());
-    };
-    window.addEventListener(OPEN_CHANGE_EVENT, syncOpen);
-    window.addEventListener("storage", syncStorage);
-    return () => {
-      window.removeEventListener(OPEN_CHANGE_EVENT, syncOpen);
-      window.removeEventListener("storage", syncStorage);
-    };
-  }, []);
-  function setOpen(next: boolean) {
-    setOpenState(next);
-    storeSidePanelOpen(next);
-    window.dispatchEvent(new CustomEvent(OPEN_CHANGE_EVENT, { detail: next }));
-  }
+function storedWidth(key: string): number {
+  const stored = Number(localStorage.getItem(key));
+  return stored >= MIN_W && stored <= MAX_W ? stored : 0;
+}
 
-  const [page, setPageState] = useState(sidePanelPage);
-  useEffect(() => {
-    const syncPage = (event: Event) => {
-      if (!(event instanceof CustomEvent)) return;
-      switch (event.detail) {
-        case "changes":
-        case "portals":
-        case "agents":
-        case "terminal":
-          setPageState(event.detail);
-      }
-    };
-    const syncStorage = (event: StorageEvent) => {
-      if (event.key === SIDE_PANEL_PAGE_KEY) setPageState(sidePanelPage());
-    };
-    window.addEventListener(PAGE_CHANGE_EVENT, syncPage);
-    window.addEventListener("storage", syncStorage);
-    return () => {
-      window.removeEventListener(PAGE_CHANGE_EVENT, syncPage);
-      window.removeEventListener("storage", syncStorage);
-    };
-  }, []);
-  function setPage(next: SidePanelPage) {
-    setPageState(next);
-    storeSidePanelPage(next);
-    window.dispatchEvent(new CustomEvent(PAGE_CHANGE_EVENT, { detail: next }));
-  }
+/** How long the panel takes to slide in or change width: `--dur-lg`. */
+const RESIZE_MS = 280;
 
-  const [width, setWidth] = useState<number>(() => {
-    const stored = Number(localStorage.getItem(WIDTH_KEY));
-    return stored >= MIN_W && stored <= MAX_W ? stored : 0;
-  });
+export function useSidePanel(key: string): SidePanel {
+  const current = useSyncExternalStore(subscribeSidePanel, getSidePanelState);
+  const { open, page } = sidePanelViewOf(current, key);
+  const { tabs, dock } = current;
+  const entering = current.opening === key;
+  useEffect(() => {
+    if (!entering) return;
+    const timer = window.setTimeout(
+      () => finishSidePanelOpening(key),
+      RESIZE_MS + 50,
+    );
+    return () => window.clearTimeout(timer);
+  }, [entering, key]);
+  const wide = isWideSidePanelPage(page);
+
+  const [widths, setWidths] = useState(() => ({
+    tool: storedWidth(WIDTH_KEY),
+    wide: storedWidth(WIDE_WIDTH_KEY),
+  }));
+  const width = wide ? widths.wide : widths.tool;
   const widthRef = useRef(width);
   useLayoutEffect(() => {
     widthRef.current = width;
@@ -110,6 +108,7 @@ export function useSidePanel(): SidePanel {
     const right =
       e.currentTarget.parentElement?.getBoundingClientRect().right ??
       window.innerWidth;
+    const which = wide ? "wide" : "tool";
     document.body.classList.add("resizing-panel");
     // Snap Motion layout morphs while dragging — the composer re-measures on
     // every step, so springing it reads as funky text (mirrors the sidebar).
@@ -123,14 +122,17 @@ export function useSidePanel(): SidePanel {
         Math.max(MIN_W, Math.round(right - ev.clientX)),
       );
       widthRef.current = next;
-      setWidth(next);
+      setWidths((prev) => ({ ...prev, [which]: next }));
     };
     const onUp = () => {
       document.body.classList.remove("resizing-panel");
       restoreMotion();
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      localStorage.setItem(WIDTH_KEY, String(Math.round(widthRef.current)));
+      localStorage.setItem(
+        which === "wide" ? WIDE_WIDTH_KEY : WIDTH_KEY,
+        String(Math.round(widthRef.current)),
+      );
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -138,13 +140,21 @@ export function useSidePanel(): SidePanel {
 
   const style: SidePanelStyle | undefined = width
     ? { "--panel-w": `${width}px` }
-    : undefined;
+    : wide
+      ? { "--panel-w": WIDE_DEFAULT }
+      : undefined;
 
   return {
     open,
-    setOpen,
+    setOpen: (next) => setSidePanelOpen(key, next),
     page,
-    setPage,
+    setPage: (next) => selectSidePanelPage(key, next),
+    tabs,
+    closeTab: (tab) => closeSidePanelTab(key, tab),
+    browser: current.browsers[key] ?? null,
+    setBrowser: (target) => setSidePanelBrowser(key, target),
+    dock,
+    entering,
     style,
     resizeHandle: (
       <div

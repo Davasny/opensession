@@ -6,14 +6,16 @@ const summarySource = await Bun.file(
 const infoSource = await Bun.file(
   new URL("./WorkspaceInfo.tsx", import.meta.url),
 ).text();
+const collaboratorsSource = await Bun.file(
+  new URL("./WorkspaceCollaborators.tsx", import.meta.url),
+).text();
 const apiSource = await Bun.file(
   new URL("../lib/api/workspaces.ts", import.meta.url),
 ).text();
 
 test("workspace surfaces keep committed and uncommitted work separate", () => {
   expect(apiSource).toContain("commits?: WorkspaceCommit[]");
-  expect(summarySource).toContain("{hasCommitDetails && (");
-  expect(summarySource).toContain("<span>Committed</span>");
+  expect(summarySource).toContain("function workRow()");
   expect(summarySource).toContain(">Uncommitted</div>");
   expect(summarySource).toContain("commits.map(committedRow)");
   expect(infoSource).toContain("commits.map((commit)");
@@ -22,10 +24,9 @@ test("workspace surfaces keep committed and uncommitted work separate", () => {
   );
 });
 
-test("Changes expands to files with hover diff previews", () => {
-  expect(summarySource).toContain(">Changes</div>");
+test("the work row expands to files with hover diff previews", () => {
   expect(summarySource).toContain(
-    "onClick={() => setChangesOpen((open) => !open)}",
+    "onClick={() => setWorkOpen((open) => !open)}",
   );
   expect(summarySource).toContain("changeFiles.map(fileChangeRow)");
   expect(summarySource).toContain("openOnHover={Boolean(file.patch)}");
@@ -34,24 +35,20 @@ test("Changes expands to files with hover diff previews", () => {
   expect(summarySource).not.toContain("files committed");
 });
 
-test("the Committed section folds open to every PR or workspace commit", () => {
+test("commits and changed files share one row with a files or commits switch", () => {
   expect(summarySource).toContain("const prCommits = pr?.commits ?? []");
-  expect(summarySource).toContain(
-    "const [commitsOpen, setCommitsOpen] = useState(false)",
-  );
   expect(summarySource).toContain(
     "const commitCount = prCommits.length || commits.length",
   );
-  expect(summarySource).toContain("aria-expanded={commitsOpen}");
-  expect(summarySource).toContain("{commitCount}</span>");
-  expect(summarySource).toContain("<IconChevronRight");
-  expect(summarySource).toContain('commitsOpen && "rotate-90"');
-  expect(summarySource).toContain("hover:bg-transparent hover:text-faint");
-  expect(summarySource).not.toContain(
-    'title={commitsOpen ? "Hide commits" : "Show all commits"}',
+  expect(summarySource).toContain("aria-expanded={workOpen}");
+  expect(summarySource).toContain('<SegmentedOption value="commits">');
+  expect(summarySource).toContain(
+    "<span className={WS_SUMMARY_LABEL}>Changes</span>",
   );
   expect(summarySource).toContain("prCommits.map(prCommittedRow)");
   expect(summarySource).toContain("commits.map(committedRow)");
+  expect(summarySource).not.toContain("<span>Committed</span>");
+  expect(summarySource).not.toContain(">Changes</div>");
 });
 
 test("a commit opens its details and code changes in a nested overlay", () => {
@@ -61,7 +58,7 @@ test("a commit opens its details and code changes in a nested overlay", () => {
   );
   expect(summarySource).toContain("function commitDetailsPopup(");
   expect(summarySource).toContain(
-    "enabled: (changesOpen || Boolean(openCommit)) && Boolean(pr)",
+    '((workOpen && workTab === "files") || Boolean(openCommit))',
   );
   expect(summarySource).toContain("prCommits.length === 1");
   expect(summarySource).toContain("{rawPatch?.trim() && (");
@@ -100,9 +97,25 @@ test("an assigned reviewer can be changed or cleared from the summary", () => {
 test("submitted review facts stay separate from the reviewer picker", () => {
   expect(summarySource).toContain("const pickerReviewer =");
   expect(summarySource).toContain("{passiveReviewers.map((reviewer) => (");
-  expect(summarySource).toContain("{!pickerReviewer && (");
-  expect(summarySource).toMatch(
-    /passiveReviewers\.length > 0\s*\?\s*"Ask for review"/,
+});
+
+test("adding a reviewer is a + on the Review heading", () => {
+  expect(summarySource).not.toContain('"No reviewers"');
+  expect(summarySource).not.toContain(">Ask for review</span>");
+  expect(summarySource).toContain(
+    '<WorkspaceSummaryAdd label="Ask for review" disabled={reviewBusy}>',
+  );
+  expect(collaboratorsSource).not.toContain("No collaborators");
+  // An empty section is one row with its own glyph, never a bare heading.
+  expect(summarySource).toContain('action="Ask for review"');
+  expect(summarySource).toContain('reviewEmpty && "hidden"');
+});
+
+test("collaborators live in the header ⋯ menu, not the card or the presence pile", () => {
+  expect(summarySource).not.toContain("Collaborators");
+  expect(collaboratorsSource).not.toContain("export function HeaderPeople(");
+  expect(collaboratorsSource).toContain(
+    "export function CollaboratorsSubmenu(",
   );
 });
 

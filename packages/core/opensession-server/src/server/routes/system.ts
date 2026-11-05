@@ -19,7 +19,13 @@ import {
 } from "../frontend-build";
 import { getPins } from "../pins";
 import { getReads, isUnread } from "../reads";
-import { publishSessionChange, runErrors } from "../session-cache";
+import {
+  findSessionAsync,
+  publishSessionChange,
+  runErrors,
+} from "../session-cache";
+import { orphanedRunProof } from "../orphaned-run-proof";
+import { drainQueue } from "../run-session";
 import { getSessionControl } from "../session-control";
 import { MAX_UPLOAD_BYTES, stageHttpUpload } from "../uploads";
 import { systemStats } from "../system-stats";
@@ -33,6 +39,7 @@ import {
   discardSessionDeadOutbox,
   discardSessionDeadTimer,
   releaseSessionQuarantine,
+  sessionDeliveryProjection,
   retrySessionDeadOutbox,
   retrySessionDeadTimer,
   sessionKernelDeadLetters,
@@ -41,14 +48,13 @@ import {
 } from "../session-kernel";
 import { audit } from "../audit";
 import { serviceReadiness } from "../service-readiness";
-import { runtimeGeneration } from "../runtime-generation";
+import { currentRuntimeGeneration } from "../runtime-generation";
 import { controlPlaneResidents } from "../workload-scope";
 
 // The listing is served from catalog state only. Keep a short-TTL snapshot with
 // single-flight refresh so repeated reliability-panel polling is cheap even
 // when the catalog is degraded; mutations invalidate it immediately.
 const DEAD_LETTERS_CACHE_TTL_MS = 5_000;
-const RUNTIME_GENERATION = runtimeGeneration();
 type DeadLettersEntry = {
   at: number;
   inFlight?: Promise<unknown>;
@@ -163,8 +169,20 @@ export async function handleSystemRoutes(
           { status: 400 },
         );
       const discard = body.action === "discard";
+      // A fence over a run nothing owns can only release once that run
+      // settles. Hand the actor proof of the missing owner so it settles the
+      // run, fenced by the state and run id seen here, before releasing.
+      const session = validQuarantine
+        ? await findSessionAsync(body.sessionId as string)
+        : undefined;
+      const orphanedRun = validQuarantine
+        ? await orphanedRunProof(body.sessionId as string, [
+            session?.claudeSessionId,
+            session?.codexThreadId,
+          ])
+        : undefined;
       const changed = await (validQuarantine
-        ? releaseSessionQuarantine(body.sessionId as string)
+        ? releaseSessionQuarantine(body.sessionId as string, orphanedRun)
         : validTimer
           ? discard
             ? discardSessionDeadTimer(
@@ -194,12 +212,23 @@ export async function handleSystemRoutes(
       if (changed) {
         deadLettersCaches.clear();
         if (validQuarantine) {
-          await publishSessionChange(body.sessionId as string);
-          broadcastToSession(body.sessionId as string, {
+          const sessionId = body.sessionId as string;
+          await publishSessionChange(sessionId);
+          broadcastToSession(sessionId, {
             type: "session_status",
-            sessionId: body.sessionId,
+            sessionId,
             isRunning: false,
           });
+          // Messages queued while fenced (and a prompt the settled run never
+          // started) would otherwise wait for the next restart's queue restore.
+          const delivery = await sessionDeliveryProjection(sessionId);
+          if (delivery.queued.length)
+            void drainQueue(sessionId).catch((error) =>
+              console.error(
+                `[session-safety] drain after release failed for ${sessionId}:`,
+                error,
+              ),
+            );
         }
       }
       return Response.json(
@@ -226,7 +255,7 @@ export async function handleSystemRoutes(
   if (path === "/ready" && req.method === "GET") {
     try {
       const kernel = sessionKernelReadinessSnapshot();
-      const executor = executorClientHealth();
+      const executor = await executorClientHealth();
       const executorReadiness = executorClientReadinessSnapshot();
       const readiness = serviceReadiness();
       // This is the only gateway node. Keep serving the UI while a worker
@@ -238,7 +267,7 @@ export async function handleSystemRoutes(
           ready,
           phase: readiness.phase,
           bootId: BOOT_ID,
-          generation: RUNTIME_GENERATION,
+          generation: await currentRuntimeGeneration(),
           activeRuns: activeAgentRunCount(),
           executor: { ...executor, ...executorReadiness },
           sessionKernel: kernel,
@@ -281,7 +310,7 @@ export async function handleSystemRoutes(
       // polls this to restart only when the service is idle (or near it), so a
       // restart kills as few in-flight runs/background tasks as possible.
       activeRuns: activeAgentRunCount(),
-      executor: executorClientHealth(),
+      executor: await executorClientHealth(),
       sessionKernel: await sessionKernelHealth(),
       agents: agentHealth,
       system: systemStats(),
@@ -363,7 +392,7 @@ export async function handleSystemRoutes(
         { status: 400 },
       );
     }
-    if (isPrebuiltFrontend()) {
+    if (await isPrebuiltFrontend()) {
       return Response.json(
         { ok: false, error: "not available for a prebuilt release" },
         { status: 400 },

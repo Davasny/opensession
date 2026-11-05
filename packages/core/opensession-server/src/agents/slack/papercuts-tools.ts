@@ -27,7 +27,9 @@ export interface PapercutsToolContext {
   /** Who is driving: a user, or "<name> (automation)". */
   by?: string;
   /** Resolved lazily per call — the session's repo/model can change mid-run. */
-  defaults: () => { repo?: string; model?: string };
+  defaults: () =>
+    | { repo?: string; model?: string }
+    | Promise<{ repo?: string; model?: string }>;
 }
 
 function text(s: string) {
@@ -54,8 +56,8 @@ export function createPapercutsMcpServer(ctx: PapercutsToolContext) {
       },
       async (args: { message: string; repo?: string }) => {
         try {
-          const d = ctx.defaults();
-          const entry = logPapercut({
+          const d = await ctx.defaults();
+          const entry = await logPapercut({
             message: args.message,
             repo: args.repo || d.repo,
             sessionId: ctx.sessionId,
@@ -85,7 +87,7 @@ export function createPapercutsMcpServer(ctx: PapercutsToolContext) {
           .describe("How many days back to look (default 14, max 120)."),
       },
       async (args: { repo?: string; days?: number }) => {
-        const entries = listPapercuts({
+        const entries = await listPapercuts({
           repo: args.repo,
           days: args.days,
           limit: 50,

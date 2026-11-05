@@ -1,6 +1,7 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { seedDuplicateTranscriptView } from "../components/session-viewer/transcript-cache";
 import { mutate as revalidateApiResources } from "swr";
 import type { SplitSide } from "../components/SessionSplit";
 import { SessionTabs } from "../components/SessionTabs";
@@ -52,7 +53,11 @@ import { copySessionTranscript } from "../lib/transcript-copy";
 import type { UnifiedSession, Workspace } from "../lib/types";
 import { workspaceArchivedSessions } from "../lib/workspace-archive";
 import { saveWorkspaceLastSession } from "../lib/workspace-last-session";
-import { type WorkspacePaneTab, viewTabKind } from "../lib/workspace-pane-tabs";
+import {
+  type WorkspacePaneTab,
+  movesToPanel,
+  viewTabKind,
+} from "../lib/workspace-pane-tabs";
 import type { useAppRoute } from "./useAppRoute";
 import type { useAppViewState } from "./useAppViewState";
 import { useArchiveUndo } from "./useArchiveUndo";
@@ -63,7 +68,22 @@ import type { useSessions } from "./useSessions";
 import { useWorkspaceArchive } from "./useWorkspaceArchive";
 import { useWorkspaceMutations } from "./useWorkspaceMutations";
 import type { useWorkspacePanes } from "./useWorkspacePanes";
-import { requestPortalPin } from "../lib/portal-pin";
+import { requestPanelBrowser, requestPortalPin } from "../lib/portal-pin";
+import {
+  openSidePanelTab,
+  setSidePanelDock,
+  setSidePanelDropHover,
+  sidePanelHostOnScreen,
+} from "../lib/side-panel-store";
+
+/** The side panel's box while it is open on screen (PANEL_SHELL's hook). */
+function openPanelRect(): DOMRect | null {
+  return (
+    document
+      .querySelector<HTMLElement>(".viewer-panel")
+      ?.getBoundingClientRect() ?? null
+  );
+}
 import type { TabDropTarget } from "../lib/tab-split-preview";
 
 class MissingWorkspaceSessionSourceError extends Error {}
@@ -149,6 +169,7 @@ interface UseSessionTabsOptions {
       | "openWsPanes"
       | "subagentStack"
       | "currentPortalTarget"
+      | "currentBrowserUrl"
     >;
     actions: Pick<
       ReturnType<typeof useWorkspacePanes>,
@@ -236,6 +257,7 @@ export function useSessionTabs({
       openWsPanes,
       subagentStack,
       currentPortalTarget,
+      currentBrowserUrl,
     },
     actions: {
       setActiveViewTab,
@@ -525,26 +547,58 @@ export function useSessionTabs({
   });
 
   /**
-   * A Portal tab dragged over the right half (or onto the side panel itself)
-   * moves into the side panel, beside the conversation. Every other drop is
-   * a split.
+   * Hand a Review, Browser or Portal tab to the side panel, and open that kind
+   * there from now on: the reverse of the panel tab's "Move to main tabs".
+   */
+  function moveViewToPanel(id: string) {
+    const kind = viewTabKind(id);
+    if (kind === "review") {
+      setSidePanelDock("review", "panel");
+      closeReviewTab();
+      openSidePanelTab("review", currentSession?.id);
+    } else if (kind === "staging") {
+      setSidePanelDock("browser", "panel");
+      requestPanelBrowser(
+        currentBrowserUrl
+          ? { kind: "url", url: currentBrowserUrl }
+          : { kind: "staging" },
+      );
+      closeStagingTab();
+    } else if (kind === "portal") {
+      setSidePanelDock("browser", "panel");
+      if (currentPortalTarget) requestPortalPin(currentPortalTarget);
+      closePortalTab();
+    }
+  }
+
+  /**
+   * A Review, Browser or Portal tab dropped onto the open side panel, or onto
+   * the pane's right third while the panel is closed, moves into the panel
+   * beside the conversation. Every other drop is a split.
    */
   function tabDropAt(
     draggedId: string,
     point: { x: number; y: number },
   ): TabDropTarget | null {
-    if (
-      !isPhone &&
-      currentPortalTarget &&
-      viewTabKind(draggedId) === "portal"
-    ) {
+    if (!isPhone && movesToPanel(draggedId) && sidePanelHostOnScreen()) {
+      const panel = openPanelRect();
+      if (
+        panel &&
+        point.x >= panel.left &&
+        point.x <= panel.right &&
+        point.y >= panel.top &&
+        point.y <= panel.bottom
+      )
+        return "panel";
       const pane = detailPaneRef.current?.getBoundingClientRect();
       const strip = detailPaneRef.current
         ?.querySelector<HTMLElement>(".session-tabs")
         ?.getBoundingClientRect();
       if (
+        !panel &&
         pane &&
-        point.x > pane.left + pane.width / 2 &&
+        point.x > pane.left + (pane.width * 2) / 3 &&
+        point.x <= pane.right &&
         point.y > (strip?.bottom ?? pane.top) + 8 &&
         point.y < pane.bottom
       )
@@ -714,15 +768,20 @@ export function useSessionTabs({
           setColor: (key, color) => setTabColors(setTabColor(key, color)),
           reorder: (ids) => saveTabOrder(tabOrderKey, mergeBarOrder(ids)),
           previewSplit: (id, point) => {
-            setSplitDropSide(id && point ? tabDropAt(id, point) : null);
+            const target = id && point ? tabDropAt(id, point) : null;
+            // Over the open panel, the panel lights up itself; the pane's
+            // outline is for a panel that will open.
+            const overPanel = target === "panel" && !!openPanelRect();
+            setSidePanelDropHover(overPanel);
+            setSplitDropSide(overPanel ? null : target);
           },
           dropIntoSplit: (id, point) => {
             const target = tabDropAt(id, point);
             setSplitDropSide(null);
+            setSidePanelDropHover(false);
             if (!target) return false;
             if (target === "panel") {
-              if (currentPortalTarget) requestPortalPin(currentPortalTarget);
-              closePortalTab();
+              moveViewToPanel(id);
               return true;
             }
             moveTabToSide(id, target);
@@ -732,6 +791,7 @@ export function useSessionTabs({
             ? (id) => moveTabToSide(id, otherSide(side))
             : undefined,
           selectView: selectViewTab,
+          moveToPanel: !isPhone && currentSession ? moveViewToPanel : undefined,
           closeView: (id) => {
             if (id.startsWith("subagent:"))
               closeSubagentTab(id.slice("subagent:".length));
@@ -814,10 +874,14 @@ export function useSessionTabs({
       createdAt: now,
       lastActivity: now,
       isRunning: false,
-      // This shell has no engine yet. A duplicate's copied transcript arrives
-      // with the create response, while an ordinary sibling stays blank.
+      // This shell has no engine yet. A duplicate shows the source's copied
+      // conversation from the transcript cache seeded below until its own
+      // watch replaces it, while an ordinary sibling stays blank.
       ran: false,
       transcriptPath: null,
+      // The server starts the sibling without the source's switch history, so
+      // its dividers would vanish from a duplicate once the create lands.
+      modelHistory: undefined,
       startedBy: user,
       archived: false,
       waitingForInput: false,
@@ -855,9 +919,16 @@ export function useSessionTabs({
       draft.worktreeDir = null;
       draft.mode = "ask";
     }
-    // Commit the local shell before changing the route. Without this boundary,
-    // the route can render against the previous list and keep the old session's
-    // conversation visible until the create response arrives.
+    // A duplicate opens on the conversation it copies rather than a blank tab
+    // that fills in when the server answers.
+    if (duplicate) seedDuplicateTranscriptView(src.id, id, messageId);
+    // Commit the local shell and the route in one synchronous render. Routing
+    // first would render against the previous list and keep the old session's
+    // conversation visible until the create response arrives. Routing after
+    // would commit the pending id while the old route is still current, and
+    // App drops a pending id the route has left, so the new tab would mount
+    // connected, watch an id the server does not know yet, and flash "Session
+    // not found".
     clearNewTabMorphTimer();
     flushSync(() => {
       inject(draft, { sticky: true });
@@ -865,6 +936,9 @@ export function useSessionTabs({
       setPendingSessionId(id);
       setPendingNewWorkspace(false);
       setNewTabMorph(morphOrigin ? { id, origin: morphOrigin } : null);
+      // A new tab is opened to type in: land the caret in its composer.
+      setFocusComposerOnOpen(true);
+      navigate({ view: "session", id });
     });
     if (morphOrigin) startNewTabMorphTimer(id);
     replacePendingTimer(() => {
@@ -872,7 +946,6 @@ export function useSessionTabs({
       setOptimisticSession((pending) => (pending?.id === id ? null : pending));
       unstick(id);
     }, 30_000);
-    navigate({ view: "session", id });
 
     return await (async () => {
       const source = await persistedSource;
@@ -915,10 +988,9 @@ export function useSessionTabs({
         },
         { sticky: true },
       );
-      // The tab's PR and git surfaces already asked the server about this id
-      // while it was only a local shell, and SWR kept the 404. The server
-      // knows the id now: ask again, so the workspace's PR fills in without
-      // waiting for a poll.
+      // Some of the tab's surfaces asked the server about this id while it was
+      // only a local shell, and SWR kept the 404. The server knows the id now:
+      // ask again, so they fill in without waiting for a poll.
       void revalidateApiResources(sessionApiKeyFilter(createdId));
       clearTimeout(pendingTimer.current);
       setPendingSessionId((pending) => (pending === id ? null : pending));

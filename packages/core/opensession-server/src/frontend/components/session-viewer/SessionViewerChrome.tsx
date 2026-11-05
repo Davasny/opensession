@@ -46,6 +46,7 @@ import { UsageMeter } from "../UsageMeter";
 import { UserAvatar } from "../UserAvatar";
 import { WorkflowPanel } from "../WorkflowPanel";
 import { WorkspaceSummary, WorkspaceSummaryBody } from "../WorkspaceSummary";
+import { CollaboratorsSubmenu } from "../WorkspaceCollaborators";
 import { WorkspaceWaiting } from "./busy-indicators";
 import {
   IconArchive,
@@ -980,6 +981,10 @@ export function SessionViewerChrome({
                   {placementActions}
                   {isPhone && keepInSidebarAction(true)}
                   {(compactHeader || isPhone) && shareAction(true)}
+                  <CollaboratorsSubmenu
+                    workspaceId={session.workspaceId || null}
+                    sessionId={session.id}
+                  />
                   <Menu.Separator className={VIEWER_MENU_SEP} />
                   {newSessionAction}
                   {/* Fork always applies to the open session, even when the
@@ -1150,7 +1155,10 @@ export function SessionViewerChrome({
                     )}
                   {/* The compact Workspace summary keeps the card's quiet row grammar.
 					    Detailed comments, files and tools open in the full side panel. */}
-                  {!isPhone && hasRepoWork && !activePanelOpen && (
+                  {/* The card stays toggleable with the side panel open: the
+					    panel holds tabs (Changes, Review, Browser, …), the card is
+					    the workspace at a glance, and they no longer overlap. */}
+                  {!isPhone && hasRepoWork && (
                     <WorkspaceSummary
                       session={session}
                       anchor={headerActionsRef}

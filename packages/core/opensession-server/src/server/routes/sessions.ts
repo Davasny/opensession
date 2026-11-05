@@ -95,6 +95,7 @@ import {
   removeTombstonedSessionArtifacts,
 } from "../sessions";
 import { publicSessionSafety } from "../session-safety";
+import { orphanedRunProof, orphanedRunRepairable } from "../orphaned-run-proof";
 import type { DurableSessionQuarantine } from "../session-kernel/store";
 import {
   getStatusOverride,
@@ -117,16 +118,9 @@ import {
 } from "../workspaces";
 import { NO_REPO, removeWorktree, repoForPath } from "../worktree";
 import { preparingWorkspaces } from "../ws-hub";
-import {
-  existsSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "fs";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { statePath } from "../paths";
-import { writeFileAtomic } from "../shared/atomic-write";
+import { writeFileAtomicAsync } from "../shared/atomic-write";
 import { githubMutationCredential } from "./github-credential";
 import { defaultRepo } from "../config";
 import type { UnifiedSession } from "../types";
@@ -141,7 +135,11 @@ import {
   indexedWorkspaceMemberSessions,
   indexedWorkspaceSessions,
 } from "../session-list-store";
-import { buildAtCurrentSessionListRevision } from "../session-list-response-revision";
+import {
+  buildForSessionListRevision,
+  sessionListResponseRevision,
+  type SessionListBuildSlot,
+} from "../session-list-response-revision";
 import {
   loadSidebarSessionScopeContext,
   parseSidebarSessionScope,
@@ -156,8 +154,74 @@ interface SessionsResponseSnapshot {
   text: string;
   hash: string;
   expiresAt: number;
+  /** Session list revision its build started at; absent for the disk copy. */
+  revision?: number;
   gzip?: Promise<Blob>;
 }
+
+/** Unexpired, and no session mutation landed after its build started. */
+function snapshotFresh(snapshot: SessionsResponseSnapshot): boolean {
+  return (
+    snapshot.expiresAt > Date.now() &&
+    (snapshot.revision === undefined ||
+      snapshot.revision === sessionListResponseRevision())
+  );
+}
+
+/** Rows enriched or serialized between yields to the event loop. */
+const LIST_BUILD_CHUNK = 500;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * `rows.map(fn)` that yields every LIST_BUILD_CHUNK rows. Enriching the whole
+ * live list in one pass held the gateway thread for hundreds of milliseconds.
+ */
+async function mapYielding<T, U>(
+  rows: readonly T[],
+  fn: (row: T) => U,
+): Promise<U[]> {
+  const out: U[] = [];
+  for (let start = 0; start < rows.length; start += LIST_BUILD_CHUNK) {
+    if (start > 0) await yieldToEventLoop();
+    const end = Math.min(rows.length, start + LIST_BUILD_CHUNK);
+    for (let index = start; index < end; index++) out.push(fn(rows[index]!));
+  }
+  return out;
+}
+
+/**
+ * The same text as `JSON.stringify(rows)`, serialized a chunk at a time with
+ * yields in between. One stringify of the ~60 MB unscoped live list blocked
+ * the gateway for ~350 ms. Exported for tests.
+ */
+export async function stringifyRowsYielding(
+  rows: readonly unknown[],
+): Promise<string> {
+  const parts: string[] = [];
+  for (let start = 0; start < rows.length; start += LIST_BUILD_CHUNK) {
+    if (start > 0) await yieldToEventLoop();
+    // An array of one chunk minus its brackets is that chunk's elements,
+    // comma-separated exactly as they are inside the whole array.
+    parts.push(
+      JSON.stringify(rows.slice(start, start + LIST_BUILD_CHUNK)).slice(1, -1),
+    );
+  }
+  return `[${parts.join(",")}]`;
+}
+
+/**
+ * Minimum gap between background rebuilds of the unscoped live list. The web
+ * sidebar reads its own scoped projection; this list serves the Chrome side
+ * panel (polled every few seconds), the command menu and older native
+ * clients, all of which tolerate a slightly old copy. Each rebuild enriches
+ * and serializes every live session (~37k rows, ~60 MB on 2026-11-05).
+ */
+const LIVE_LIST_REFRESH_MIN_MS = 15_000;
+let liveListRefreshStartedAt = 0;
+let liveListRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * Which slice of the session list a request asked for.
  *
@@ -251,8 +315,8 @@ const sessionsResponseSnapshots: Map<string, SessionsResponseSnapshot> = ((
 ).__osSessionsResponseSnapshots ??= new Map());
 const sessionsResponseRefreshes: Map<
   string,
-  Promise<SessionsResponseSnapshot>
-> = ((globalThis as any).__osSessionsResponseRefreshes ??= new Map());
+  SessionListBuildSlot<SessionsResponseSnapshot>
+> = ((globalThis as any).__osSessionsResponseBuilds ??= new Map());
 
 // The live list is expensive to rebuild from thousands of source files after a
 // process restart. Keep its last complete response as the one cold-start
@@ -266,16 +330,33 @@ const LIVE_LIST_DISK_PATH = statePath(
   `.opensession-session-list-v${LIVE_LIST_DISK_VERSION}.json`,
 );
 const LIVE_LIST_DISK_GZIP_PATH = `${LIVE_LIST_DISK_PATH}.gz`;
-let triedDiskLiveList = false;
+let diskLiveListRead: Promise<SessionsResponseSnapshot | null> | null = null;
+let diskLiveListSettled = false;
 
-function readDiskLiveList(): SessionsResponseSnapshot | null {
-  if (triedDiskLiveList) return null;
-  triedDiskLiveList = true;
+/** One-shot: the first caller reads the persisted list; callers that arrive
+ * while that read is in flight share its result; later callers get null. */
+function readDiskLiveList(): Promise<SessionsResponseSnapshot | null> {
+  if (diskLiveListSettled) return Promise.resolve(null);
+  diskLiveListRead ??= readDiskLiveListOnce().finally(() => {
+    diskLiveListSettled = true;
+  });
+  return diskLiveListRead;
+}
+
+async function mtimeMsOrNull(path: string): Promise<number | null> {
   try {
-    if (!existsSync(LIVE_LIST_DISK_PATH)) return null;
-    const sourceMtime = statSync(LIVE_LIST_DISK_PATH).mtimeMs;
+    return (await stat(path)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+async function readDiskLiveListOnce(): Promise<SessionsResponseSnapshot | null> {
+  try {
+    const sourceMtime = await mtimeMsOrNull(LIVE_LIST_DISK_PATH);
+    if (sourceMtime === null) return null;
     if (Date.now() - sourceMtime > LIVE_LIST_DISK_MAX_AGE_MS) return null;
-    let text = readFileSync(LIVE_LIST_DISK_PATH, "utf8");
+    let text = await readFile(LIVE_LIST_DISK_PATH, "utf8");
     if (!text.startsWith("[")) return null;
     // The snapshot can predate an archive whose refresh never ran — e.g. the
     // archive landed in the previous process's shutdown window, or between
@@ -293,10 +374,10 @@ function readDiskLiveList(): SessionsResponseSnapshot | null {
         rewrote = true;
       }
     } catch {}
-    const haveMatchingGzip =
-      !rewrote &&
-      existsSync(LIVE_LIST_DISK_GZIP_PATH) &&
-      statSync(LIVE_LIST_DISK_GZIP_PATH).mtimeMs >= sourceMtime;
+    const gzipMtime = rewrote
+      ? null
+      : await mtimeMsOrNull(LIVE_LIST_DISK_GZIP_PATH);
+    const haveMatchingGzip = gzipMtime !== null && gzipMtime >= sourceMtime;
     return {
       text,
       hash: Bun.hash(text).toString(16),
@@ -310,23 +391,21 @@ function readDiskLiveList(): SessionsResponseSnapshot | null {
   }
 }
 
-function persistDiskLiveList(text: string): void {
+let diskLiveListPersist: Promise<void> = Promise.resolve();
+
+async function persistDiskLiveList(text: string): Promise<void> {
   try {
-    writeFileAtomic(LIVE_LIST_DISK_PATH, text, 0o600);
+    await writeFileAtomicAsync(LIVE_LIST_DISK_PATH, text, 0o600);
     // CompressionStream competes with the cold scan on the server thread. Do
     // this once when the fresh snapshot lands, not on the next process's first
     // response, so a warm boot can send ready bytes straight from disk.
     const tmp = `${LIVE_LIST_DISK_GZIP_PATH}.tmp.${process.pid}`;
     try {
-      writeFileSync(tmp, Bun.gzipSync(Buffer.from(text)), { mode: 0o600 });
-      renameSync(tmp, LIVE_LIST_DISK_GZIP_PATH);
+      await writeFile(tmp, Bun.gzipSync(Buffer.from(text)), { mode: 0o600 });
+      await rename(tmp, LIVE_LIST_DISK_GZIP_PATH);
     } catch (error) {
-      try {
-        rmSync(tmp);
-      } catch {}
-      try {
-        rmSync(LIVE_LIST_DISK_GZIP_PATH);
-      } catch {}
+      await rm(tmp).catch(() => {});
+      await rm(LIVE_LIST_DISK_GZIP_PATH).catch(() => {});
       throw error;
     }
   } catch (error) {
@@ -511,7 +590,11 @@ function enrichSession(
   });
   const quarantine = signals?.quarantines.get(s.id);
   const safety = quarantine
-    ? publicSessionSafety(quarantine, signals?.runtime.claimedJournalSessions)
+    ? publicSessionSafety(
+        quarantine,
+        signals?.runtime.claimedJournalSessions,
+        orphanedRunRepairable(quarantine, [s.claudeSessionId, s.codexThreadId]),
+      )
     : undefined;
   return {
     ...prSession,
@@ -571,6 +654,17 @@ export async function sessionDetail(
   const signals = await sessionListRuntimeSignals();
   const context = sessionEnrichmentContext();
   const enriched = enrichSession(session, signals, context);
+  // List rows use a cheap projection check; the detail view can afford the
+  // durable one, which also sees runs left unsettled before a restart.
+  if (
+    enriched.safety &&
+    !enriched.safety.repairAvailable &&
+    (await orphanedRunProof(enriched.id, [
+      enriched.claudeSessionId,
+      enriched.codexThreadId,
+    ]))
+  )
+    enriched.safety = { ...enriched.safety, repairAvailable: true };
   if (!enriched.workspaceId) return enriched;
   return projectWorkspacePrRefs(
     enriched,
@@ -973,85 +1067,104 @@ function refreshSidebarSessionsResponse(
   compactPrs: boolean,
 ): Promise<SessionsResponseSnapshot> {
   const key = sidebarResponseKey(scope, compactPrs);
-  const current = sessionsResponseRefreshes.get(key);
-  if (current) return current;
-  const refresh = buildAtCurrentSessionListRevision(async () => {
-    const signals = await sessionListRuntimeSignals();
-    const context = sessionEnrichmentContext();
-    const indexed = await indexedSidebarSessions(scope.selectedSessionId);
-    const sliced = (indexed ?? (await getCachedSessionsAsync("exclude"))).map(
-      (session) => enrichSession(session, signals, context, "row"),
-    );
-    shareWorkspacePrRefs(sliced);
-    const bounded = indexed ? sliced : sidebarLiveSessions(sliced);
-    const scoped = scopeSessionsForSidebar(
-      bounded,
-      scope,
-      await loadSidebarSessionScopeContext(scope, bounded),
-    );
-    const rows = scoped.map(sessionListRow);
-    const text = JSON.stringify(compactPrs ? compactSharedPrs(rows) : rows);
-    return {
-      text,
-      hash: Bun.hash(text).toString(16),
-      expiresAt: Date.now() + SESSIONS_RESPONSE_TTL_MS,
-    };
-  })
-    .then((snapshot) => {
+  return buildForSessionListRevision(
+    sessionsResponseRefreshes,
+    key,
+    async (revision) => {
+      const signals = await sessionListRuntimeSignals();
+      const context = sessionEnrichmentContext();
+      const indexed = await indexedSidebarSessions(scope.selectedSessionId);
+      const sliced = await mapYielding(
+        indexed ?? (await getCachedSessionsAsync("exclude")),
+        (session) => enrichSession(session, signals, context, "row"),
+      );
+      shareWorkspacePrRefs(sliced);
+      const bounded = indexed ? sliced : sidebarLiveSessions(sliced);
+      const scoped = scopeSessionsForSidebar(
+        bounded,
+        scope,
+        await loadSidebarSessionScopeContext(scope, bounded),
+      );
+      const rows = scoped.map(sessionListRow);
+      const text = JSON.stringify(compactPrs ? compactSharedPrs(rows) : rows);
+      const snapshot: SessionsResponseSnapshot = {
+        text,
+        hash: Bun.hash(text).toString(16),
+        expiresAt: Date.now() + SESSIONS_RESPONSE_TTL_MS,
+        revision,
+      };
       sessionsResponseSnapshots.set(key, snapshot);
       return snapshot;
-    })
-    .finally(() => {
-      sessionsResponseRefreshes.delete(key);
-    });
-  sessionsResponseRefreshes.set(key, refresh);
-  return refresh;
+    },
+  );
 }
 
 function refreshSessionsResponse(
   variant: SessionsVariant,
 ): Promise<SessionsResponseSnapshot> {
-  const current = sessionsResponseRefreshes.get(variant);
-  if (current) return current;
-  const refresh = buildAtCurrentSessionListRevision(async () => {
-    const signals = await sessionListRuntimeSignals();
-    const context = sessionEnrichmentContext();
-    const slice =
-      variant === "exclude"
-        ? "exclude"
-        : variant === "include"
-          ? "include"
-          : "only";
-    const indexed = await (variant === "exclude"
-      ? indexedSidebarSessions()
-      : indexedSessions(slice));
-    const sliced = (indexed ?? (await getCachedSessionsAsync(slice))).map(
-      (session) => enrichSession(session, signals, context, "row"),
-    );
-    shareWorkspacePrRefs(sliced);
-    const listed =
-      variant === "exclude" && !indexed ? sidebarLiveSessions(sliced) : sliced;
-    const text = JSON.stringify(
-      variant === "only-slim"
-        ? listed.map(archivedIndexRow)
-        : listed.map(sessionListRow),
-    );
-    return {
-      text,
-      hash: Bun.hash(text).toString(16),
-      expiresAt: Date.now() + SESSIONS_RESPONSE_TTL_MS,
-    };
-  })
-    .then((snapshot) => {
+  return buildForSessionListRevision(
+    sessionsResponseRefreshes,
+    variant,
+    async (revision) => {
+      if (variant === "exclude") liveListRefreshStartedAt = Date.now();
+      const signals = await sessionListRuntimeSignals();
+      const context = sessionEnrichmentContext();
+      const slice =
+        variant === "exclude"
+          ? "exclude"
+          : variant === "include"
+            ? "include"
+            : "only";
+      const indexed = await (variant === "exclude"
+        ? indexedSidebarSessions()
+        : indexedSessions(slice));
+      const sliced = await mapYielding(
+        indexed ?? (await getCachedSessionsAsync(slice)),
+        (session) => enrichSession(session, signals, context, "row"),
+      );
+      shareWorkspacePrRefs(sliced);
+      const listed =
+        variant === "exclude" && !indexed
+          ? sidebarLiveSessions(sliced)
+          : sliced;
+      const text = await stringifyRowsYielding(
+        variant === "only-slim"
+          ? listed.map(archivedIndexRow)
+          : listed.map(sessionListRow),
+      );
+      const snapshot: SessionsResponseSnapshot = {
+        text,
+        hash: Bun.hash(text).toString(16),
+        expiresAt: Date.now() + SESSIONS_RESPONSE_TTL_MS,
+        revision,
+      };
       sessionsResponseSnapshots.set(variant, snapshot);
-      if (variant === "exclude") persistDiskLiveList(snapshot.text);
+      if (variant === "exclude") {
+        // Serialized, so an older snapshot never lands over a newer one.
+        diskLiveListPersist = diskLiveListPersist.then(() =>
+          persistDiskLiveList(text),
+        );
+      }
       return snapshot;
-    })
-    .finally(() => {
-      sessionsResponseRefreshes.delete(variant);
-    });
-  sessionsResponseRefreshes.set(variant, refresh);
-  return refresh;
+    },
+  );
+}
+
+/** Rebuild the unscoped live list in the background, at most every
+ *  LIVE_LIST_REFRESH_MIN_MS, while its pollers keep the last copy. */
+function scheduleLiveListRefresh(minDelayMs: number): void {
+  if (liveListRefreshTimer || sessionsResponseRefreshes.has("exclude")) return;
+  const delay = Math.max(
+    minDelayMs,
+    liveListRefreshStartedAt + LIVE_LIST_REFRESH_MIN_MS - Date.now(),
+  );
+  liveListRefreshTimer = setTimeout(() => {
+    liveListRefreshTimer = null;
+    void refreshSessionsResponse("exclude").catch((error) =>
+      console.warn("[sessions] live-list background refresh failed:", error),
+    );
+  }, delay);
+  liveListRefreshTimer.unref?.();
 }
 
 export async function handleSessionsRoutes(
@@ -1256,7 +1369,7 @@ export async function handleSessionsRoutes(
       );
       return await sessionsListResponse(
         req,
-        cached && cached.expiresAt > Date.now()
+        cached && snapshotFresh(cached)
           ? cached
           : await refreshSidebarSessionsResponse(sidebarScope, compactPrs),
       );
@@ -1298,7 +1411,7 @@ export async function handleSessionsRoutes(
       });
     }
     const cached = sessionsResponseSnapshots.get(variant);
-    if (cached && cached.expiresAt > Date.now())
+    if (cached && snapshotFresh(cached))
       return await sessionsListResponse(req, cached);
     if (cached && variant === "exclude") {
       // Polling should never make the sidebar wait for a fresh scan of every
@@ -1306,16 +1419,7 @@ export async function handleSessionsRoutes(
       // one shared refresh catches up. Cache invalidation marks this snapshot
       // stale rather than deleting it for the same reason.
       cached.expiresAt = Date.now() + SESSIONS_RESPONSE_TTL_MS;
-      if (!sessionsResponseRefreshes.has(variant)) {
-        setTimeout(() => {
-          void refreshSessionsResponse(variant).catch((error) =>
-            console.warn(
-              "[sessions] live-list background refresh failed:",
-              error,
-            ),
-          );
-        }, 250).unref?.();
-      }
+      scheduleLiveListRefresh(250);
       return await sessionsListResponse(req, cached);
     }
 
@@ -1324,21 +1428,14 @@ export async function handleSessionsRoutes(
     // cache refresh catches up in the background. In-process invalidations do
     // not reuse disk because readDiskLiveList is intentionally one-shot.
     if (variant === "exclude" && !cached) {
-      const disk = readDiskLiveList();
+      const disk = await readDiskLiveList();
       if (disk) {
         sessionsResponseSnapshots.set(variant, disk);
         // Starting the cooperative scan still does some synchronous index
         // setup before its first yield. Keep boot quiet long enough for the
         // session, sidebar and workspace shell to finish their own requests;
         // the persisted response keeps the list useful in the meantime.
-        setTimeout(() => {
-          void refreshSessionsResponse(variant).catch((error) =>
-            console.warn(
-              "[sessions] live-list background refresh failed:",
-              error,
-            ),
-          );
-        }, 30_000).unref?.();
+        scheduleLiveListRefresh(30_000);
         return await sessionsListResponse(req, disk);
       }
     }
@@ -1759,7 +1856,7 @@ export async function handleSessionsRoutes(
       if (
         session.transcriptPath &&
         !byPath.has(session.transcriptPath) &&
-        existsSync(session.transcriptPath)
+        (await mtimeMsOrNull(session.transcriptPath)) !== null
       )
         byPath.set(session.transcriptPath, session.id);
     }
@@ -1767,7 +1864,7 @@ export async function handleSessionsRoutes(
       for (const file of await ripgrepFiles(q, [...byPath.keys()])) {
         const id = byPath.get(file);
         if (!id || matchedIds.has(id)) continue;
-        const snippet = transcriptMatchSnippet(file, q);
+        const snippet = await transcriptMatchSnippet(file, q);
         if (snippet) {
           matches.push({ id, snippet });
           matchedIds.add(id);
@@ -1793,7 +1890,7 @@ export async function handleSessionsRoutes(
         return Response.json({ error: "Session not found" }, { status: 404 });
       return Response.json({
         subagents: session.transcriptPath
-          ? listSubagents(session.transcriptPath)
+          ? await listSubagents(session.transcriptPath)
           : [],
         sessionRunning: session.isRunning,
       });
@@ -2025,7 +2122,7 @@ export async function handleSessionsRoutes(
       if (cleanWorktree && session.worktreeDir && session.branch) {
         await removeWorktree(
           session.branch,
-          repoForPath(session.worktreeDir).id,
+          (await repoForPath(session.worktreeDir)).id,
         );
         // A session can span repos, and each one it spans has a checkout
         // of its own. Cleaning up only the first would leave the rest on

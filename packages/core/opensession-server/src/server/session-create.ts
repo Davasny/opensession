@@ -24,6 +24,7 @@ import { canJoinCreateWorkspace } from "../shared/session-create-workspace";
  * session-control-wiring.ts.
  */
 
+import { FinalReplyText } from "./final-reply";
 import { agentAwsCredsForUntrustedRuns } from "./aws-creds";
 import {
   mirrorSlackSessionReply,
@@ -36,7 +37,7 @@ import {
 
 import type { ServerWebSocket } from "bun";
 import { randomUUIDv7 } from "bun";
-import { existsSync } from "node:fs";
+import { pathExists } from "./shared/path-exists";
 import {
   activeAgentRecoveryRecord,
   currentAgentRunToken,
@@ -706,7 +707,7 @@ export async function actorCreationSetupPlan(
   const state = await ensureCreationPlanned(sessionId, identity);
   if (state.setupPlan || !["planned", "preparing"].includes(state.state))
     return (state.setupPlan ?? {}) as CreationSetupPlan;
-  const legacy = readCreatePlan(sessionId, identity);
+  const legacy = await readCreatePlan(sessionId, identity);
   if (!legacy) return {};
   return await patchCreationSetupPlan(sessionId, identity, {
     ...(legacy.branch ? { branch: legacy.branch } : {}),
@@ -1125,7 +1126,7 @@ async function restorePlannedOpening(sessionId: string): Promise<{
     (creation?.setupPlan?.resolved as Record<string, unknown> | undefined);
   const legacyPlan = actorPlan
     ? undefined
-    : readCreatePlanForRecovery(sessionId);
+    : await readCreatePlanForRecovery(sessionId);
   const openingPlan = actorPlan ?? legacyPlan?.resolved;
   const identity = actorPlan ? creation!.identity : legacyPlan?.identity;
   if (!openingPlan || !identity) return null;
@@ -1263,7 +1264,7 @@ export async function settleStoppedCreationOpening(
     item.sessionId,
     item.payload.openingPromptEntryId,
   );
-  clearCreatePlan(item.sessionId);
+  await clearCreatePlan(item.sessionId);
   return true;
 }
 
@@ -1286,7 +1287,7 @@ export async function executeCreationOpeningEffect(
       item.payload.openingPromptEntryId,
     );
     if (state.state === "ready" || state.state === "cancelled")
-      clearCreatePlan(item.sessionId);
+      await clearCreatePlan(item.sessionId);
     return;
   }
   if (await settleStoppedCreationOpening(item)) return;
@@ -1344,7 +1345,7 @@ export async function executeCreationOpeningEffect(
           item.payload.openingPromptEntryId,
         );
         if (recovered.state === "ready" || recovered.state === "cancelled")
-          clearCreatePlan(item.sessionId);
+          await clearCreatePlan(item.sessionId);
         return;
       }
       if (await settleStoppedCreationOpening(item)) return;
@@ -1413,7 +1414,7 @@ export async function executeCreationOpeningEffect(
             item.sessionId,
             item.payload.openingPromptEntryId,
           );
-          if (run.state !== "failed") clearCreatePlan(item.sessionId);
+          if (run.state !== "failed") await clearCreatePlan(item.sessionId);
           return;
         }
       }
@@ -1447,7 +1448,7 @@ export async function executeCreationOpeningEffect(
   );
   const settled = await sessionKernel(item.sessionId).creationState();
   if (settled?.state === "ready" || settled?.state === "cancelled")
-    clearCreatePlan(item.sessionId);
+    await clearCreatePlan(item.sessionId);
   else if (settled?.state !== "failed")
     throw new Error(
       "Opening effect returned without terminal actor settlement",
@@ -1457,7 +1458,7 @@ export async function executeCreationOpeningEffect(
 export async function resumePlannedCreate(sessionId: string): Promise<boolean> {
   const state = await sessionKernel(sessionId).creationState();
   if (state?.state === "ready" || state?.state === "cancelled") {
-    clearCreatePlan(sessionId);
+    await clearCreatePlan(sessionId);
     return true;
   }
   if (
@@ -1629,12 +1630,16 @@ export async function openCreatedSession(
   // The opening turn's reply and tool count, for the announce-then-stop
   // guard (finish: "auto-continue-guard").
   let assistantText = "";
+  // Only the answer after the last tool call goes to Slack and Plain.
+  const finalReply = new FinalReplyText();
   let toolUseCount = 0;
   // Actual worktree HEAD when it drifted from the recorded branch (the
   // agent switched/renamed branches during the opening turn).
-  const headBranchPatch = () => {
+  const headBranchPatch = async () => {
     if (spec.runnerTarget) return {};
-    const head = spec.persistBranch ? worktreeHeadBranch(spec.wtPath) : null;
+    const head = spec.persistBranch
+      ? await worktreeHeadBranch(spec.wtPath)
+      : null;
     return head && head !== spec.branch ? { branch: head } : {};
   };
   // Field-scoped write: creation fields are create-if-absent defaults
@@ -1642,8 +1647,9 @@ export async function openCreatedSession(
   // engine id or a materialized sandboxId while the opening run streams —
   // wins); this run only owns the engine-id/model/HEAD-sync fields it
   // actually changes. Serialized via updateSessionFile.
-  const persist = () =>
-    updateSessionFile(bksId, (data) => {
+  const persist = async () => {
+    const headPatch = await headBranchPatch();
+    return updateSessionFile(bksId, (data) => {
       // Widen to Partial: the file may not exist yet.
       const existing: Partial<NativeSessionFile> = data;
       return {
@@ -1658,12 +1664,13 @@ export async function openCreatedSession(
         ...(effectiveModel ? { lastEngineModel: effectiveModel } : {}),
         ...(selectedModel ? { model: selectedModel } : {}),
         ...(modelHistory.length ? { modelHistory } : {}),
-        ...headBranchPatch(),
+        ...headPatch,
         lastActivity: new Date().toISOString(),
       };
     }).then(() => {
       persisted = true;
     });
+  };
 
   try {
     // Persist + announce BEFORE the slow parts (repo attach, engine boot
@@ -1914,7 +1921,7 @@ export async function openCreatedSession(
                 ? undefined
                 : [
                     pstackMode ? PSTACK_MODE_NOTE : "",
-                    buildBranchNote({
+                    await buildBranchNote({
                       mode: spec.mode,
                       branch: spec.branch,
                       worktreeDir: spec.wtPath,
@@ -1957,7 +1964,7 @@ export async function openCreatedSession(
               : {}),
             ...(effectiveModel ? { lastEngineModel: effectiveModel } : {}),
             ...(modelHistory.length ? { modelHistory } : {}),
-            ...headBranchPatch(),
+            ...(await headBranchPatch()),
           });
         if (latestUsage)
           await touchNativeSession(bksId, { usage: latestUsage });
@@ -2009,12 +2016,12 @@ export async function openCreatedSession(
             // A session that spans repos is handed the persisted map rather
             // than a reconstructed branch note.
             spanning
-              ? buildReposNote({
+              ? await buildReposNote({
                   ...spanning,
                   existingBranch: spec.worktreeKind === "existing",
                   pstackMode,
                 })
-              : buildBranchNote({
+              : await buildBranchNote({
                   mode: spec.mode,
                   branch: spec.branch,
                   worktreeDir: spec.wtPath,
@@ -2160,10 +2167,12 @@ export async function openCreatedSession(
         }
         if (event.type === "text_chunk") {
           assistantText += event.text;
+          finalReply.text(event.text);
           io.emit({ type: "stream_text", text: event.text });
         }
         if (event.type === "tool_use") {
           toolUseCount++;
+          finalReply.toolUse();
           plainDiscussionToolUse(spec.plainDiscussionId, event);
           const entry = {
             id: event.toolUseId || crypto.randomUUID(),
@@ -2269,11 +2278,11 @@ export async function openCreatedSession(
         !spec.remoteSandbox &&
         !spec.runnerTarget &&
         !spec.automationDescendantPolicy,
-      assistantText,
+      assistantText: finalReply.value,
       error: runFailure,
     });
     mirrorTurnToPlainDiscussion(spec.plainDiscussionId, {
-      assistantText,
+      assistantText: finalReply.value,
       endedWithError: !!runFailure,
       runFailure,
     });
@@ -2356,7 +2365,7 @@ export async function openCreatedSession(
       // handler cannot report this one: settle Plain from here or its
       // composer stays locked on IN_PROGRESS.
       mirrorTurnToPlainDiscussion(spec.plainDiscussionId, {
-        assistantText,
+        assistantText: finalReply.value,
         endedWithError: true,
         runFailure: e.message || String(e),
       });
@@ -2501,7 +2510,7 @@ export async function handleCreateSessionMessage(
       durableCreation.state === "ready" ||
       durableCreation.state === "cancelled"
     )
-      clearCreatePlan(bksId);
+      await clearCreatePlan(bksId);
     const response = replayedSessionCreatedResult(
       bksId,
       recoveringSession.workspaceId,
@@ -2515,7 +2524,7 @@ export async function handleCreateSessionMessage(
     recoveringSession?.codexThreadId ||
     recoveringSession?.piSessionId
   ) {
-    clearCreatePlan(bksId);
+    await clearCreatePlan(bksId);
     const response = replayedSessionCreatedResult(
       recoveringSession.id,
       recoveringSession.workspaceId,
@@ -2686,7 +2695,7 @@ export async function handleCreateSessionMessage(
     return;
   }
   const selectedRunner = requestedRunnerId
-    ? getRunner(requestedRunnerId)
+    ? await getRunner(requestedRunnerId)
     : undefined;
   if (requestedRunnerId) {
     if (!selectedRunner || !isRunnerConnected(selectedRunner.id)) {
@@ -2864,7 +2873,7 @@ export async function handleCreateSessionMessage(
         !selectedRunner &&
         !isAsk &&
         !isScratch &&
-        !existsSync(wtPath);
+        !(await pathExists(wtPath));
     } else if (selectedRunner) {
       if (!branch)
         branch =
@@ -2892,7 +2901,9 @@ export async function handleCreateSessionMessage(
       // workspace's sessions so downloads persist across them); a
       // repo-less ask session only needs somewhere for bash to stand,
       // and carries no tool that can write to it.
-      wtPath = ensureScratchDir(workspace?.id || createPlanWorkspaceId(bksId));
+      wtPath = await ensureScratchDir(
+        workspace?.id || createPlanWorkspaceId(bksId),
+      );
     } else if (isAsk) {
       // Ask sessions read the repo's pinned ask checkout (default
       // branch, detached) — never the mutable main checkout, whose
@@ -3041,7 +3052,7 @@ export async function handleCreateSessionMessage(
         ...(sessionBranch ? { branch: sessionBranch } : {}),
         // Only an isolated worktree is owned. A shared main or ask
         // checkout is used by every other session there too.
-        ...(ownedWorktree(wtPath) ? { worktreeDir: wtPath } : {}),
+        ...((await ownedWorktree(wtPath)) ? { worktreeDir: wtPath } : {}),
       });
       workspace = await getWorkspace(plannedWorkspaceId);
       if (!workspace)
@@ -3052,7 +3063,7 @@ export async function handleCreateSessionMessage(
         !isAsk &&
         !isScratch &&
         !workspace.worktreeDir &&
-        ownedWorktree(wtPath)
+        (await ownedWorktree(wtPath))
       )
         workspace = await materializeWorkspaceWorktree(workspace.id, {
           repo: repo.id,
@@ -3229,13 +3240,13 @@ export async function handleCreateSessionMessage(
         ? undefined
         : selectedRunner
           ? repo.id
-          : repoForPathOrNull(wtPath)?.id,
+          : (await repoForPathOrNull(wtPath))?.id,
       memoryRepoIds: [repo.id],
       ...(attachRepoIds.length
         ? { attachRepos: { repos: attachRepoIds, branch: attachBranch } }
         : {}),
       stackedOn: stackBase
-        ? { repo: repoForPath(wtPath).id, branch: stackBase }
+        ? { repo: (await repoForPath(wtPath)).id, branch: stackBase }
         : undefined,
       workspaceId: workspace
         ? workspace.id
@@ -3370,7 +3381,7 @@ export async function handleCreateSessionMessage(
     }
     // Setup failed before anything was persisted or announced. Every socket
     // that replayed this create receives the same terminal response.
-    clearCreatePlan(bksId);
+    await clearCreatePlan(bksId);
     failCreate(e.message || String(e));
     return;
   }

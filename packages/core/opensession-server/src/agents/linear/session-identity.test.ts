@@ -89,8 +89,7 @@ let thoughtStarted: (() => void) | null = null;
 mock.module("../../server/worktree", () => ({
   repoForPathOrNull: (cwd: string) =>
     cwd.startsWith(`${worktreeRoot}/`) ? prRepo : undefined,
-  worktreeHeadBranch: () => headBranch,
-  worktreeHeadBranchAsync: async () => headBranch,
+  worktreeHeadBranch: async () => headBranch,
   worktreeDirNameForBranch: (branch: string) => branch.replace(/[/\\]+/g, "~"),
   createWorktree: async (branch: string) => {
     const gate = createGate;
