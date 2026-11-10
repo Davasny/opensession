@@ -1,4 +1,5 @@
 import type { useSessionModelWorkflowController } from "../../hooks/useSessionModelWorkflowController";
+import { HuddleButton, huddleTarget } from "../huddle/HuddleButton";
 import type React from "react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { createPortal } from "react-dom";
@@ -28,6 +29,7 @@ import type { SessionSocketSend } from "../../hooks/useSessionSocket";
 import type { WorkflowRunSnapshot } from "../../../server/workflow-types";
 import { DiffPanel, type SessionDiffState } from "../DiffPanel";
 import { SessionHeader } from "../session/SessionHeader";
+import { SidePanelToggle } from "../session/SidePanelToggle";
 import { ArchivedSessionItems } from "../ArchivedSessionItems";
 import { ModelMenuRow } from "../ModelMenuRow";
 import { PortalsPage } from "../PortalsPanel";
@@ -48,6 +50,8 @@ import { WorkflowPanel } from "../WorkflowPanel";
 import { WorkspaceSummary, WorkspaceSummaryBody } from "../WorkspaceSummary";
 import { CollaboratorsSubmenu } from "../WorkspaceCollaborators";
 import { WorkspaceWaiting } from "./busy-indicators";
+import { ThreadsDetailsSection } from "../threads/ThreadsPanel";
+import { CoordinatorOverflowItems } from "../threads/CoordinatorMenuItems";
 import {
   IconArchive,
   IconChevronRight,
@@ -64,7 +68,6 @@ import {
   IconPlus,
   IconPullRequest,
   IconRobot,
-  IconSidebarRight,
   IconTrash,
 } from "../icons";
 import { KeepInSidebarIcon } from "../sidebar/KeepInSidebarMark";
@@ -993,6 +996,12 @@ export function SessionViewerChrome({
                   {!workspaceScopedMenu && spinOffAction}
                   {!workspaceScopedMenu && transcriptActions}
                   {portalsAction}
+                  {session.source === "opensession" && !session.desk && (
+                    <CoordinatorOverflowItems
+                      session={session}
+                      close={() => setOverflowOpen(false)}
+                    />
+                  )}
                   {moveToSandboxAction}
                   {branchAction && (
                     <>
@@ -1067,6 +1076,9 @@ export function SessionViewerChrome({
 					    standing behind you. You know you're here; this row is for
 					    the people you can't see. (The native app has always
 					    filtered its own name out — this matches it.) */}
+                  {!session.desk && !isPhone && (
+                    <HuddleButton target={huddleTarget(session)} />
+                  )}
                   {!isPhone && others.length > 0 && (
                     <div
                       className={VIEWER_PRESENCE}
@@ -1155,9 +1167,9 @@ export function SessionViewerChrome({
                     )}
                   {/* The compact Workspace summary keeps the card's quiet row grammar.
 					    Detailed comments, files and tools open in the full side panel. */}
-                  {/* The card stays toggleable with the side panel open: the
-					    panel holds tabs (Changes, Review, Browser, …), the card is
-					    the workspace at a glance, and they no longer overlap. */}
+                  {/* The card steps down while the side panel is open and
+					    returns when it closes; the button still opens it as an
+					    overlay meanwhile. */}
                   {!isPhone && hasRepoWork && (
                     <WorkspaceSummary
                       session={session}
@@ -1199,29 +1211,11 @@ export function SessionViewerChrome({
                       hasRoom={summaryHasRoom}
                     />
                   )}
-                  {!isPhone && panelAvailable && (
-                    <Tooltip label="Toggle workspace panel">
-                      <Button
-                        variant="ghost"
-                        size="md"
-                        // No height/width overrides: the primitive's icon-only box is
-                        // already the 32px square the ⋯ and share buttons use.
-                        // text-dim, not text-faint: the share and ⋯ buttons beside it
-                        // are dim, and a lighter ink made this read as disabled.
-                        // No negative margin after the ⋯ either: that -4px pull dated
-                        // from when both were narrow padded controls, and now that all
-                        // three are equal squares it just made this gap 4px where the
-                        // share → ⋯ one is the row's 8px.
-                        className="rounded-control text-dim hover:bg-hover hover:text-fg phone:order-2 phone:h-[38px] phone:min-h-[38px] phone:w-[38px] phone:bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] phone:text-accent"
-                        onClick={() => setActivePanelOpen(!activePanelOpen)}
-                        aria-label="Toggle side panel"
-                        // Iconic sidebar-right glyph — reads as "right side panel".
-                        // Passed as `icon` (not children) so the primitive uses its
-                        // icon-only square; as a child it counts as a label and gets
-                        // the text button's px-3, which made it 50px wide.
-                        icon={<IconSidebarRight size={22} />}
-                      />
-                    </Tooltip>
+                  {/* Open, the panel's tab strip carries this toggle, so it
+					    stays in the window's top-right corner instead of moving
+					    to the main area's edge. */}
+                  {!isPhone && panelAvailable && !activePanelOpen && (
+                    <SidePanelToggle onClick={() => setActivePanelOpen(true)} />
                   )}
                 </>
               }
@@ -1388,6 +1382,12 @@ export function SessionViewerChrome({
                           </div>
                         </div>
                         <div className={INFO_CONTENT}>
+                          <ThreadsDetailsSection
+                            session={session}
+                            onOpenSession={openSession}
+                            onOpenAsset={openAssetFromTranscript}
+                            onLeave={() => setInfoPageOpen(false)}
+                          />
                           <div className={INFO_SUMMARY_CARD}>
                             {session.sandbox && (
                               <div className="flex min-h-11 items-center rounded-2xl bg-panel px-5 py-2">

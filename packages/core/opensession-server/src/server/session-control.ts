@@ -122,6 +122,8 @@ export interface CreateSessionOpts {
   speed?: SessionSpeed; // unset falls back to fastMode; "ultrafast" needs GPT-6 Astra and a Pro $500 login
   /** Pstack mode persisted on the session: the pstack skill family loads for its runs. */
   pstackMode?: boolean;
+  /** Start in coordinator mode (coordinator.ts). */
+  coordinator?: boolean;
   /** Composer image attachments as `data:image/...;base64,` URLs. */
   images?: string[];
   /** Raw composer file references, already staged through `/api/upload`. */

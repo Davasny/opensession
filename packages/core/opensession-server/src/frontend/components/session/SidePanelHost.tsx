@@ -35,6 +35,7 @@ import {
   IconExpand,
   IconFile,
   IconGlobe,
+  IconMessages,
   IconPlus,
   IconPullRequest,
   IconStack,
@@ -42,6 +43,7 @@ import {
   IconX,
 } from "../icons";
 import { ShellPanel } from "../TerminalPanel";
+import { SidePanelToggle } from "./SidePanelToggle";
 
 interface SidePanelHostProps {
   hidden: boolean;
@@ -76,12 +78,24 @@ interface SidePanelHostProps {
   browser?: ReactNode;
   portals: ReactNode;
   agents: ReactNode;
+  /** The Threads tab's page, for a conversation with threads. */
+  threads?: ReactNode;
+  /** A coordinating session's Threads tab cannot be closed. */
+  pinnedThreads?: boolean;
 }
 
 const ICON = 15;
 
+/** The new-tab page is a short list of names, so the panel stays at its
+ *  narrowest there whatever width the tabs were dragged to. */
+const NEW_TAB_STYLE: CSSProperties & { "--panel-w": string } = {
+  "--panel-w": "320px",
+};
+
 function tabIcon(tab: SidePanelTab) {
   switch (tab) {
+    case "threads":
+      return <IconMessages size={ICON} className="shrink-0" />;
     case "changes":
       return <IconFile size={ICON} className="shrink-0" />;
     case "review":
@@ -97,6 +111,7 @@ function tabIcon(tab: SidePanelTab) {
 }
 
 const TAB_LABELS: Record<SidePanelTab, string> = {
+  threads: "Threads",
   changes: "Changes",
   review: "Review",
   browser: "Browser",
@@ -142,6 +157,8 @@ export function SidePanelHost({
   browser,
   portals,
   agents,
+  threads,
+  pinnedThreads,
 }: SidePanelHostProps) {
   const dropHover = useSyncExternalStore(
     subscribeSidePanel,
@@ -203,17 +220,20 @@ export function SidePanelHost({
                   <span className="truncate @max-[380px]:hidden">{name}</span>
                   {count(tab)}
                 </button>
-                <button
-                  type="button"
-                  className={cn(
-                    PANEL_TAB_CLOSE,
-                    active && PANEL_TAB_CLOSE_ACTIVE,
-                  )}
-                  aria-label={`Close ${name}`}
-                  onClick={() => onCloseTab(tab)}
-                >
-                  <IconX size={13} dense aria-hidden="true" />
-                </button>
+                {/* A coordinator's Threads tab stays: it is the work. */}
+                {!(tab === "threads" && pinnedThreads) && (
+                  <button
+                    type="button"
+                    className={cn(
+                      PANEL_TAB_CLOSE,
+                      active && PANEL_TAB_CLOSE_ACTIVE,
+                    )}
+                    aria-label={`Close ${name}`}
+                    onClick={() => onCloseTab(tab)}
+                  >
+                    <IconX size={13} dense aria-hidden="true" />
+                  </button>
+                )}
               </ContextMenu.Trigger>
               <ContextMenu.Popup className="min-w-[220px]" finalFocus={false}>
                 {onMoveToMain && isDockable(tab) && (
@@ -266,6 +286,9 @@ export function SidePanelHost({
           </button>
         </Tooltip>
       )}
+      {/* The header's toggle moves here while the panel is open, so it keeps
+          its top-right spot instead of riding the main area's edge. */}
+      <SidePanelToggle inPanel onClick={() => onOpenChange(false)} />
     </div>
   );
 
@@ -295,8 +318,11 @@ export function SidePanelHost({
         <div className={PANEL_OVERLAY} onClick={() => onOpenChange(false)} />
       )}
       {!isPhone && available && open ? (
-        <div className={cn(PANEL_SHELL, entering && PANEL_ENTER)} style={style}>
-          {resizeHandle}
+        <div
+          className={cn(PANEL_SHELL, entering && PANEL_ENTER)}
+          style={current === "new" ? NEW_TAB_STYLE : style}
+        >
+          {current !== "new" && resizeHandle}
           {dropHover && (
             <div className={PANEL_DROP_PREVIEW} aria-hidden="true" />
           )}
@@ -311,17 +337,19 @@ export function SidePanelHost({
           >
             {current === "new"
               ? newTabPage
-              : current === "changes"
-                ? changes
-                : current === "review"
-                  ? review
-                  : current === "browser"
-                    ? browser
-                    : current === "portals"
-                      ? portals
-                      : current === "agents"
-                        ? agents
-                        : null}
+              : current === "threads"
+                ? threads
+                : current === "changes"
+                  ? changes
+                  : current === "review"
+                    ? review
+                    : current === "browser"
+                      ? browser
+                      : current === "portals"
+                        ? portals
+                        : current === "agents"
+                          ? agents
+                          : null}
             {/* Keep terminals mounted while switching panel tabs so their PTYs
                 survive. Closing the panel or its Terminal tab ends them. */}
             {hasWorkspace && terminalMounted && tabs.includes("terminal") && (

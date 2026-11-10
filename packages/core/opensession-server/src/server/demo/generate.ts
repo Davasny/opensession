@@ -28,6 +28,9 @@ import {
   DEMO_RENDER_ASSET,
   DEMO_RENDER_SESSION_ID,
   DEMO_SCRIPT_RENDER_SESSION_ID,
+  DEMO_SPACE_SESSION_ID,
+  DEMO_SPACE_STATUSES,
+  DEMO_SPACE_WORKSPACE_ID,
   DEMO_REPO_FILES,
   DEMO_REPO_ID,
   DEMO_REPO_WT_PREFIX,
@@ -43,6 +46,7 @@ import {
 import { encodePng, type PngRect, type Rgb } from "./png";
 import { MONITOR_FIT_PAGE } from "./monitor-fit-page";
 import { injectBootstrap } from "../html-render/document";
+import { ensureScratchDir } from "../worktree";
 
 export interface DemoGenerateOpts {
   /**
@@ -282,7 +286,13 @@ export async function generateDemoData(
 
   // Sessions + their engine transcripts (claude-shape jsonl; the server
   // lazily imports these into transcripts.db on first watch).
-  const sessions = demoSessions({ now, worktreeDir, repoDir, mediaDir });
+  const sessions = demoSessions({
+    now,
+    worktreeDir,
+    repoDir,
+    mediaDir,
+    spaceScratchDir: await ensureScratchDir(DEMO_SPACE_WORKSPACE_ID),
+  });
   for (const s of sessions) {
     await writeJson(join(sessionsDir, `${s.id}.json`), s.file);
     if (s.engineSessionId && s.lines.length) {
@@ -309,6 +319,31 @@ export async function generateDemoData(
   );
   await mkdir(dirname(scriptRenderPath), { recursive: true });
   await writeFile(scriptRenderPath, injectBootstrap(MONITOR_FIT_PAGE));
+
+  // The demo space: two threads in fixed lanes, and the summary its
+  // coordinator is told to keep (server/coordinator.ts).
+  await writeJson(
+    join(sessionsDir, "status-overrides.json"),
+    DEMO_SPACE_STATUSES,
+  );
+  await writeText(
+    join(stateDir("assets"), DEMO_SPACE_SESSION_ID, "coordinator-summary.md"),
+    [
+      "# Spaces v1 launch",
+      "",
+      "Goal: the todo app is ready for launch.",
+      "",
+      "| Thread | State |",
+      "| --- | --- |",
+      "| Fix the flaky upload retry | PR open, checks passing |",
+      "| Add empty-state copy | Merged |",
+      "| Choose the due-date picker | Waiting on a decision |",
+      "| Profile the slow list render | Cause found |",
+      "",
+      "Open question: native date input or calendar popover?",
+      "",
+    ].join("\n"),
+  );
 
   if (homeStores) {
     // Repo registry first: everything below (and every repo-derived UI

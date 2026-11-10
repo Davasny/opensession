@@ -35,11 +35,12 @@ Alongside it sits a second, independent axis — _where_ a session's work happen
 
 And a third — _what starts or coordinates work when you are not there_:
 
-| Concept        | Trigger                                    | Memory across runs                                 |
-| -------------- | ------------------------------------------ | -------------------------------------------------- |
-| **Automation** | a cron schedule or an external event       | none — every run is a fresh session                |
-| **Goal**       | its own self-set wake time                 | yes — wakes resume one session over days           |
-| **Workflow**   | a script fanning out agents and tool calls | successful calls replay when a workflow is resumed |
+| Concept         | Trigger                                         | Memory across runs                                 |
+| --------------- | ----------------------------------------------- | -------------------------------------------------- |
+| **Automation**  | a cron schedule or an external event            | none — every run is a fresh session                |
+| **Goal**        | its own self-set wake time                      | yes — wakes resume one session over days           |
+| **Workflow**    | a script fanning out agents and tool calls      | successful calls replay when a workflow is resumed |
+| **Coordinator** | people talking to a session in coordinator mode | yes — one conversation that spawns threads         |
 
 ## Projects
 
@@ -115,6 +116,17 @@ runs can use dedicated worktrees while remaining in the same workspace.
 A workspace belongs to whoever created it, and its sidebar row files into their
 lanes. Add teammates as collaborators from the info panel and the row files into
 their sidebar the same way. Each one is notified once, when they are added.
+
+A workspace can work on more than one branch. Its worktree's branch is the
+primary one, which shared sessions join; a stacked session or a coordinator's
+thread on its own branch adds that branch to the workspace's list. The
+workspace then answers for each branch's PR, its Review can switch between
+them, and the tab strip's **+** menu can start a session on any of them.
+
+A workspace also has settings beyond its name: an optional **goal** (what the
+work is for), its project before it has a checkout, and who it is shared with.
+Open them from the composer's **+** menu (Workspace settings) or the Threads
+panel.
 
 A workspace with no worktree is fine too — that is what an ask-style workspace
 looks like, or a feed workspace for a ticket where there is nothing to check
@@ -267,6 +279,70 @@ A goal has a mode like a session: `ask` for research and measurement, `code` for
 a persistent worktree across wakes. When the shared-checkout exception is
 active, a code goal instead works directly on the default branch, without a
 feature branch or pull request.
+
+## Coordinator mode
+
+Coordinator mode is a per-session setting, switched from the composer's **+**
+menu (or **More options** when starting a session), like pstack mode. While it
+is on, the agent hands self-contained work to other sessions, called
+**threads**, instead of doing it itself: it starts them with `spawn_task`,
+waits on them instead of polling, reports back what each found or changed,
+and keeps a `coordinator-summary.md` asset current. Each turn carries that
+standing briefing, plus the workspace's goal when it has one. A session with
+a checkout may read the code to plan, but its changes still go to threads; a
+Scratch session has no checkout at all. Turning the mode off makes the
+session ordinary again from its next message, and nothing about its repo or
+checkout changes.
+
+Threads are ordinary child sessions in the coordinator's workspace. They do
+not inherit the mode; they do the work, each on its own branch, which the
+workspace adds to its branch list. A coordinating workspace carries a small
+mark in the sidebar.
+
+Any conversation that has started threads shows them: each as a live card in
+the transcript with what it is doing right now, and all of them in the side
+panel's **Threads** tab (the top of the details page on a phone), grouped by
+where they stand: blocked, ready to ship, working, idle, shipped. Clicking a
+card opens the thread beside the conversation, where you can read it and
+message its agent without leaving. Coming back after the threads moved, a
+**Since you were last here** card above the composer gives a short written
+catch-up. A coordinating session's panel opens on the Threads tab.
+
+Workspaces made as "spaces" before coordinator mode was a setting keep their
+root session coordinating until someone switches it off.
+
+## Message comments and reactions
+
+Any message in a conversation (a person's, the agent's, a thread card) can be
+reacted to with an emoji or commented on as a whole. A comment opens a side
+conversation among people beside the transcript; the message then shows its
+reactions and comment count under it. The agent does not read these comments
+unless someone mentions `@agent` in one. Comments on a selected passage of a
+message work as before.
+
+## Huddles
+
+A huddle is a voice call that lives inside a workspace or a standalone
+session. Start it with the headphones in the header; while anyone is inside,
+the button turns into **Join huddle** with who is there. The call follows you
+as a small card in the corner while you move around, with mute, screen
+sharing, chat, invite, notes, and leave. An invite shows the teammate a toast
+with **Join** while they have the app in front of them, and also lands in
+their notifications, so it reaches a background window, the desktop app, or
+their phone.
+
+Anyone on a desktop browser or the desktop app can **share their screen**;
+everyone else sees it in the card and can open it large. When several people
+share, the card lets you pick whose screen to watch. The **chat** is for a
+link, a command, or a word from someone who can't talk; it lasts as long as
+the huddle, and the chat button counts what you haven't read.
+
+Audio and screens go browser to browser; the server only connects people and
+relays the chat. With **Notes** on, each person's microphone is transcribed,
+chat messages are added to the transcript, and about half a minute after the
+last person leaves (time for the last clips to be transcribed) a summary is
+posted as a team note on the session the huddle started from. If nothing was
+transcribed, the note says so.
 
 ## Workflows
 

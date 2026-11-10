@@ -265,6 +265,14 @@ the current one under `~/.opensession/releases/`, and swaps the `src` symlink
 atomically. With a service installed it performs a health-gated restart; if the
 new release does not become healthy, it repoints `src` to the previous release
 and restarts it. Without a service, restart the foreground server yourself.
+Since 0.4.80 this restart is part of `update`; earlier releases only swapped
+the symlink.
+
+On macOS, `restart` replaces the server's launchd job, which ends every
+process the server started. When `opensession update`, `restart`, `stop`, or
+`bind` runs from a session's shell, the CLI therefore hands the command to a
+one-shot launchd job (`dev.opensession.cli-handoff`) that outlives the
+server, and returns. Its output goes to `~/.opensession/logs/cli-handoff.log`.
 The previous release stays on disk. `OPENSESSION_RELEASE_BASE` overrides the
 release base URL; `--channel <url>` points at a specific tarball.
 
@@ -390,7 +398,7 @@ credentials its setup page marks as required. Common operator-facing variables:
 | `OPENSESSION_CLAUDE_ACCOUNTS_PATH`               | `~/.opensession/claude-accounts.json` | Claude account store override                                                   |
 | `OPENSESSION_PI_CONFIG`                          | `~/.opensession/pi.json`              | Pi engine config path override (primarily a test/verification seam)             |
 | `OPENSESSION_MODEL_PROVIDERS_CONFIG`             | `~/.opensession/model-providers.json` | provider API-key config path override (primarily a test/verification seam)      |
-| `OPENSESSION_MODEL`                              | `claude-fable-5-1`                    | default model, below the persisted UI override                                  |
+| `OPENSESSION_MODEL`                              | `claude-fable-5-2`                    | default model, below the persisted UI override                                  |
 | `OPENSESSION_FALLBACK_MODEL`                     | `claude-opus-5`                       | global fallback model; `none` disables                                          |
 | `OPENSESSION_HAIKU_FALLBACK_MODEL`               | `gpt-5.6-luna`                        | OpenAI fallback for exhausted Haiku runs and derived one-shots; `none` disables |
 | `OPENSESSION_MCP_CONFIG`                         | `<checkout>/mcp-config.json`          | MCP config path override                                                        |
@@ -466,7 +474,7 @@ GitHub bot identities are also injected into the SPA bootstrap.
 
 ## 6. Model capacity
 
-The default `claude-fable-5-1` model needs a Claude subscription account. Mint a
+The default `claude-fable-5-2` model needs a Claude subscription account. Mint a
 token on a Claude Max login:
 
 ```sh

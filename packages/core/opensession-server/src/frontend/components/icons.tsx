@@ -156,6 +156,19 @@ export function IconKeyboard(p: IconProps) {
   );
 }
 
+/** Coordinator mode: one conversation handing work out to several. */
+export function IconDelegate(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle {...stroke} cx="12" cy="6.25" r="2.25" />
+      <circle {...stroke} cx="5.75" cy="17.75" r="2" />
+      <circle {...stroke} cx="12" cy="17.75" r="2" />
+      <circle {...stroke} cx="18.25" cy="17.75" r="2" />
+      <path {...stroke} d="M12 8.5V15.75M10.5 8L6.75 15.9M13.5 8L17.25 15.9" />
+    </Svg>
+  );
+}
+
 export function IconChecklist(p: IconProps) {
   return (
     <Svg {...p}>
@@ -1348,6 +1361,58 @@ export function IconMessage(p: IconProps) {
   );
 }
 
+export function IconReactionAdd(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path {...stroke} d="M19.1 12.75A7.25 7.25 0 1 1 11.25 4.79" />
+      <path {...stroke} d="M9 14.25c.75.9 1.8 1.5 3 1.5s2.25-.6 3-1.5" />
+      <path {...stroke} d="M9.25 10V9.75M14.75 10V9.75" />
+      <path {...stroke} d="M18.25 3.75v5M15.75 6.25h5" />
+    </Svg>
+  );
+}
+
+export function IconHeadphones(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path {...stroke} d="M4.75 16.25V12a7.25 7.25 0 0 1 14.5 0v4.25" />
+      <path
+        {...stroke}
+        d="M4.75 14.75c0-.83.67-1.5 1.5-1.5h1c.83 0 1.5.67 1.5 1.5v3c0 .83-.67 1.5-1.5 1.5h-1c-.83 0-1.5-.67-1.5-1.5v-3ZM15.25 14.75c0-.83.67-1.5 1.5-1.5h1c.83 0 1.5.67 1.5 1.5v3c0 .83-.67 1.5-1.5 1.5h-1c-.83 0-1.5-.67-1.5-1.5v-3Z"
+      />
+    </Svg>
+  );
+}
+
+export function IconScreenShare(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path
+        {...stroke}
+        d="M4.75 7.75c0-1.1.9-2 2-2h10.5c1.1 0 2 .9 2 2v5.5c0 1.1-.9 2-2 2H6.75c-1.1 0-2-.9-2-2v-5.5Z"
+      />
+      <path {...stroke} d="M9.75 19.25h4.5M12 15.25v4" />
+      <path {...stroke} d="M12 12.75v-4.5M9.75 10.25 12 8l2.25 2.25" />
+    </Svg>
+  );
+}
+
+export function IconMicOff(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path
+        {...stroke}
+        d="M15.25 10.5V8a3.25 3.25 0 0 0-6.17-1.43M8.75 10.25V12a3.25 3.25 0 0 0 5.4 2.44"
+      />
+      <path
+        {...stroke}
+        d="M18.25 11.75V12c0 .9-.19 1.76-.53 2.53M5.75 11.75V12a6.25 6.25 0 0 0 10.2 4.84"
+      />
+      <path {...stroke} d="M12 18.25v1M4.75 4.75l14.5 14.5" />
+    </Svg>
+  );
+}
+
 export function IconMessages(p: IconProps) {
   return (
     <Svg {...p}>
@@ -1386,6 +1451,25 @@ export function IconMoon(p: IconProps) {
       <path
         {...stroke}
         d="M18.25 15.03C17.3 15.49 16.24 15.75 15.11 15.75C11.13 15.75 7.9 12.52 7.9 8.54C7.9 7.16 8.29 5.87 8.96 4.77C6.48 5.97 4.75 8.52 4.75 11.47C4.75 15.58 8.08 18.9 12.18 18.9C14.79 18.9 17.08 17.56 18.25 15.03Z"
+      />
+    </Svg>
+  );
+}
+
+export function IconSpeaker(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path
+        {...stroke}
+        d="M4.75 9.75V14.25C4.75 14.8 5.2 15.25 5.75 15.25H8.25L12.25 18.75V5.25L8.25 8.75H5.75C5.2 8.75 4.75 9.2 4.75 9.75Z"
+      />
+      <path
+        {...stroke}
+        d="M15.25 9.75C15.88 10.37 16.25 11.14 16.25 12C16.25 12.86 15.88 13.63 15.25 14.25"
+      />
+      <path
+        {...stroke}
+        d="M17.75 7.25C18.99 8.5 19.75 10.17 19.75 12C19.75 13.83 18.99 15.5 17.75 16.75"
       />
     </Svg>
   );
@@ -1494,6 +1578,19 @@ export function IconCall(p: IconProps) {
       <path
         {...stroke}
         d="M7.4 4.75c.5 0 .95.3 1.14.76l1.12 2.7c.17.41.1.88-.19 1.22l-1.3 1.53a11.3 11.3 0 0 0 4.87 4.87l1.53-1.3c.34-.29.81-.36 1.22-.19l2.7 1.12c.46.19.76.64.76 1.14v1.9c0 .93-.8 1.68-1.73 1.6C10.53 19.36 4.64 13.47 3.9 6.48A1.6 1.6 0 0 1 5.5 4.75h1.9Z"
+      />
+    </Svg>
+  );
+}
+
+// Voice chat: five level bars, tallest in the middle, as distinct from
+// IconMic's dictation and IconCall's live handset.
+export function IconVoice(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path
+        {...stroke}
+        d="M4.75 10.5v3M8.375 7.75v8.5M12 4.75v14.5M15.625 7.75v8.5M19.25 10.5v3"
       />
     </Svg>
   );

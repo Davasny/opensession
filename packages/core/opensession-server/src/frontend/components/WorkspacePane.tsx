@@ -1,4 +1,9 @@
 import { AGENT_NAME } from "../lib/brand";
+import {
+  workspaceBranchList,
+  type WorkspaceBranchRef,
+} from "../lib/pr-workspace";
+import { OptionSelect } from "../ui/select";
 import React, {
   useCallback,
   useEffect,
@@ -45,7 +50,6 @@ import {
   IconLink,
   IconPencil,
   IconPlus,
-  IconSidebarRight,
   IconTrash,
 } from "./icons";
 import { Button } from "../ui/button";
@@ -54,6 +58,7 @@ import { Menu, MENU_ICON } from "../ui/menu";
 import { CopyCheck, useCopy } from "../ui/copy";
 import { toast } from "../ui/toast";
 import { Tooltip } from "../ui/tooltip";
+import { SidePanelToggle } from "./session/SidePanelToggle";
 import { OverflowFadeText } from "../ui/overflow-fade-text";
 import { cn } from "../ui/cn";
 import {
@@ -64,6 +69,7 @@ import {
 } from "../ui/top-bar";
 import {
   PANEL_BODY,
+  PANEL_TABS,
   PANEL_OVERLAY,
   PANEL_ENTER,
   PANEL_SHELL,
@@ -458,15 +464,28 @@ export function WorkspacePane({
   // workspace shows before its sessions have loaded, which is most of the
   // time a PR link is followed cold — and the workspace's branch is the
   // first PR filed here, not the one the link was for.
+  //
+  // A workspace with several branches (a coordinator's threads, stacked
+  // tabs) reviews the primary unless the picker in the header chose another.
   const focusedBranch =
     focusPr?.workspaceId === workspace.id ? focusPr?.branch : undefined;
+  const branchList = workspaceBranchList(workspace);
+  const [pickedBranch, setPickedBranch] = useState<{
+    workspaceId: string;
+    key: string;
+  } | null>(null);
+  const branchKey = (b: WorkspaceBranchRef) => `${b.repo}:${b.branch}`;
+  const shownBranch =
+    (pickedBranch?.workspaceId === workspace.id
+      ? branchList.find((b) => branchKey(b) === pickedBranch.key)
+      : undefined) ?? branchList[0];
   const reviewTarget = focusedBranch
     ? {
         repo: focusPr?.repo || workspace.repo || "repository",
         branch: focusedBranch,
       }
-    : workspace.branch
-      ? { repo: workspace.repo || "repository", branch: workspace.branch }
+    : shownBranch
+      ? { repo: shownBranch.repo, branch: shownBranch.branch }
       : null;
   useEffect(
     () => setReviewPage("files"),
@@ -604,6 +623,11 @@ export function WorkspacePane({
         style={sidePanel.style}
       >
         {sidePanel.resizeHandle}
+        {/* The header's toggle moves here while the panel is open, so it
+            keeps its top-right spot instead of riding the main area's edge. */}
+        <div className={cn(PANEL_TABS, "justify-end")}>
+          <SidePanelToggle inPanel onClick={() => setPanelOpen(false)} />
+        </div>
         <div className={PANEL_BODY}>
           <div className="px-1">
             <WorkspaceInfo
@@ -821,6 +845,21 @@ export function WorkspacePane({
           {tab === "review" && reviewTarget && (
             <div ref={setReviewSessionActionTarget} className="contents" />
           )}
+          {tab === "review" && !focusedBranch && branchList.length > 1 && (
+            <OptionSelect
+              label="Branch to review"
+              size="sm"
+              className="max-w-[240px]"
+              value={shownBranch ? branchKey(shownBranch) : ""}
+              options={branchList.map((b) => ({
+                value: branchKey(b),
+                label: b.branch,
+              }))}
+              onChange={(key) =>
+                setPickedBranch({ workspaceId: workspace.id, key })
+              }
+            />
+          )}
           {showWorkspaceNewSessionAction && (
             <Tooltip label="New tab in this workspace">
               <Button
@@ -870,16 +909,7 @@ export function WorkspacePane({
             hasRoom={reviewSummaryHasRoom}
           />
         )}
-        <Tooltip label="Toggle side panel">
-          <Button
-            variant="ghost"
-            size="md"
-            className="rounded-control text-dim hover:bg-hover hover:text-fg"
-            onClick={() => setPanelOpen(!panelOpen)}
-            aria-label="Toggle side panel"
-            icon={<IconSidebarRight size={22} />}
-          />
-        </Tooltip>
+        {!panelOpen && <SidePanelToggle onClick={() => setPanelOpen(true)} />}
       </TopBarActions>
     </TopBar>
   );

@@ -45,6 +45,7 @@ import { ReviewAskerFace } from "../ReviewAskerFace";
 import { UserAvatar } from "../UserAvatar";
 import { IconArchive, IconMoon, IconPin, IconTrash } from "../icons";
 import { AutoCreatedMark } from "./AutoCreatedMark";
+import { CoordinatorMark, rowCoordinates } from "./CoordinatorMark";
 import {
   RunTicker,
   SnoozeBadge,
@@ -55,6 +56,7 @@ import { KeepInSidebarMark } from "./KeepInSidebarMark";
 import { mentionLabel } from "../../lib/mentions";
 import { OriginMark } from "./OriginMark";
 import { SIDEBAR_ROW, SIDEBAR_ROW_TITLE } from "./SidebarItem";
+import { SoundMark } from "./SoundMark";
 import { WorkspaceDraftIndicator } from "./WorkspaceDraftIndicator";
 
 export type WorkspaceRowEditing = {
@@ -473,6 +475,8 @@ export function WorkspaceRow({
             a Slack thread, a Linear issue. Same slot and ink as the mark
             above (SidebarItem carries the session-row half). */}
         {!editing && <OriginMark source={rowOriginSource(row)} />}
+        {!editing && rowCoordinates(row) && <CoordinatorMark />}
+        {!editing && <SoundMark row={row} />}
         {row.mention &&
           !editing && (
             // Same badge as a session row (SidebarItem): the face of whoever

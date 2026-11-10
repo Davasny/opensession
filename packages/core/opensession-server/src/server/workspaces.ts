@@ -52,6 +52,8 @@ function store() {
 
 /** A composer, not a document store. Mirrors MAX_DRAFT_LENGTH in drafts.ts. */
 const MAX_DRAFT_LENGTH = 32_000;
+/** A workspace's goal is a paragraph, not a brief. */
+export const MAX_GOAL_LENGTH = 2_000;
 
 /** An unsent composer prompt parked on a workspace before any session exists. */
 export interface WorkspaceDraft {
@@ -115,6 +117,59 @@ export interface Workspace {
   /** Ship-mode choice made when the workspace was created (ship-mode.ts).
    *  Absent = the repository's `publicationMode`. New sessions inherit it. */
   shipMode?: "pull-request" | "direct";
+  /**
+   * Legacy: created as a "space" before coordinator mode was a per-session
+   * setting. Its root session coordinates until switched off
+   * (coordinator.ts). Nothing sets it any more.
+   */
+  space?: true;
+  /** What the workspace's work is for. A coordinating session keeps its
+   *  threads pointed at it (coordinator.ts). Absent = no goal set. */
+  goal?: string;
+  /**
+   * Branches its sessions work on besides `branch`, oldest first: a
+   * coordinator's threads, a stacked tab. `branch` and `worktreeDir` stay the
+   * primary checkout that share-mode tabs join; these let the workspace answer
+   * for each branch's PR too. A shipped branch stays listed.
+   */
+  branches?: WorkspaceBranch[];
+}
+
+/** One more branch a workspace's sessions work on. */
+export interface WorkspaceBranch {
+  repo: string;
+  branch: string;
+  worktreeDir?: string;
+  /** ISO time it was added. */
+  at: string;
+}
+
+/** Enough for a long-running coordinator; the oldest drop off past it. */
+const MAX_WORKSPACE_BRANCHES = 100;
+
+/** Every branch of a workspace, the primary first. */
+export function workspaceBranchList(
+  workspace: Pick<Workspace, "repo" | "branch" | "worktreeDir" | "branches">,
+): Array<{ repo?: string; branch: string; worktreeDir?: string }> {
+  const primary = workspace.branch
+    ? [
+        {
+          repo: workspace.repo,
+          branch: workspace.branch,
+          worktreeDir: workspace.worktreeDir,
+        },
+      ]
+    : [];
+  return [
+    ...primary,
+    ...(workspace.branches ?? []).filter(
+      (b) =>
+        !(
+          b.branch === workspace.branch &&
+          (b.repo || workspace.repo) === workspace.repo
+        ),
+    ),
+  ];
 }
 
 /** A teammate added to a workspace, keyed by picker first name. */
@@ -418,6 +473,7 @@ export async function createWorkspace(input: {
   worktreeDir?: string;
   attachedRepos?: AttachedRepo[];
   draft?: WorkspaceDraft;
+  goal?: string;
   /** Reuse a caller-supplied id (e.g. migration wrapping an orphan session). */
   id?: string;
   createdAt?: string;
@@ -441,6 +497,9 @@ export async function createWorkspace(input: {
     ...(input.worktreeDir ? { worktreeDir: input.worktreeDir } : {}),
     ...(input.attachedRepos && input.attachedRepos.length
       ? { attachedRepos: input.attachedRepos }
+      : {}),
+    ...(input.goal?.trim()
+      ? { goal: input.goal.trim().slice(0, MAX_GOAL_LENGTH) }
       : {}),
     ...(input.draft
       ? {
@@ -566,6 +625,31 @@ export function materializeWorkspaceWorktree(
   });
 }
 
+/**
+ * Add a branch one of the workspace's sessions works on. A no-op for its
+ * primary branch or one already listed. Callers record after the create
+ * has made the workspace's first checkout its primary.
+ */
+export function recordWorkspaceBranch(
+  id: string,
+  next: { repo: string; branch: string; worktreeDir?: string },
+): Promise<Workspace | null> {
+  return mutateWorkspace(id, (cur) => {
+    if (!next.branch) return cur;
+    const same = (b: { repo?: string; branch: string }) =>
+      b.branch === next.branch && (b.repo || cur.repo) === next.repo;
+    if (cur.branch && same({ repo: cur.repo, branch: cur.branch })) return cur;
+    const list = cur.branches ?? [];
+    if (list.some(same)) return cur;
+    return {
+      ...cur,
+      branches: [...list, { ...next, at: new Date().toISOString() }].slice(
+        -MAX_WORKSPACE_BRANCHES,
+      ),
+    };
+  });
+}
+
 /** Evidence is tied to the record read before the asynchronous Git probes.
  * The CAS must see the same repo and checkout before applying it.
  */
@@ -684,7 +768,7 @@ export async function updateWorkspace(
       | "attachedRepos"
       | "shipMode"
     >
-  > & { draft?: WorkspaceDraft | null },
+  > & { draft?: WorkspaceDraft | null; goal?: string | null },
   expectedName?: string,
 ): Promise<Workspace | null> {
   const repo = patch.repo === "auto" ? defaultRepo().id : patch.repo;
@@ -759,6 +843,9 @@ export async function updateWorkspace(
         ? { attachedRepos: patch.attachedRepos }
         : {}),
       ...(patch.shipMode !== undefined ? { shipMode: patch.shipMode } : {}),
+      ...(patch.goal !== undefined
+        ? { goal: patch.goal?.trim().slice(0, MAX_GOAL_LENGTH) || undefined }
+        : {}),
       draft: nextDraft,
     };
   });

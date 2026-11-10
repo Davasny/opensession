@@ -89,6 +89,7 @@ import {
   ensureScratchDir,
   getRepo,
   isSharedCheckoutDir,
+  NO_REPO,
   listWorktrees,
   repoForPath,
   resolveUniqueBranch,
@@ -728,6 +729,7 @@ export async function handleWorkspaceRoutes(
       color?: string;
       order?: number;
       draft?: unknown;
+      goal?: unknown;
     };
     if (body.repo === "auto")
       return Response.json(
@@ -750,6 +752,9 @@ export async function handleWorkspaceRoutes(
         color: body.color,
         order: body.order,
         ...(rawDraft !== undefined ? { draft } : {}),
+        ...(typeof body.goal === "string" || body.goal === null
+          ? { goal: body.goal }
+          : {}),
       });
     } catch (error) {
       if (error instanceof WorkspaceRepoConflictError)

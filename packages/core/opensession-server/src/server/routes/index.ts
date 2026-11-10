@@ -24,6 +24,7 @@ import { handleScriptRoutes } from "./scripts";
 import { handleBuildRoutes } from "./builds";
 import { handleSessionAssetsRoutes } from "./session-assets";
 import { handleCommentThreadRoutes } from "./comment-threads";
+import { handleCoordinatorRoutes } from "./coordinator";
 import { handleSessionContextRoutes } from "./session-context";
 import { handleSessionVoiceRoutes } from "./session-voice";
 import { handleClientDiagnosticsRoutes } from "./client-diagnostics";
@@ -55,6 +56,7 @@ import { handleProfileRoutes } from "./profile";
 import { handleSecurityRoutes } from "./security";
 import { handleGoalsRoutes } from "./goals";
 import { handleConnectionsRoutes } from "./connections";
+import { handleGithubAppsRoutes } from "./github-apps";
 import { handleAccountsRoutes } from "./accounts";
 import { handleModelsRoutes } from "./models";
 import { handleRunnersRoutes } from "./runners";
@@ -102,6 +104,7 @@ export const routeHandlers: RouteHandler[] = [
   // swallowed by broader matches.
   handleSessionAssetsRoutes,
   handleCommentThreadRoutes,
+  handleCoordinatorRoutes,
   handleSessionContextRoutes,
   handleSessionVoiceRoutes,
   handleComposerAutocompleteRoutes,
@@ -132,6 +135,7 @@ export const routeHandlers: RouteHandler[] = [
   handleProfileRoutes,
   handleSecurityRoutes,
   handleGoalsRoutes,
+  handleGithubAppsRoutes,
   handleConnectionsRoutes,
   handleAccountsRoutes,
   handleModelsRoutes,

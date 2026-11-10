@@ -211,6 +211,7 @@ import { noteYouShouldKnowStep } from "./you-should-know";
 import { scheduleSessionHistoryIndex } from "./session-index";
 import { broadcastToSession, sessionWatchers } from "./ws-hub";
 import { peekWorkspace } from "./workspaces";
+import { coordinatorNoteFor } from "./coordinator";
 import {
   broadcastQueue,
   beginNextPromptDispatch,
@@ -3110,6 +3111,12 @@ async function runSessionPromptInner(
       `Pinned session goal. Keep working toward it and note how this turn advanced it:\n\n${session.goal}`,
       "pinned-goal",
     )}\n\n${prompt}`;
+  }
+  // Coordinator mode (coordinator.ts). Like the goal, the briefing is
+  // session-level context, so it rides every turn fenced.
+  if (!session.automation) {
+    const note = await coordinatorNoteFor(session);
+    if (note) prompt = `${wrapContext(note, "coordinator")}\n\n${prompt}`;
   }
 
   const portalsNote =

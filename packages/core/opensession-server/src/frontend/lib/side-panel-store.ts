@@ -198,13 +198,17 @@ export function openSidePanelTab(tab: SidePanelTab, key = hosts.at(-1)): void {
   });
 }
 
-/** Close `tab` in the strip; `key`'s page moves to a neighbour. */
+/**
+ * Close `tab` in the strip; `key`'s page moves to a neighbour. Closing the
+ * last tab closes `key`'s panel too.
+ */
 export function closeSidePanelTab(key: string, tab: SidePanelTab): void {
   const current = getSidePanelState();
   if (!current.tabs.includes(tab)) return;
   const view = sidePanelViewOf(current, key);
   const next = withoutSidePanelTab(current.tabs, view.page, tab);
-  update({ ...withView(key, { ...view, page: next.page }), tabs: next.tabs });
+  const open = view.open && next.tabs.length > 0;
+  update({ ...withView(key, { open, page: next.page }), tabs: next.tabs });
 }
 
 /**
@@ -267,9 +271,10 @@ export function registerSidePanelHost(key: string): () => void {
   };
 }
 
-/** Whether a viewer can show the panel right now (see registerSidePanelHost). */
-export function sidePanelHostOnScreen(): boolean {
-  return hosts.length > 0;
+/** Whether a viewer can show the panel right now (see registerSidePanelHost):
+ *  any viewer, or the one for `key`. */
+export function sidePanelHostOnScreen(key?: string): boolean {
+  return key ? hosts.includes(key) : hosts.length > 0;
 }
 
 /** Light the open panel up as a drop target while a tab is dragged over it. */

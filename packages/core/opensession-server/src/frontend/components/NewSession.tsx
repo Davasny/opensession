@@ -95,6 +95,7 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconChecklist,
+  IconDelegate,
   IconGlobe,
   IconConnections,
   IconDotsHorizontal,
@@ -118,7 +119,7 @@ import {
   getParkedNewSessionWorkspace,
   rememberParkedNewSessionWorkspace,
 } from "../lib/new-session-workspace-draft";
-import { VoiceInput } from "./VoiceInput";
+import { VoiceInput, type VoiceInputControl } from "./VoiceInput";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { handOffSoftKeyboard } from "../lib/soft-keyboard";
 import { PaletteSelect } from "./PaletteSelect";
@@ -129,7 +130,6 @@ import { displayName } from "../brand-logos";
 import { IconTile } from "./BrandTile";
 import { Tooltip } from "../ui/tooltip";
 import { Modal, useEnterOnMount } from "../ui/modal";
-import { composerMorph } from "../ui/motion";
 import { useShortcutKeys } from "../hooks/useShortcutBindings";
 import { matchesShortcut } from "../lib/shortcuts";
 import { foregroundFileComposerOwns, hasDraggedFiles } from "../lib/file-drag";
@@ -513,6 +513,7 @@ export function NewSession({
   // Pstack mode: the pstack playbooks and skills load for every turn. Off by
   // default so an ordinary session never sees them.
   const [pstackMode, setPstackMode] = useState(false);
+  const [coordinator, setCoordinator] = useState(false);
   // Start the repo's Portal with the session, so its dev server comes up
   // while the agent works instead of when someone first opens it.
   const [startPortal, setStartPortal] = useState(false);
@@ -705,13 +706,11 @@ export function NewSession({
   }
 
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const voiceOverlayRef = useRef<HTMLDivElement>(null);
+  const voiceControlRef = useRef<VoiceInputControl>(null);
+  // A phone footer has no room for the live dictation pill beside its other
+  // controls, so while dictating the pill takes the whole row.
   const [dictating, setDictating] = useState(false);
-  const [dictationClipping, setDictationClipping] = useState(false);
-  function handleDictationActive(active: boolean) {
-    setDictating(active);
-    if (active) setDictationClipping(true);
-  }
+  const phoneDictating = isPhone && dictating;
   // Hidden <input type="file"> driven by the "Add file" button — the mobile
   // path, since there's no clipboard paste there.
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1198,6 +1197,7 @@ export function NewSession({
       createMessage.speed = speed;
     }
     if (pstackMode) createMessage.pstackMode = true;
+    if (coordinator) createMessage.coordinator = true;
     // Only an explicit choice is sent; otherwise the repository decides.
     if (showShipChoice && shipChoice?.repo === createRepo)
       createMessage.shipMode = shipChoice.mode;
@@ -1278,6 +1278,12 @@ export function NewSession({
    *  through the prompt's own state, so a closure captured at the moment of
    *  the press would still be looking at the draft as it was. */
   const createRef = useRef<() => void>(() => {});
+  /** Create, or while a clip is recording, stop it and create with its
+   *  transcript (the send key does the same). */
+  function createOrSendDictation() {
+    if (voiceControlRef.current?.send()) return;
+    void handleCreate();
+  }
   // Deliberate latest-value mirror: runs after every commit by design.
   useLayoutEffect(() => {
     createRef.current = handleCreate;
@@ -1440,9 +1446,7 @@ export function NewSession({
           project, commit. One row rather than two, because a sheet over an
           open keyboard has about half a screen to spend and an attachment
           takes its share of it. */}
-      <PhoneTopBar
-        className={cn(HEADER, !dictating && edges.top && EDGE_DIVIDER)}
-      >
+      <PhoneTopBar className={cn(HEADER, edges.top && EDGE_DIVIDER)}>
         {phoneBar && (
           <>
             <Modal.Close
@@ -1566,8 +1570,8 @@ export function NewSession({
         {phoneBar && (
           <button
             type="button"
-            className={cn(PHONE_SEND, dictating && "invisible")}
-            onClick={handleCreate}
+            className={PHONE_SEND}
+            onClick={createOrSendDictation}
             disabled={!canCreate}
             aria-label={CREATE_LABELS[createAction]}
           >
@@ -1576,31 +1580,8 @@ export function NewSession({
         )}
       </PhoneTopBar>
 
-      <motion.div
-        initial={false}
-        animate={{ height: dictating ? (isPhone ? 64 : 62) : "auto" }}
-        transition={composerMorph}
-        onAnimationComplete={() => {
-          if (!dictating) setDictationClipping(false);
-        }}
-        className={cn(
-          "relative flex min-h-0 flex-col",
-          dictationClipping && "overflow-hidden",
-        )}
-      >
-        {/* Dictation replaces everything below Project while the card itself
-            supplies the surface, border and shadow. Keeping this target inside
-            the card avoids drawing a second rounded container over the first. */}
-        <div
-          ref={voiceOverlayRef}
-          className="pointer-events-none !absolute inset-0 !z-[6]"
-        />
-        <div
-          className={cn(
-            "flex min-h-0 flex-1 flex-col",
-            dictating && "invisible",
-          )}
-        >
+      <div className="relative flex min-h-0 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col">
           {/* Picked services, above the field like every other thing attached to
           what you are about to send. The picker is two levels inside a menu,
           so without this the only trace of a pick is a count on the overflow
@@ -1696,7 +1677,7 @@ export function NewSession({
 
           {/* Footer toolbar */}
           <div className={cn(FOOTER, edges.bottom && EDGE_DIVIDER)}>
-            <div className={FOOTER_LEFT}>
+            <div className={cn(FOOTER_LEFT, phoneDictating && "hidden")}>
               <Tooltip label="Attach a file" shortcut={attachKeys ?? undefined}>
                 <button
                   type="button"
@@ -1774,6 +1755,7 @@ export function NewSession({
                       (branchPicked ||
                         sandboxProvider ||
                         pstackMode ||
+                        coordinator ||
                         (showShipChoice && shipMode !== repoShipMode) ||
                         (repoPortal && startPortal) ||
                         modelEngine(effectiveModelId) !== "pi" ||
@@ -1995,6 +1977,19 @@ export function NewSession({
                     </span>
                     <Menu.Check on={pstackMode} className="text-dim" />
                   </Menu.CheckboxItem>
+                  <Menu.CheckboxItem
+                    checked={coordinator}
+                    closeOnClick={false}
+                    onCheckedChange={setCoordinator}
+                    className="justify-between gap-3"
+                    title="Hand work to threads by default and track them here"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <IconDelegate className="shrink-0 text-dim" size={20} />
+                      <span className="truncate">Coordinator mode</span>
+                    </span>
+                    <Menu.Check on={coordinator} className="text-dim" />
+                  </Menu.CheckboxItem>
                   <Menu.SubmenuRoot>
                     <Menu.SubmenuTrigger className="justify-between gap-3">
                       <span className="flex min-w-0 items-center gap-2">
@@ -2085,41 +2080,44 @@ export function NewSession({
             </div>
 
             <div className={FOOTER_RIGHT}>
-              {/* Always visible — on phones too, so a non-default (dumber) model
-                is never silently in effect. */}
-              <ModelEffortSelect
-                selection={{
-                  models,
-                  defaultModel,
-                  model,
-                  preferredDefaultModel,
-                  preferredDefaultEffort,
-                  effort,
-                  autoFallback,
-                  speed,
-                  accounts,
-                  accountId,
-                }}
-                appearance={{
-                  className: MODEL_PILL,
-                  title: "Model and reasoning effort",
-                  disabled: busy,
-                }}
-                actions={{
-                  changeModel: setModel,
-                  setAsDefault: setPreferredDefaultModel,
-                  changeEffort: setEffort,
-                  changeAutoFallback: setAutoFallback,
-                  changeSpeed: setSpeed,
-                  changeAccount: setAccountId,
-                }}
-              />
+              {/* Visible on phones too, so a non-default (dumber) model is
+                never silently in effect. Only phone dictation covers it. */}
+              {!phoneDictating && (
+                <ModelEffortSelect
+                  selection={{
+                    models,
+                    defaultModel,
+                    model,
+                    preferredDefaultModel,
+                    preferredDefaultEffort,
+                    effort,
+                    autoFallback,
+                    speed,
+                    accounts,
+                    accountId,
+                  }}
+                  appearance={{
+                    className: MODEL_PILL,
+                    title: "Model and reasoning effort",
+                    disabled: busy,
+                  }}
+                  actions={{
+                    changeModel: setModel,
+                    setAsDefault: setPreferredDefaultModel,
+                    changeEffort: setEffort,
+                    changeAutoFallback: setAutoFallback,
+                    changeSpeed: setSpeed,
+                    changeAccount: setAccountId,
+                  }}
+                />
+              )}
               <VoiceInput
                 className={FOOTER_ICON_BTN}
                 disabled={busy}
                 editTargetRef={promptRef}
-                overlayTargetRef={voiceOverlayRef}
-                onActiveChange={handleDictationActive}
+                controlRef={voiceControlRef}
+                onActiveChange={setDictating}
+                wide={phoneDictating}
                 onText={(t) => {
                   promptHandle.current?.appendText(t);
                   promptRef.current?.focus();
@@ -2132,9 +2130,6 @@ export function NewSession({
                   // rather than captured now for the same reason.
                   setTimeout(() => createRef.current(), 0);
                 }}
-                // The parent card owns the only visible surface. This layer is
-                // just controls and waveform clipped by that card's outer edge.
-                overlayClassName="rounded-none bg-transparent [backdrop-filter:none]"
               />
 
               {!phoneBar && (
@@ -2144,7 +2139,7 @@ export function NewSession({
                       CREATE_MAIN,
                       inline ? CREATE_MAIN_WHOLE : CREATE_MAIN_SPLIT,
                     )}
-                    onClick={handleCreate}
+                    onClick={createOrSendDictation}
                     disabled={!canCreate}
                   >
                     {status.kind === "reconnecting"
@@ -2254,7 +2249,7 @@ export function NewSession({
             </div>
           </div>
         </div>
-      </motion.div>
+      </div>
     </>
   );
 

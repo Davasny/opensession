@@ -12,6 +12,7 @@ const {
   powerMonitor,
   Menu,
   clipboard,
+  desktopCapturer,
   dialog,
   screen,
   net,
@@ -27,6 +28,7 @@ const { VoiceAudioBridge } = require("./voice-audio-bridge");
 const { MacKeychainReview } = require("./mac-keychain-ui");
 const { LocalFolders } = require("./local-folders");
 const { FRAME_INSPECT_SCRIPT, captureRect } = require("./frame-inspect");
+const { FRAME_AUDIO_SCRIPT } = require("./frame-audio");
 const macKeychainReview = new MacKeychainReview({
   dialog,
   context: (target) => {
@@ -491,6 +493,10 @@ function setUpdateState(next) {
 // (the toast only appears once an update is actually staged).
 let manualCheck = false;
 let updaterReady = false;
+// Squirrel refuses a second check while one runs (its "The command is disabled
+// and cannot be executed"), and a found update keeps it busy until the
+// download finishes. Track that so a menu click reports progress instead.
+let updateBusy = false;
 
 async function promptRestartToUpdate() {
   const { response } = await dialog.showMessageBox(win, {
@@ -522,6 +528,21 @@ function checkForUpdatesFromMenu() {
   }
   if (updateState.state === "downloaded") {
     promptRestartToUpdate();
+    return;
+  }
+  if (updateBusy) {
+    manualCheck = true;
+    dialog.showMessageBox(win, {
+      type: "info",
+      message:
+        updateState.state === "available"
+          ? "Downloading an update"
+          : "Checking for updates",
+      detail:
+        updateState.state === "available"
+          ? "You'll be asked to restart when it's ready."
+          : "You'll hear back in a moment.",
+    });
     return;
   }
   manualCheck = true;
@@ -558,6 +579,9 @@ function initAutoUpdate() {
     return;
   }
   updaterReady = true;
+  autoUpdater.on("checking-for-update", () => {
+    updateBusy = true;
+  });
   autoUpdater.on("update-available", () => {
     setUpdateState({ state: "available", version: null });
     if (manualCheck) {
@@ -571,6 +595,7 @@ function initAutoUpdate() {
     }
   });
   autoUpdater.on("update-not-available", () => {
+    updateBusy = false;
     if (manualCheck) {
       manualCheck = false;
       dialog.showMessageBox(win, {
@@ -581,6 +606,7 @@ function initAutoUpdate() {
     }
   });
   autoUpdater.on("update-downloaded", (_e, _notes, releaseName) => {
+    updateBusy = false;
     setUpdateState({ state: "downloaded", version: releaseName || null });
     if (manualCheck) {
       manualCheck = false;
@@ -588,6 +614,7 @@ function initAutoUpdate() {
     }
   });
   autoUpdater.on("error", (err) => {
+    updateBusy = false;
     // Offline / tailnet-down is normal; log and retry on the next tick.
     console.error("[update]", err);
     if (manualCheck) {
@@ -601,6 +628,7 @@ function initAutoUpdate() {
   });
   const check = () => {
     if (updateState.state === "downloaded") return; // already staged
+    if (updateBusy) return; // the last check is still checking or downloading
     try {
       autoUpdater.checkForUpdates();
     } catch (err) {
@@ -1061,7 +1089,9 @@ function createWindow(initialURL = null, initialAccountID = null) {
   });
   // Pages the app frames (its Browser and Portal tabs) answer the app's
   // inspect requests, so a comment on one can name its element
-  // (frame-inspect.js). Only the app's own direct frames get the responder.
+  // (frame-inspect.js), and report when they play sound, so the sidebar can
+  // show where it comes from (frame-audio.js). Only the app's own direct
+  // frames get these.
   createdWindow.webContents.on(
     "did-frame-finish-load",
     (_event, isMainFrame, frameProcessId, frameRoutingId) => {
@@ -1071,6 +1101,7 @@ function createWindow(initialURL = null, initialAccountID = null) {
       if (!frame || frame.parent !== contents.mainFrame) return;
       if (!inWindow(contents.mainFrame.url)) return;
       frame.executeJavaScript(FRAME_INSPECT_SCRIPT).catch(() => {});
+      frame.executeJavaScript(FRAME_AUDIO_SCRIPT).catch(() => {});
     },
   );
   // Pinch and wheel zoom land in the renderer, so the level has to be read back
@@ -1473,6 +1504,20 @@ app.whenReady().then(async () => {
       }
       callback(allowed.includes(permission));
     },
+  );
+
+  // Huddle screen sharing (getDisplayMedia). macOS's own picker chooses the
+  // screen or window; where the system picker is unavailable, the main
+  // screen is shared. Only the server's own pages may ask.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      if (!inWindow(request.frame?.url ?? "")) return callback({});
+      desktopCapturer
+        .getSources({ types: ["screen"] })
+        .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
+        .catch(() => callback({}));
+    },
+    { useSystemPicker: true },
   );
 
   tailnetWindows = new TailnetWindows({
