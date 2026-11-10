@@ -50,6 +50,26 @@ configuration for the run.
   person sends get none), and only to the grant lookup: the `allowedUsers`
   gate, provider-account routing, and AWS policy are unchanged. The run's
   `pi_mcp_call` audit lines name the grant's owner as `grant_user`.
+- An automation may select `linearConnection: { appId, organizationId }` from
+  the connected Linear apps and workspaces. Saving it pins `linear` in an
+  explicit MCP allowlist. If no allowlist was set, it becomes `["linear"]`,
+  not all servers. The root run and its resumes use only that app's workspace
+  token; descendants do not inherit it. A missing or disconnected grant fails
+  the run instead of falling back to another app or personal credentials.
+  When no Linear MCP server is configured, the run uses the official
+  `https://mcp.linear.app/mcp` endpoint. Without a canonical `linear` server,
+  the logical `linear` mount reuses the first permitted official alias's
+  transport configuration. Restricted aliases never create unrestricted
+  access; if no alias permits the run, it fails before model launch. An
+  existing canonical server remains authoritative, including its endpoint
+  and `allowedUsers` gate. The app token overrides other credentials on any
+  allowlisted official Linear MCP alias. The connection-options endpoint
+  returns identifiers and display names only, never tokens or client secrets.
+  PUT accepts `linearConnection: null` to clear the binding.
+  A root session with an explicit `automationId` fails unavailable if that
+  automation was deleted. It never switches to a same-named automation or
+  unrestricted connector access. Name lookup is for legacy sessions without
+  an automation id only.
 - Scheduled automation `inputs` are a separate read path from the primary
   run's MCP allowlist. Built-in input providers fetch a bounded time window,
   pass it through a tool-less one-shot reducer as explicitly untrusted data,

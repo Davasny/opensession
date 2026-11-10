@@ -63,6 +63,8 @@ import {
   sandboxProviderLabel,
 } from "../lib/automation-form";
 import { AutomationDataFlowEditor } from "./AutomationDataFlowEditor";
+import { AutomationLinearConnectionPicker } from "./AutomationLinearConnectionPicker";
+import type { AutomationLinearConnection } from "../lib/automation-linear-connection";
 
 /* The old .automation-form family, as utilities. Two of its rules reached in
    from the form to the fields inside it and have to stay descendant selectors:
@@ -668,6 +670,16 @@ export function Automations({ onOpenSession, selectedId, onSelect }: Props) {
                           ? "none"
                           : sel.mcpServers.join(", ")}
                     </span>
+
+                    {sel.linearConnection && (
+                      <>
+                        <DetailKey>Linear connection</DetailKey>
+                        <span className="min-w-0 break-words text-dim">
+                          {sel.linearConnection.appId} ·{" "}
+                          {sel.linearConnection.organizationId}
+                        </span>
+                      </>
+                    )}
 
                     {sel.mcpRunAs && (
                       <>
@@ -1336,10 +1348,12 @@ export function McpPicker({
   value,
   onChange,
   allowAll = true,
+  requiredServers,
 }: {
   value: string[] | undefined;
   onChange: (v: string[] | undefined) => void;
   allowAll?: boolean;
+  requiredServers: string[];
 }) {
   const [servers, setServers] = useState<
     Array<{ name: string; status: string }>
@@ -1364,7 +1378,13 @@ export function McpPicker({
 
   const all = value === undefined;
   const selected = value || [];
-  const shown = servers.filter((s) =>
+  const available = [
+    ...servers,
+    ...requiredServers
+      .filter((name) => !servers.some((server) => server.name === name))
+      .map((name) => ({ name, status: "ready" })),
+  ];
+  const shown = available.filter((s) =>
     s.name.toLowerCase().includes(search.trim().toLowerCase()),
   );
 
@@ -1436,6 +1456,7 @@ export function McpPicker({
             >
               <Checkbox
                 checked={all || selected.includes(s.name)}
+                disabled={requiredServers.includes(s.name)}
                 onCheckedChange={() => toggle(s.name)}
               />
               <span className="text-fg">{s.name}</span>
@@ -1525,6 +1546,10 @@ function AutomationForm({
       ? initial.mcpServers
       : (prefill?.mcpServers ?? (kind === "watch" ? ["slack"] : undefined)),
   );
+  const [linearConnection, setLinearConnection] =
+    useState<AutomationLinearConnection | null>(
+      initial?.linearConnection ?? null,
+    );
   // Who is accountable for what this automation does to the codebase. Empty
   // means nobody has taken it, which is what every automation written before
   // owners existed still says.
@@ -1662,6 +1687,7 @@ function AutomationForm({
           usageCredits,
           sandbox,
           mcpServers: mcpServers ?? null,
+          linearConnection,
           slackWatch,
           webhookEnabled: isWatch ? false : webhookEnabled,
           inputs: isWatch ? [] : inputs,
@@ -1684,6 +1710,7 @@ function AutomationForm({
           usageCredits: usageCredits || undefined,
           sandbox: sandbox || undefined,
           mcpServers,
+          linearConnection: linearConnection ?? undefined,
           slackWatch,
           webhookEnabled: isWatch ? false : webhookEnabled,
           inputs: isWatch ? undefined : inputs,
@@ -1844,7 +1871,49 @@ function AutomationForm({
         />
       </label>
 
-      <McpPicker value={mcpServers} onChange={setMcpServers} />
+      <label className={FIELD_LABEL}>
+        Model
+        <Select
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          className="phone:min-h-11"
+        >
+          <option value="">
+            Default{defaultModel ? ` · ${defaultModel}` : ""}
+          </option>
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+              {accountPoolSuffix(m)}
+            </option>
+          ))}
+        </Select>
+      </label>
+
+      <AutomationLinearConnectionPicker
+        value={linearConnection}
+        onChange={(connection) => {
+          setLinearConnection(connection);
+          setMcpServers((current) =>
+            connection
+              ? Array.from(new Set([...(current ?? []), "linear"]))
+              : current?.filter((name) => name !== "linear"),
+          );
+        }}
+      />
+
+      <McpPicker
+        value={mcpServers}
+        onChange={(next) =>
+          setMcpServers(
+            linearConnection
+              ? Array.from(new Set([...(next ?? []), "linear"]))
+              : next,
+          )
+        }
+        allowAll={!linearConnection}
+        requiredServers={linearConnection ? ["linear"] : []}
+      />
 
       {!isWatch && (
         <AutomationDataFlowEditor
@@ -1923,21 +1992,6 @@ function AutomationForm({
                 ? "Daytona uses a fresh disposable Executor with pinned credentials and restricted network access."
                 : sandboxAvailability?.reason || "Checking availability"}
             </span>
-          </label>
-
-          <label className={FIELD_LABEL}>
-            Model
-            <Select value={model} onChange={(e) => setModel(e.target.value)}>
-              <option value="">
-                Default{defaultModel ? ` · ${defaultModel}` : ""}
-              </option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                  {accountPoolSuffix(m)}
-                </option>
-              ))}
-            </Select>
           </label>
 
           <label className={FIELD_LABEL}>

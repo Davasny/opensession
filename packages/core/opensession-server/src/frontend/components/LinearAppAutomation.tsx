@@ -171,6 +171,7 @@ export function LinearAppAutomation({
           value={mcpServers}
           onChange={(value) => setMcpServers(value ?? [])}
           allowAll={false}
+          requiredServers={[]}
         />
       </fieldset>
       {error && <InlineAlert>{error}</InlineAlert>}

@@ -27,8 +27,11 @@ import type { InProcessMcpServer } from "./inprocess-mcp";
 import { RPC_TOOL_CALL_TIMEOUT_MS } from "./run-rpc-protocol";
 import { workloadCommand } from "./workload-scope";
 import type { McpRunAs } from "./automation-mcp-run-as";
+import { runBoundLinearMcpConfig } from "./linear-mcp-config";
 import {
   isOfficialLinearMcpUrl,
+  loadMcpConfig,
+  readMcpConfig,
   withLinearRunGrant,
   type LinearMcpGrant,
 } from "./connections";
@@ -482,11 +485,24 @@ export async function createMcpRuntime(opts: {
   };
 
   const entries: Entry[] = [];
+  if (opts.linearGrant) await loadMcpConfig();
+  const configuredServers = readMcpConfig().mcpServers;
   const external = filterMcpServers(
     opts.mcpServers,
     opts.user,
     opts.mcpGrantUser ? grantUsers : undefined,
   ) as Record<string, Record<string, unknown>>;
+  if (
+    opts.linearGrant &&
+    Array.isArray(opts.mcpServers) &&
+    opts.mcpServers.includes("linear")
+  ) {
+    external.linear = runBoundLinearMcpConfig({
+      servers: configuredServers,
+      user: opts.user,
+      grantUsers: opts.mcpGrantUser ? grantUsers : undefined,
+    });
+  }
   for (const [name, cfg] of Object.entries(external)) {
     entries.push({
       name,

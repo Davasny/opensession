@@ -24,6 +24,7 @@ import { listReportGroups } from "../reports";
 import { publishSessionChange } from "../session-cache";
 import { getWorkspace } from "../workspaces";
 import { conditionalJsonResponse } from "../http-json";
+import { listAutomationLinearConnections } from "../automation-linear-connection";
 
 /**
  * The signed-in person making this request, for the automation fields that
@@ -43,6 +44,11 @@ export async function handleAutomationsRoutes(
   const { req, url, path, publicPrefix } = ctx;
 
   // ── Automations ──
+  if (path === "/api/automations/linear-connections" && req.method === "GET") {
+    return Response.json({
+      connections: await listAutomationLinearConnections(),
+    });
+  }
   if (path === "/api/automation-templates" && req.method === "GET") {
     return Response.json(AUTOMATION_TEMPLATES);
   }

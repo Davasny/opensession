@@ -121,6 +121,11 @@ import {
 } from "./automation-outputs";
 import { automationIntentAlreadySettled } from "./automation-intent-recovery";
 import {
+  automationLinearGrant,
+  parseAutomationLinearConnection,
+} from "./automation-linear-connection";
+import type { LinearMcpGrant } from "./connections";
+import {
   CLEAR_MCP_RUN_AS,
   authorizeMcpRunAs,
   mcpRunAsForAutomationTurn,
@@ -317,6 +322,8 @@ export interface Automation {
    * from an explicit verified `actor`.
    */
   mcpRunAs?: AutomationMcpRunAs;
+  /** App-owned Linear workspace grant. Never stores an access token. */
+  linearConnection?: LinearMcpGrant;
   /**
    * Human-set only: give this automation's runs the opensession-workflows
    * tools (run_workflow fan-outs — model-authored scripts in a contained
@@ -926,6 +933,7 @@ const AUTOMATION_FIELDS: Record<string, AutomationFieldValidator> = {
   enabled: (v) => v !== false,
   eventKey: (v) => (typeof v === "string" ? v.trim() : "") || undefined,
   mcpServers: (v) => sanitizeMcpList(v),
+  linearConnection: parseAutomationLinearConnection,
   repo: (v) => sanitizeRepo(v),
   prReviewer: (v) => sanitizePrReviewer(v),
   // Shape only; the owner rule needs the (possibly just-changed) repo, so
@@ -991,6 +999,9 @@ function normalizeAutomation(
 ): Automation | { error: string } {
   if (!(next.name || "").trim()) return { error: "Name is required" };
   if (!(next.prompt || "").trim()) return { error: "Prompt is required" };
+  if (next.linearConnection) {
+    next.mcpServers = [...new Set([...(next.mcpServers ?? []), "linear"])];
+  }
   // A one-off and a recurring cron are mutually exclusive, and the scheduler
   // takes the one-off branch: leaving both set means the cron never fires and
   // then disappears with the record the one-off deletes after it runs.
@@ -1136,6 +1147,7 @@ export async function createAutomation(
     webhookEnabled?: boolean;
     /** See Automation.mcpRunAs; needs `writer.actor`. */
     mcpRunAs?: unknown;
+    linearConnection?: unknown;
   },
   writer: AutomationWriteActor = {},
 ): Promise<Automation | { error: string }> {
@@ -1250,6 +1262,7 @@ export async function updateAutomation(
   > & {
     /** See Automation.mcpRunAs; setting it needs `writer.actor`. */
     mcpRunAs?: unknown;
+    linearConnection?: unknown;
   },
   writer: AutomationWriteActor = {},
 ): Promise<Automation | { error: string }> {
@@ -2367,6 +2380,9 @@ export async function runAutomation(
       trigger,
       status: "running",
     });
+    const linearGrant = await automationLinearGrant(
+      automation.linearConnection,
+    );
 
     const preparedInputs = await prepareAutomationInputs({
       automationId: automation.id,
@@ -2713,6 +2729,7 @@ export async function runAutomation(
         model: runModel,
         mcpServers: automation.mcpServers || [],
         mcpRunAs,
+        linearGrant,
         proxyMcpServers: Object.keys(inProcessMcp),
         deniedTools: AUTOMATION_DENIED_TOOLS,
         confirmTools: STRIPE_CONFIRM_TOOLS,
@@ -2737,6 +2754,7 @@ export async function runAutomation(
         model: runModel,
         mcpServers: (automation.mcpServers ?? "all") as "all" | string[],
         mcpRunAs,
+        linearGrant,
         deniedTools: AUTOMATION_DENIED_TOOLS,
         // No onAskUser here, so confirm tools deny with "propose it for a human".
         confirmTools: STRIPE_CONFIRM_TOOLS,

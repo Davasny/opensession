@@ -143,10 +143,75 @@ describe("run-bound Linear MCP", () => {
         expect(requests).toEqual([]);
         await expect(missing.callExact("linear_example", {}, { toolCallId: "example" })).rejects.toThrow("unavailable");
         await missing.close();
-        for (const options of [{ mcpServers: [] }, { mcpServers: ["linear"], user: "bob" }]) {
+        for (const options of [{ mcpServers: [] }, { mcpServers: ["linear"], user: "bob" }, { mcpServers: ["linear"] }]) {
+          if (options.mcpServers.includes("linear")) {
+            await expect(createMcpRuntime({ ...options, deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } })).rejects.toThrow("unavailable for this run");
+            continue;
+          }
           const restricted = await createMcpRuntime({ ...options, deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
           expect(await restricted.catalog()).toEqual([]);
           await restricted.close();
+        }
+        expect(requests).toEqual([]);
+        await Bun.write(${JSON.stringify(mcpConfig)}, JSON.stringify({ mcpServers: {} }));
+        await loadMcpConfig();
+        const implicit = await createMcpRuntime({ mcpServers: ["linear"], deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
+        await implicit.catalog();
+        expect(requests.length).toBeGreaterThan(0);
+        expect(requests.every(request => request.url === "https://mcp.linear.app/mcp" && request.authorization === "Bearer acme-token")).toBe(true);
+        await implicit.close();
+        requests.length = 0;
+        for (const scope of [[], "all", undefined]) {
+          const noAllowlist = await createMcpRuntime({ mcpServers: scope, deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
+          expect(await noAllowlist.catalog()).toEqual([]);
+          await noAllowlist.close();
+        }
+        const disconnected = await createMcpRuntime({ mcpServers: ["linear"], deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "missing" } });
+        expect(await disconnected.catalog()).toEqual([]);
+        await disconnected.close();
+        expect(requests).toEqual([]);
+        await Bun.write(${JSON.stringify(mcpConfig)}, JSON.stringify({ mcpServers: {
+          "linear-writer": { type: "http", url: "https://mcp.linear.app/mcp", allowedUsers: ["alice"] },
+        } }));
+        await loadMcpConfig();
+        for (const scope of [["linear"], ["linear-writer"], ["linear", "linear-writer"]]) {
+          if (scope.includes("linear")) {
+            await expect(createMcpRuntime({ mcpServers: scope, deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } })).rejects.toThrow("unavailable for this run");
+            continue;
+          }
+          const restrictedAlias = await createMcpRuntime({ mcpServers: scope, deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
+          expect(await restrictedAlias.catalog()).toEqual([]);
+          await restrictedAlias.close();
+        }
+        const missingAlias = await createMcpRuntime({ mcpServers: ["linear-writer"], user: "alice", deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "missing" } });
+        expect(await missingAlias.catalog()).toEqual([]);
+        await missingAlias.close();
+        expect(requests).toEqual([]);
+        const permittedAlias = await createMcpRuntime({ mcpServers: ["linear"], user: "alice", deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
+        await permittedAlias.catalog();
+        expect(requests.length).toBeGreaterThan(0);
+        expect(requests.every(request => request.authorization === "Bearer acme-token")).toBe(true);
+        await permittedAlias.close();
+        requests.length = 0;
+        await Bun.write(${JSON.stringify(mcpConfig)}, JSON.stringify({ mcpServers: {
+          "linear-private": { type: "http", url: "https://mcp.linear.app/private", allowedUsers: ["alice"] },
+          "linear-acme": { type: "http", url: "https://mcp.linear.app/public", headers: { Authorization: "Bearer unrelated", "x-example": "kept" } },
+        } }));
+        const publicAlias = await createMcpRuntime({ mcpServers: ["linear"], deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
+        await publicAlias.catalog();
+        expect(requests.length).toBeGreaterThan(0);
+        expect(requests.every(request => request.url === "https://mcp.linear.app/public" && request.authorization === "Bearer acme-token")).toBe(true);
+        await publicAlias.close();
+        requests.length = 0;
+        for (const canonical of [
+          { type: "http", url: "https://mcp.linear.app/mcp", allowedUsers: ["alice"] },
+          { type: "http", url: "https://example.test/mcp" },
+        ]) {
+          await Bun.write(${JSON.stringify(mcpConfig)}, JSON.stringify({ mcpServers: {
+            linear: canonical,
+            "linear-acme": { type: "http", url: "https://mcp.linear.app/mcp" },
+          } }));
+          await expect(createMcpRuntime({ mcpServers: ["linear"], deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } })).rejects.toThrow();
         }
         expect(requests).toEqual([]);
         process.exit(0);

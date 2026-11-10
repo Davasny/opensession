@@ -22,7 +22,9 @@ import {
   automationDeniedTools,
   automationMcpRunAsById,
   automationMcpServersByName,
+  getAutomation,
 } from "./automations";
+import type { LinearMcpGrant } from "./connections";
 import type { McpRunAs } from "./automation-mcp-run-as";
 import {
   humanPrompter,
@@ -93,6 +95,8 @@ export interface SessionRunInputs {
    *  lookup only; it never reaches provider accounts or the allowedUsers
    *  gate. */
   mcpRunAs: McpRunAs | undefined;
+  /** Only the owning automation's root session receives its app grant. */
+  linearGrant?: LinearMcpGrant;
   /** The person whose personal provider subscription may serve this turn:
    *  the human who sent the prompt, or undefined when a machine did (an
    *  automation tick, a review handoff, auto-continue). Unlike `user` it
@@ -141,7 +145,7 @@ export function sessionInProcessMcpBranch(
   humanPrompter?: string | null,
 ): InProcessMcpBranch {
   if (session.automationDescendantPolicy) return "automation-self-improve";
-  if (session.automation)
+  if (session.automation || session.automationId)
     return humanPrompter
       ? waitContinuationOwner(humanPrompter)
         ? "automation+wait-continuation"
@@ -156,7 +160,11 @@ export function sessionInProcessMcpBranch(
 export function sessionMcpScopeSource(
   session: RunInputsSession,
 ): McpScopeSource {
-  if (session.automation || session.automationDescendantPolicy)
+  if (
+    session.automation ||
+    session.automationId ||
+    session.automationDescendantPolicy
+  )
     return "automation";
   if (session.mcpServers && session.mcpServers.length) return "session";
   if (session.externalRefs?.length) return "feed";
@@ -177,7 +185,9 @@ export async function resolveSessionRunInputs(
   opts: { user?: string } = {},
 ): Promise<SessionRunInputs> {
   const isAutomationSession = !!(
-    session.automation || session.automationDescendantPolicy
+    session.automation ||
+    session.automationId ||
+    session.automationDescendantPolicy
   );
   // A discussion session answers a trusted teammate but reads untrusted
   // ticket text, so its turns get the triage automation's policy: the
@@ -188,20 +198,33 @@ export async function resolveSessionRunInputs(
   // discussion keeps its automation branch and takes the same wider deny-set.
   const isPlainDiscussionSession = !!session.plainDiscussionId;
   const source = sessionMcpScopeSource(session);
+  const owningAutomation =
+    session.automationId && !session.automationDescendantPolicy
+      ? await getAutomation(session.automationId)
+      : null;
+  if (
+    session.automationId &&
+    !session.automationDescendantPolicy &&
+    !owningAutomation
+  ) {
+    throw new Error("The owning automation is no longer available");
+  }
   const mcpServers = session.automationDescendantPolicy
     ? [...session.automationDescendantPolicy.mcpServers]
-    : isAutomationSession
-      ? await automationMcpServersByName(session.automation!)
-      : source === "session"
-        ? session.mcpServers
-        : source === "feed"
-          ? // Feed-workspace sessions are scoped to their feed's declared MCP
-            // servers even when the session file predates the stamping (least
-            // privilege — the feeds design).
-            await (
-              await import("./feeds")
-            ).feedMcpServersForRefs(session.externalRefs!)
-          : undefined;
+    : owningAutomation
+      ? owningAutomation.mcpServers
+      : isAutomationSession
+        ? await automationMcpServersByName(session.automation!)
+        : source === "session"
+          ? session.mcpServers
+          : source === "feed"
+            ? // Feed-workspace sessions are scoped to their feed's declared MCP
+              // servers even when the session file predates the stamping (least
+              // privilege — the feeds design).
+              await (
+                await import("./feeds")
+              ).feedMcpServersForRefs(session.externalRefs!)
+            : undefined;
   const accountUser = humanPrompter(opts.user) ?? undefined;
   // A wait's wake sent in a person's name rides the same field, so every
   // launch path hands it to automationSessionMcp, which tells the two apart.
@@ -222,8 +245,10 @@ export async function resolveSessionRunInputs(
     user:
       isAutomationSession || isPlainDiscussionSession ? undefined : opts.user,
     mcpGrantUser: session.createdByLogin || undefined,
+    linearGrant: owningAutomation?.linearConnection,
     mcpRunAs:
-      session.automation && !session.automationDescendantPolicy
+      (session.automation || session.automationId) &&
+      !session.automationDescendantPolicy
         ? // The raw sender: a /loop or scheduled tick keeps the name of the
           // person who set it, so it is checked against the named person.
           await automationMcpRunAsById(session.automationId, opts.user)

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ApiError, BASE, request } from "./request";
+import type { AutomationLinearConnection } from "../automation-linear-connection";
 import {
   accountLimitsFromUsage,
   accountUsageSchema,
@@ -217,6 +218,7 @@ export interface Automation {
   /** "Run MCP sign-ins as": the teammate whose personal MCP sign-ins this
    *  automation's runs use, for these allowlisted servers. */
   mcpRunAs?: { person: string; servers: string[]; setAt: string };
+  linearConnection?: AutomationLinearConnection;
   slackWatch?: { channel: string };
   inputs?: AutomationInput[];
   outputs?: AutomationOutput[];
@@ -515,6 +517,7 @@ export async function createAutomationApi(input: {
   usageCredits?: boolean;
   sandbox?: boolean;
   mcpServers?: string[];
+  linearConnection?: AutomationLinearConnection;
   mcpRunAs?: string;
   slackWatch?: { channel: string };
   webhookEnabled?: boolean;
@@ -527,9 +530,13 @@ export async function createAutomationApi(input: {
 }
 
 export type AutomationPatch = Partial<
-  Omit<Automation, "mcpServers" | "slackWatch" | "mcpRunAs">
+  Omit<
+    Automation,
+    "mcpServers" | "slackWatch" | "mcpRunAs" | "linearConnection"
+  >
 > & {
   mcpServers?: string[] | null;
+  linearConnection?: AutomationLinearConnection | null;
   slackWatch?: { channel: string } | null;
   /** Your own name sets it (the server checks it is you); "" clears it. */
   mcpRunAs?: string;
