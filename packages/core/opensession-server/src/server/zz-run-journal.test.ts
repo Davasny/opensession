@@ -1837,6 +1837,7 @@ describe("restart recovery reattach", () => {
       osSessionId: sessionId,
       claudeSessionId: `pi-${crypto.randomUUID()}`,
       prompt: "resume with same lineage",
+      linearGrant: { appId: "acme", organizationId: "org-example" },
       cwd: "/tmp",
       model: "pi/anthropic/claude-sonnet-5",
       kind: "prompt",
@@ -1858,6 +1859,7 @@ describe("restart recovery reattach", () => {
       });
       expect(fake.calls).toHaveLength(1);
       expect(fake.calls[0].opts.startToken).toBe(hostId);
+      expect(fake.calls[0].opts.linearGrant).toEqual(snapshotRun.linearGrant);
     } finally {
       mod.journalClear(hostId);
       await clearRunState(sessionId);

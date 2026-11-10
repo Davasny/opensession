@@ -21,6 +21,8 @@ import {
 } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Automation } from "../../server/automations";
+import * as agentConfig from "./agent-config";
 
 const worktreeRoot = "/synthetic-worktrees";
 let prRepo: { ghRepo: string; host: string } | undefined;
@@ -309,6 +311,7 @@ const {
   saveSessionInfo,
   deleteSessionFile,
   createPrWithAttribution,
+  loadActiveSessionsOnStartup,
 } = await import("./session");
 const { isLinearSessionTerminal, markLinearSessionTerminal } =
   await import("./session-store");
@@ -444,6 +447,176 @@ afterEach(() => {
 // makes a later file import the doubles instead of the real modules.
 afterAll(() => {
   mock.restore();
+});
+
+function appAutomation(appId: string, mode: Automation["mode"]): Automation {
+  return {
+    id: `automation-${appId}`,
+    name: appId,
+    eventKey: `linear:agent_session:${appId}`,
+    prompt: `Follow the ${appId} instructions.`,
+    schedule: "",
+    mode,
+    enabled: true,
+    createdBy: "Settings",
+    createdAt: new Date().toISOString(),
+    webhookSecret: "synthetic-secret",
+    mcpServers: [],
+  };
+}
+
+test("a writer app starts in scratch and keeps its instructions on recovered replies", async () => {
+  const id = "a1010101-0101-4101-8101-010101010101";
+  const config = appAutomation("writer", "scratch");
+  const lookup = spyOn(agentConfig, "linearAgentConfig").mockResolvedValue(
+    config,
+  );
+  try {
+    runResult = "IMPLEMENTATION_COMPLETE is just text in this article.";
+    const response = await handleAgentSession(
+      webhook("created", id),
+      {},
+      "writer",
+    );
+    expect(response.status).toBe(200);
+    await awaitReady(id);
+    await waitForAssignmentSettled(id);
+    expect(createdBranches).toEqual([]);
+    expect(movedStatuses).toEqual([]);
+    expect(credentialCalls).toEqual([]);
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0]?.prompt).toContain(config.prompt);
+    expect(runCalls[0]?.prompt).toContain(ISSUE.description);
+    expect(runCalls[0]?.mcpServers).toEqual([]);
+    expect(runCalls[0]?.linearGrant).toEqual({
+      appId: "writer",
+      organizationId: "org-1",
+    });
+    expect(readStored(linearSessionFileKey(id))).toMatchObject({
+      appId: "writer",
+      executionMode: "scratch",
+      automationId: config.id,
+    });
+
+    config.prompt = "Use the revised editorial rules.";
+    activeSessions.clear();
+    await handleAgentSession(
+      prompted(id, "Please implement these editorial changes", "writer-reply"),
+      {},
+      "writer",
+    );
+    await waitFor(() => runCalls.length === 2, "writer reply");
+    await waitFor(
+      () => !activeSessions.get(id)?.abortController,
+      "writer reply completion",
+    );
+    expect(runCalls[1]?.prompt).toContain(config.prompt);
+    expect(runCalls[1]?.prompt).toContain("editorial changes");
+    expect(movedStatuses).toEqual([]);
+    expect(credentialCalls).toEqual([]);
+  } finally {
+    lookup.mockRestore();
+  }
+});
+
+test("another app cannot prompt, stop, or end an owned Linear session", async () => {
+  const id = "a2020202-0202-4202-8202-020202020202";
+  await handleAgentSession(webhook("created", id), {});
+  await awaitReady(id);
+  const session = activeSessions.get(id);
+  const requests = [
+    prompted(id),
+    webhook("prompted", id, { agentActivity: { signal: "stop" } }),
+    webhook("ended", id),
+  ];
+  for (const request of requests) {
+    expect((await handleAgentSession(request, {}, "other-app")).status).toBe(
+      403,
+    );
+    expect(activeSessions.get(id)).toBe(session);
+  }
+  activeSessions.clear();
+  expect(
+    (await handleAgentSession(webhook("ended", id), {}, "other-app")).status,
+  ).toBe(403);
+  expect(existsSync(storedPath(linearSessionFileKey(id)))).toBe(true);
+});
+
+test("a disabled Linear app does not start an assignment", async () => {
+  const id = "a3030303-0303-4303-8303-030303030303";
+  const config = appAutomation("writer", "scratch");
+  config.enabled = false;
+  const lookup = spyOn(agentConfig, "linearAgentConfig").mockResolvedValue(
+    config,
+  );
+  try {
+    const response = await handleAgentSession(
+      webhook("created", id),
+      {},
+      "writer",
+    );
+    expect(await response.json()).toMatchObject({ disabled: true });
+    expect(activeSessions.has(id)).toBe(false);
+    expect(runCalls).toEqual([]);
+  } finally {
+    lookup.mockRestore();
+  }
+});
+
+test("startup restores only the owning app and exact organization grant", async () => {
+  const catalog = await import("../../server/agent-session-catalog");
+  const oauth = await import("./oauth");
+  const at = new Date().toISOString();
+  const writerId = "a4040404-0404-4404-8404-040404040404";
+  const testerId = "a5050505-0505-4505-8505-050505050505";
+  const source = (id: string, appId: string, organizationId: string) => ({
+    file: `${linearSessionFileKey(id)}.json`,
+    mtime: at,
+    data: {
+      branch: BRANCH,
+      claudeSessionId: `engine-${id}`,
+      linearSessionId: id,
+      appId,
+      organizationId,
+      updatedAt: at,
+    },
+  });
+  const readSources = spyOn(
+    catalog,
+    "completeAgentSessionCatalogSources",
+  ).mockResolvedValue([
+    source(writerId, "writer", "org-2"),
+    source(testerId, "tester", "org-1"),
+  ]);
+  const token = spyOn(oauth, "getValidToken").mockImplementation(
+    async (orgId, tokens) => tokens[orgId]?.accessToken ?? null,
+  );
+  try {
+    await loadActiveSessionsOnStartup(
+      {
+        "org-1": { accessToken: "wrong-org-token" },
+        "org-2": { accessToken: "writer-org-2-token" },
+      },
+      "writer",
+    );
+    expect(activeSessions.get(writerId)).toMatchObject({
+      appId: "writer",
+      organizationId: "org-2",
+      accessToken: "writer-org-2-token",
+    });
+    expect(activeSessions.has(testerId)).toBe(false);
+    await loadActiveSessionsOnStartup(
+      { "org-1": { accessToken: "tester-token" } },
+      "tester",
+    );
+    expect(activeSessions.get(testerId)?.accessToken).toBe("tester-token");
+    expect(activeSessions.get(writerId)?.accessToken).toBe(
+      "writer-org-2-token",
+    );
+  } finally {
+    token.mockRestore();
+    readSources.mockRestore();
+  }
 });
 
 test("automatic PR creation passes fresh repository App credentials to gh", async () => {

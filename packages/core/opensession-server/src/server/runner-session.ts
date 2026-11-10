@@ -65,6 +65,7 @@ type RunnerLaunchOpts = {
    *  the Runner cannot read the server's uploads dir. */
   attachments?: StagedAttachment[];
   mcpServers?: McpScope;
+  linearGrant?: RunHostSpec["linearGrant"];
   user?: string;
   reposNote?: string;
   shouldCancel?: () => boolean;
@@ -200,6 +201,7 @@ export async function maybeLaunchRunnerRun(
     user: runUser,
     accountUser: runInputs.accountUser,
     mcpGrantUser: runInputs.mcpGrantUser,
+    linearGrant: opts.linearGrant,
     fallbackModel: isFixedSubscription(session)
       ? "none"
       : interactiveFallbackModel(session.model),
@@ -235,6 +237,7 @@ export async function maybeLaunchRunnerRun(
     cwd: session.worktreeDir,
     mode: session.mode,
     mcpServers: spec.mcpServers,
+    linearGrant: spec.linearGrant,
     user: runUser,
     model: session.model,
     effort: session.effort,

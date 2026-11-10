@@ -236,6 +236,7 @@ export interface HostedRunOpts {
   mode?: "ask" | "code" | "scratch";
   mcpGrantUser?: string;
   mcpRunAs?: McpRunAs;
+  linearGrant?: RunHostSpec["linearGrant"];
   model?: string;
   selectedModel?: string;
   images?: ImageInput[];
@@ -472,6 +473,7 @@ async function* runAgentInProcess(
       mode: opts.mode,
       mcpGrantUser: opts.mcpGrantUser,
       mcpRunAs: opts.mcpRunAs,
+      linearGrant: opts.linearGrant,
       model: opts.model,
       selectedModel: opts.selectedModel,
       images: opts.images,
@@ -621,6 +623,7 @@ function hostedRunRecord(spec: RunHostSpec): ActiveRunRecord {
     remoteWorkspace: spec.remoteWorkspace,
     mode: spec.mode,
     mcpServers: spec.mcpServers,
+    linearGrant: spec.linearGrant,
     user: spec.user,
     accountUser: spec.accountUser,
     deniedTools: spec.deniedTools,
@@ -688,6 +691,7 @@ async function spawnHostRun(
     mode: opts.mode,
     mcpGrantUser: opts.mcpGrantUser,
     mcpRunAs: opts.mcpRunAs,
+    linearGrant: opts.linearGrant,
     model: opts.model,
     selectedModel: opts.selectedModel,
     images: opts.images,

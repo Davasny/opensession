@@ -10,6 +10,7 @@ import { shouldPersistModelSwitch } from "../../server/run-events";
 import { runAgent, cancelAgentRun } from "../../server/agent-runner";
 import {
   configuredServer,
+  configuredRepos,
   defaultRepo,
   personaName,
   productName,
@@ -33,6 +34,8 @@ import { createAgentActivity } from "./api";
 import type { LinearTokens } from "./oauth";
 import { getValidToken } from "./oauth";
 import type { LinearStartMode } from "./start-mode";
+import type { AutomationMode } from "../../server/automations";
+import { linearAgentConfig } from "./agent-config";
 import {
   isAgentSessionFileKey,
   isLinearSessionTerminal,
@@ -117,6 +120,11 @@ export const MAX_REVIEW_CLAIMS = 20;
  * field the save writes is read back by construction.
  */
 export interface StoredSession {
+  /** Absent on legacy sessions, which belong to the primary app. */
+  appId?: string;
+  automationId?: string;
+  /** Locked at creation so edits cannot change an existing workspace's access. */
+  executionMode?: AutomationMode;
   branch: string;
   claudeSessionId: string | null;
   issueIdentifier: string;
@@ -321,13 +329,17 @@ export function branchNameFromIssue(
  * failing on) the previous session's branch. A shared-checkout repo keeps its
  * one live checkout by design; `createRepoWorktree` returns that path.
  */
-export async function createSessionWorktree(desiredBranch: string): Promise<{
+export async function createSessionWorktree(
+  desiredBranch: string,
+  repoId?: string,
+): Promise<{
   branch: string;
   worktreeDir: string;
   ownsWorktree: boolean;
   repoId: string;
 }> {
-  const repo = defaultRepo();
+  const repo = repoId ? configuredRepos()[repoId] : defaultRepo();
+  if (!repo) throw new Error("The Linear agent's repository is not configured");
   const shared = sharedCheckoutForNewSessions(repo);
   let branch = shared
     ? desiredBranch
@@ -472,6 +484,15 @@ function storedFromFile(
     // legacy files are named after the branch and often omit the field.
     branch:
       typeof raw.branch === "string" && raw.branch ? raw.branch : sessionKey,
+    appId: typeof raw.appId === "string" ? raw.appId : undefined,
+    automationId:
+      typeof raw.automationId === "string" ? raw.automationId : undefined,
+    executionMode:
+      raw.executionMode === "ask" ||
+      raw.executionMode === "code" ||
+      raw.executionMode === "scratch"
+        ? raw.executionMode
+        : undefined,
     claudeSessionId,
     issueIdentifier: raw.issueIdentifier ?? "",
     issueTitle: raw.issueTitle ?? "",
@@ -779,6 +800,9 @@ export async function persistActiveSession(
   const wrote = await saveSessionInfo(
     session.sessionKey,
     {
+      appId: session.appId,
+      automationId: session.automationId,
+      executionMode: session.executionMode,
       branch: session.branch,
       claudeSessionId: session.claudeSessionId,
       issueIdentifier: session.issueIdentifier,
@@ -1057,6 +1081,15 @@ export async function runAgentHeadless(
     `[linear] Running agent in ${worktreeDir}${resumeClaudeId ? ` (resuming ${resumeClaudeId})` : ""}`,
   );
 
+  const config = session?.appId ? await linearAgentConfig(session.appId) : null;
+  if (
+    (config && !config.enabled) ||
+    (session?.automationId && config?.id !== session.automationId) ||
+    (session?.appId && session.appId !== "primary" && !config)
+  ) {
+    throw new Error("This Linear agent is disabled or no longer configured");
+  }
+
   // Attribute commits this run makes to the Linear issue creator.
   const commitAuthor = gitIdentityFor(session?.issueCreator?.email);
 
@@ -1086,12 +1119,21 @@ export async function runAgentHeadless(
 
   try {
     for await (const event of runAgent({
-      // Interactive Linear sessions get the full connector set, as before.
-      mcpServers: "all",
-      prompt,
+      mcpServers: config ? (config.mcpServers ?? []) : "all",
+      ...(session?.appId && session.organizationId
+        ? {
+            linearGrant: {
+              appId: session.appId,
+              organizationId: session.organizationId,
+            },
+          }
+        : {}),
+      prompt: config?.prompt
+        ? `Agent instructions:\n${config.prompt}\n\nCurrent task:\n${prompt}`
+        : prompt,
       sessionId: claudeSessionId || undefined,
       cwd: worktreeDir,
-      mode: "code",
+      mode: session?.executionMode === "ask" ? "ask" : "code",
       ...(promptEntry
         ? {
             promptEntryId: promptEntry.id,
@@ -1099,7 +1141,7 @@ export async function runAgentHeadless(
             promptEntryTimestamp: promptEntry.timestamp,
           }
         : {}),
-      model: toPiModel(session?.model || getDefaultModel()),
+      model: toPiModel(session?.model || config?.model || getDefaultModel()),
       user: actorEmail,
       author: commitAuthor,
       // Teammate-driven runs keep AWS read access — also keeps the shared
@@ -1192,23 +1234,26 @@ export { createPrWithAttribution, type PrCreateResult } from "./pr";
 
 export async function loadActiveSessionsOnStartup(
   tokens: LinearTokens,
+  appId = "primary",
 ): Promise<void> {
   console.log("[linear] Loading active sessions from catalog...");
 
   try {
     const sources = await completeAgentSessionCatalogSources("linear");
 
-    // Single-workspace install: every session belongs to the one authorized org.
-    const orgId = Object.keys(tokens)[0];
-    if (!orgId) return;
-    const accessToken = await getValidToken(orgId, tokens);
-    if (!accessToken) return;
-
     let skippedStale = 0;
     for (const { file, data } of sources) {
       try {
         const sessionKey = agentSessionSourceKey(file);
         const stored = storedFromFile(sessionKey, data);
+        if ((stored.appId ?? "primary") !== appId) continue;
+        const orgIds = Object.keys(tokens);
+        const orgId =
+          stored.organizationId ??
+          (orgIds.length === 1 ? orgIds[0] : undefined);
+        if (!orgId) continue;
+        const accessToken = await getValidToken(orgId, tokens);
+        if (!accessToken) continue;
 
         if (
           stored &&
@@ -1229,6 +1274,8 @@ export async function loadActiveSessionsOnStartup(
           // supplied here.
           const session: ActiveSession = {
             ...stored,
+            appId,
+            organizationId: orgId,
             sessionKey,
             accessToken,
             issueDescription: "",

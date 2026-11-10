@@ -12,6 +12,12 @@ import {
   loadJsonFileShared,
 } from "./shared/json-file-cache";
 import { configuredPaths } from "./config";
+import {
+  getLoadedTokens,
+  getValidToken,
+  loadTokens,
+} from "../agents/linear/oauth";
+import { linearAppById } from "./linear-app-registry";
 import { resolveTeammate } from "./shared/user-mappings";
 import {
   isOauthCapable,
@@ -95,6 +101,62 @@ export function readMcpConfig(): { mcpServers: Record<string, any> } {
 
 const LINEAR_AGENT_TOKENS_PATH = `${HOME}/.linear-agent-tokens.json`;
 
+export interface LinearMcpGrant {
+  appId: string;
+  organizationId: string;
+}
+
+export function isOfficialLinearMcpUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "mcp.linear.app" &&
+      !url.port &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Applied after generic credential overlays, without a personal/shared relay. */
+export async function withLinearRunGrant(
+  cfg: Record<string, unknown>,
+  grant: LinearMcpGrant,
+): Promise<Record<string, unknown>> {
+  if (!isOfficialLinearMcpUrl(cfg.url)) {
+    throw new Error(
+      "Run-bound Linear MCP requires the official HTTPS endpoint",
+    );
+  }
+  if (!grant.organizationId || !linearAppById(grant.appId)) {
+    throw new Error("Run-bound Linear MCP grant is unavailable");
+  }
+  let token: string | null;
+  try {
+    token = await getValidToken(
+      grant.organizationId,
+      getLoadedTokens(grant.appId) ?? (await loadTokens(grant.appId)),
+    );
+  } catch {
+    throw new Error("Run-bound Linear MCP grant is unavailable");
+  }
+  if (!token) throw new Error("Run-bound Linear MCP grant is unavailable");
+  const headers = new Headers();
+  if (cfg.headers && typeof cfg.headers === "object") {
+    for (const [name, value] of Object.entries(cfg.headers)) {
+      if (name.toLowerCase() !== "authorization" && typeof value === "string") {
+        headers.set(name, value);
+      }
+    }
+  }
+  headers.set("Authorization", `Bearer ${token}`);
+  return { ...cfg, headers: Object.fromEntries(headers) };
+}
+
 /**
  * Overlay credentials that rotate outside this process. Linear runs as the
  * bot via the linear-agent's OAuth token (actor=app, refreshed by
@@ -111,7 +173,7 @@ export function withDynamicCredentials(
 ): Record<string, any> {
   let out = servers;
   const linear = servers.linear;
-  if (linear?.url?.includes("mcp.linear.app")) {
+  if (isOfficialLinearMcpUrl(linear?.url)) {
     try {
       // Rotated by the linear-agent service; loaded at import and refreshed
       // in the background, at most a second behind the file.

@@ -456,6 +456,9 @@ export interface SlackSessionFile {
 
 // Linear session file format
 export interface LinearSessionFile {
+  appId?: string;
+  automationId?: string;
+  executionMode?: "ask" | "code" | "scratch";
   branch: string;
   claudeSessionId: string | null;
   issueIdentifier?: string;

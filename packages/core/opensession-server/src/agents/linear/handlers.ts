@@ -60,6 +60,23 @@ import {
   linearUserEntry,
 } from "./transcript";
 import { linearStartMode, type LinearStartMode } from "./start-mode";
+import { linearAgentConfig, linearTaskPrompt } from "./agent-config";
+import { createLinearTaskWorkspace } from "./workspace";
+
+function isGeneralTask(session: Pick<ActiveSession, "executionMode">): boolean {
+  return session.executionMode === "scratch" || session.executionMode === "ask";
+}
+
+function belongsToApp(
+  session: Pick<ActiveSession, "appId" | "organizationId">,
+  appId: string,
+  organizationId: string,
+): boolean {
+  return (
+    (session.appId ?? "primary") === appId &&
+    (!session.organizationId || session.organizationId === organizationId)
+  );
+}
 
 // --- Webhook types ---
 
@@ -219,10 +236,12 @@ async function runLinearSessionSetup(
 
   const unifiedId = linearUnifiedSessionId(session.sessionKey);
   const mode = session.startMode ?? "ask";
-  const greeting = GREETING_PROMPT.replaceAll(
-    "$ISSUE_ID",
-    issue.identifier,
-  ).replaceAll("$ISSUE_TITLE", issue.title);
+  const greeting = isGeneralTask(session)
+    ? `Working on ${issue.identifier}: ${issue.title}`
+    : GREETING_PROMPT.replaceAll("$ISSUE_ID", issue.identifier).replaceAll(
+        "$ISSUE_TITLE",
+        issue.title,
+      );
   let changed = false;
 
   if (!session.workspaceId) {
@@ -419,6 +438,7 @@ async function runClaimedLinearTurn(
     else {
       if (result) {
         if (
+          !isGeneralTask(session) &&
           result.includes("PLANNING_COMPLETE") &&
           session.phase === "planning"
         ) {
@@ -449,7 +469,10 @@ async function runClaimedLinearTurn(
             });
             outcome = { busy: false, result };
           }
-        } else if (result.includes("IMPLEMENTATION_COMPLETE")) {
+        } else if (
+          !isGeneralTask(session) &&
+          result.includes("IMPLEMENTATION_COMPLETE")
+        ) {
           const creatorGithub = linearEmailToGithubUsername(
             session.issueCreator?.email || null,
           );
@@ -604,6 +627,7 @@ async function drainPendingReviewFix(
 // --- Assignment autostart ---
 
 function assignmentPrompt(session: ActiveSession, mode: "plan" | "implement") {
+  if (isGeneralTask(session)) return linearTaskPrompt(session);
   if (mode === "plan") {
     return PLANNING_PROMPT.replaceAll("$ISSUE_ID", session.issueIdentifier)
       .replaceAll("$ISSUE_URL", session.issueUrl)
@@ -684,7 +708,7 @@ async function startAssignmentIfNeeded(
       if (await guard.cancelled()) return;
 
       session.phase = mode === "plan" ? "planning" : "working";
-      if (mode === "implement") {
+      if (mode === "implement" && !isGeneralTask(session)) {
         await moveToStatus(
           accessToken,
           session.issueId,
@@ -695,8 +719,9 @@ async function startAssignmentIfNeeded(
       }
       await createAgentActivity(accessToken, session.linearSessionId, {
         type: "thought",
-        body:
-          mode === "plan"
+        body: isGeneralTask(session)
+          ? "Starting the assigned task..."
+          : mode === "plan"
             ? "Starting planning interview..."
             : MESSAGES.implementationStarted,
       });
@@ -735,8 +760,13 @@ async function startAssignmentIfNeeded(
 export async function handleIssueUpdate(
   webhook: IssueWebhook,
   tokens: LinearTokens,
+  appId?: string,
 ): Promise<Response> {
   const { data: issue, organizationId, updatedFrom } = webhook;
+  const effectiveAppId = appId ?? "primary";
+  const config = appId ? await linearAgentConfig(appId) : null;
+  if ((config && !config.enabled) || (effectiveAppId !== "primary" && !config))
+    return Response.json({ ok: true, disabled: true });
 
   if (webhook.action !== "update") {
     return Response.json({ ok: true });
@@ -763,7 +793,14 @@ export async function handleIssueUpdate(
   // Check for existing session. When a reassigned issue has more than one live
   // record (old and new agent session), drive the newest one; terminal records
   // are never resumed.
-  let existingSession = latestSessionForIssue(issue);
+  let existingSession = latestSessionForIssue(
+    issue,
+    Array.from(activeSessions.values()).filter(
+      (session) =>
+        belongsToApp(session, effectiveAppId, organizationId) &&
+        !isGeneralTask(session),
+    ),
+  );
 
   if (!existingSession) {
     const branch = legacyBranchName(details.title, issue.identifier);
@@ -773,6 +810,8 @@ export async function handleIssueUpdate(
     // another id, or one already ended is not this issue's current session.
     if (
       diskSession?.linearSessionId &&
+      belongsToApp(diskSession, effectiveAppId, organizationId) &&
+      !isGeneralTask(diskSession) &&
       diskSession.claudeSessionId &&
       !(await isLinearSessionTerminal(diskSession.linearSessionId))
     ) {
@@ -895,8 +934,50 @@ export async function handleIssueUpdate(
 export async function handleAgentSession(
   webhook: AgentSessionWebhook,
   tokens: LinearTokens,
+  appId?: string,
 ): Promise<Response> {
   const { agentSession, organizationId, action } = webhook;
+  const effectiveAppId = appId ?? "primary";
+  const owned = activeSessions.get(agentSession.id);
+  if (owned && !belongsToApp(owned, effectiveAppId, organizationId)) {
+    return Response.json(
+      { error: "Agent session belongs to another app" },
+      { status: 403 },
+    );
+  }
+  // Check the targeted durable record even for stop/end deliveries. A signed
+  // webhook from another configured app must not mutate an existing session.
+  if (!owned) {
+    const stored = await findStoredSessionForAgentSession(
+      agentSession.id,
+      legacyBranchName(agentSession.issue.title, agentSession.issue.identifier),
+    );
+    if (
+      stored &&
+      !belongsToApp(stored.session, effectiveAppId, organizationId)
+    ) {
+      return Response.json(
+        { error: "Agent session belongs to another app" },
+        { status: 403 },
+      );
+    }
+  }
+  const agentConfig = appId ? await linearAgentConfig(appId) : null;
+  if (owned && appId) {
+    owned.appId = appId;
+    owned.organizationId = organizationId;
+  }
+  if (
+    (agentConfig && !agentConfig.enabled) ||
+    (effectiveAppId !== "primary" && !agentConfig)
+  ) {
+    if (
+      action !== "ended" &&
+      action !== "dismissed" &&
+      webhook.agentActivity?.signal !== "stop"
+    )
+      return Response.json({ ok: true, disabled: true });
+  }
 
   // Stop signal
   if (action === "prompted" && webhook.agentActivity?.signal === "stop") {
@@ -984,6 +1065,7 @@ export async function handleAgentSession(
           sessionKey: stored.key,
           accessToken: "",
           organizationId,
+          appId,
           issueTitle: agentSession.issue.title,
           issueId: agentSession.issue.id,
           issueDescription: agentSession.issue.description || "",
@@ -1076,7 +1158,10 @@ export async function handleAgentSession(
         let effectivePrompt = prompt;
 
         // Initial direction routing
-        if (session.phase === "awaiting_direction") {
+        if (isGeneralTask(session)) {
+          session.phase = "working";
+          effectivePrompt = linearTaskPrompt(session, prompt);
+        } else if (session.phase === "awaiting_direction") {
           const lowerPrompt = prompt.toLowerCase().trim();
 
           if (lowerPrompt.includes("plan")) {
@@ -1476,6 +1561,9 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
   });
 
   const session: ActiveSession = {
+    appId,
+    automationId: agentConfig?.id,
+    executionMode: agentConfig?.mode,
     branch: desiredBranch,
     claudeSessionId: null,
     accessToken,
@@ -1494,7 +1582,10 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     ready,
     updatedAt: new Date().toISOString(),
     greetingAt: agentSession.createdAt ?? new Date().toISOString(),
-    startMode: linearStartMode(),
+    startMode:
+      agentConfig && agentConfig.mode !== "code"
+        ? "implement"
+        : linearStartMode(),
     planningConversation: [],
     participants: [],
     lastActiveUser: null,
@@ -1509,9 +1600,12 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
         body: MESSAGES.starting,
       });
 
-      const created = await withIssueCreationLock(issue.id, () =>
-        createSessionWorktree(desiredBranch),
-      );
+      const created =
+        agentConfig && agentConfig.mode !== "code"
+          ? await createLinearTaskWorkspace(sessionId, agentConfig)
+          : await withIssueCreationLock(issue.id, () =>
+              createSessionWorktree(desiredBranch, agentConfig?.repo),
+            );
       session.branch = created.branch;
       session.worktreeDir = created.worktreeDir;
       session.repoId = created.repoId;

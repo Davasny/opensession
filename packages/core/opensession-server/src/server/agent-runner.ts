@@ -139,6 +139,8 @@ export interface RunAgentOpts {
    *  MCP grant lookup only: never provider accounts, the allowedUsers gate,
    *  GitHub or AWS. */
   mcpRunAs?: McpRunAs;
+  /** Non-secret app/org binding. Linear MCP must not use personal grants. */
+  linearGrant?: { appId: string; organizationId: string };
   /** Model id; decides the backend. Omitted = default Claude model. */
   model?: string;
   /** User-selected model retained while a transient fallback drives this turn. */
@@ -2139,6 +2141,7 @@ export async function resumeInterruptedRuns(
                   fastMode: run.fastMode,
                   speed: run.speed,
                   mcpServers: run.mcpServers ?? "all",
+                  linearGrant: run.linearGrant,
                   inProcessMcp: run.osSessionId
                     ? await inProcessMcpFor?.(run.osSessionId, run.user)
                     : undefined,
@@ -2253,6 +2256,7 @@ export async function resumeInterruptedRuns(
                 fastMode: run.fastMode,
                 speed: run.speed,
                 mcpServers: run.mcpServers ?? "all",
+                linearGrant: run.linearGrant,
                 inProcessMcp: run.osSessionId
                   ? await inProcessMcpFor?.(run.osSessionId, run.user)
                   : undefined,
@@ -2359,6 +2363,7 @@ export async function resumeInterruptedRuns(
               fastMode: run.fastMode,
               speed: run.speed,
               mcpServers: run.mcpServers ?? "all",
+              linearGrant: run.linearGrant,
               inProcessMcp: run.osSessionId
                 ? await inProcessMcpFor?.(run.osSessionId, run.user)
                 : undefined,

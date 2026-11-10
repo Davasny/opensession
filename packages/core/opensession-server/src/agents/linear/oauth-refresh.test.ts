@@ -1,17 +1,48 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getValidToken, refreshAccessToken, refreshToken } from "./oauth";
 
-const { getValidToken, refreshAccessToken, refreshToken } =
-  await import("./oauth");
+const originalEnv = {
+  HOME: process.env.HOME,
+  LINEAR_CLIENT_ID: process.env.LINEAR_CLIENT_ID,
+  LINEAR_CLIENT_SECRET: process.env.LINEAR_CLIENT_SECRET,
+};
+let scratch = "";
+let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
+const fetchPreconnect = globalThis.fetch.preconnect;
 
-const originalFetch = globalThis.fetch;
+function mockFetch(
+  implementation: (
+    ...args: Parameters<typeof fetch>
+  ) => ReturnType<typeof fetch>,
+) {
+  fetchSpy.mockImplementation(
+    Object.assign(implementation, { preconnect: fetchPreconnect }),
+  );
+}
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
+beforeEach(async () => {
+  scratch = await mkdtemp(join(tmpdir(), "linear-refresh-test-"));
+  process.env.HOME = scratch;
+  process.env.LINEAR_CLIENT_ID = "test-client";
+  process.env.LINEAR_CLIENT_SECRET = "test-secret";
+  fetchSpy = spyOn(globalThis, "fetch");
+});
+
+afterEach(async () => {
+  fetchSpy.mockRestore();
+  for (const [key, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  await rm(scratch, { recursive: true, force: true });
 });
 
 test("concurrent refreshes share one token exchange", async () => {
   let calls = 0;
-  globalThis.fetch = (async () => {
+  mockFetch(async () => {
     calls++;
     await Bun.sleep(10);
     return Response.json({
@@ -19,7 +50,7 @@ test("concurrent refreshes share one token exchange", async () => {
       refresh_token: "refresh-2",
       expires_in: 3600,
     });
-  }) as unknown as typeof fetch;
+  });
 
   const tokens = {
     "org-1": {
@@ -43,11 +74,12 @@ test("concurrent refreshes share one token exchange", async () => {
 });
 
 test("refreshAccessToken rotates the token bound by getValidToken", async () => {
-  globalThis.fetch = (async () =>
+  mockFetch(async () =>
     Response.json({
       access_token: "fresh-2",
       expires_in: 3600,
-    })) as unknown as typeof fetch;
+    }),
+  );
 
   const tokens = {
     "org-1": {
@@ -63,11 +95,9 @@ test("refreshAccessToken rotates the token bound by getValidToken", async () => 
 });
 
 test("a failed exchange leaves the stored grant untouched", async () => {
-  globalThis.fetch = (async () =>
-    Response.json(
-      { error: "invalid_grant" },
-      { status: 400 },
-    )) as unknown as typeof fetch;
+  mockFetch(async () =>
+    Response.json({ error: "invalid_grant" }, { status: 400 }),
+  );
 
   const tokens = {
     "org-1": {

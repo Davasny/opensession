@@ -13,6 +13,7 @@ import { IconTile } from "./BrandTile";
 import { CodeStorageConfiguration } from "./CodeStorageConfiguration";
 import { GithubAppFields } from "./GithubAppFields";
 import { PlainRouterConfiguration } from "./PlainRouterConfiguration";
+import { LinearAgentSettings } from "./LinearAgentSettings";
 import { SlackManifestGuide } from "./SlackManifestGuide";
 import {
   Code,
@@ -148,31 +149,24 @@ function guideFor(integration: SetupIntegration, publicBaseUrl: string): Guide {
             capability.
           </>,
           <>
-            Set the OAuth callback URL to exactly:
-            <Value value={url("/oauth/callback")} />
+            Copy the app's OAuth callback URL from its settings above into
+            Linear.
           </>,
           <>
             Create a Linear webhook for agent-session and issue events. Use this
-            endpoint:
-            <Value value={url("/webhook")} />
+            app's webhook URL shown above.
           </>,
           <>
-            Paste the client id, client secret, webhook secret, and API key into
-            the fields above.
+            Enter the client ID, client secret, and webhook secret under the
+            matching app above. No API key is required.
           </>,
           <>
-            Enable Linear, save, restart Open Session, then install and
-            authorize the app in your workspace.
+            If Linear is disabled, enable it, save, and restart Open Session.
+            Then use Connect on each app to authorize it in your workspace.
           </>,
         ],
         scopes: [
           { label: "OAuth scopes", items: ["app:assignable", "read", "write"] },
-        ],
-        permissions: [
-          <>
-            The optional API key is used for direct issue reads and writes when
-            no stored OAuth grant is available.
-          </>,
         ],
       };
 
@@ -420,10 +414,11 @@ export function IntegrationSetupDialog({
     setClearClientSecret(false);
   }, [open, integration, github]);
 
-  const typedKeys = integration.env
+  const credentialEnv = integration.id === "linear" ? [] : integration.env;
+  const typedKeys = credentialEnv
     .map((envVar) => envVar.name)
     .filter((name) => (typed[name] ?? "").trim() !== "");
-  const clearedKeys = integration.env
+  const clearedKeys = credentialEnv
     .filter(
       (envVar) =>
         envVar.present &&
@@ -601,7 +596,7 @@ export function IntegrationSetupDialog({
           description={guide.description}
         />
 
-        {(canToggle || integration.env.length > 0) && (
+        {(canToggle || credentialEnv.length > 0) && (
           <div className="flex flex-col gap-4">
             {canToggle && (
               <SettingsSection className="flex items-center gap-4 border-0 bg-panel p-4">
@@ -667,7 +662,7 @@ export function IntegrationSetupDialog({
                 HTTP, so configure a public URL under Domains and ingress first.
               </InlineAlert>
             )}
-            {integration.env.length > 0 && (
+            {credentialEnv.length > 0 && (
               <ConfigurationSection
                 title={
                   integration.id === "github"
@@ -681,7 +676,7 @@ export function IntegrationSetupDialog({
                 }
               >
                 <div className="flex flex-col gap-4">
-                  {integration.env.map((envVar) => (
+                  {credentialEnv.map((envVar) => (
                     <SecretField
                       key={envVar.name}
                       name={envVar.name}
@@ -730,6 +725,19 @@ export function IntegrationSetupDialog({
           <CodeStorageConfiguration onChanged={refreshIntegration} />
         )}
         {integration.id === "plain" && <PlainRouterConfiguration />}
+        {integration.id === "linear" && (
+          <LinearAgentSettings
+            onChanged={() => {
+              void refreshIntegration().catch((cause: unknown) =>
+                setError(
+                  cause instanceof Error
+                    ? cause.message
+                    : "Could not refresh Linear status",
+                ),
+              );
+            }}
+          />
+        )}
 
         {/* Open on a first setup, closed once there are credentials to keep:
 				    the recipe is a one-time read, the fields are not. */}

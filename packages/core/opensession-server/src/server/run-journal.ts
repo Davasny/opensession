@@ -78,6 +78,7 @@ export interface ActiveRunRecord {
   // Per-run MCP scope, preserved across resume. Optional for back-compat:
   // records journaled before McpScope omitted it to mean "all".
   mcpServers?: McpScope;
+  linearGrant?: { appId: string; organizationId: string };
   user?: string; // per-run user, preserved across resume (gates per-user MCP servers)
   /** Person whose personal provider subscription may serve the run when it
    *  differs from `user` (a human turn in an automation-owned session).
@@ -205,6 +206,7 @@ function writeRunJournal(journal: Record<string, ActiveRunRecord>): void {
  */
 export function buildRunJournalRecord(
   opts: {
+    linearGrant?: ActiveRunRecord["linearGrant"];
     deniedTools?: Record<string, string>;
     publicationPolicy?: { repo: string; branch: string; headBranch: string };
     aws?: boolean;
@@ -247,6 +249,7 @@ export function buildRunJournalRecord(
   const startedAt = new Date().toISOString();
   return {
     ...site,
+    linearGrant: site.linearGrant ?? opts.linearGrant,
     accountUser: site.accountUser ?? opts.accountUser,
     accountId: site.accountId ?? opts.accountId,
     accountStrict: site.accountStrict ?? opts.accountStrict,

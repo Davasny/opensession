@@ -2639,6 +2639,7 @@ async function* runPiAttempt(
       user,
       mcpGrantUser: opts.mcpGrantUser,
       mcpRunAs: opts.mcpRunAs,
+      linearGrant: opts.linearGrant,
       sessionUrl: journal?.osSessionId
         ? sessionLink(journal.osSessionId)
         : undefined,

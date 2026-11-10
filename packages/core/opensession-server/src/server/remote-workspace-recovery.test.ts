@@ -10,6 +10,24 @@ const workspace = {
 };
 
 describe("remote workspace recovery", () => {
+  test("journal upgrades and JSON recovery retain the non-secret Linear binding", () => {
+    const linearGrant = { appId: "acme", organizationId: "org-example" };
+    const initial = buildRunJournalRecord(
+      { linearGrant },
+      { runKey: "linear-grant", cwd: workspace.cwd, mcpServers: ["linear"] },
+    );
+    const upgraded = buildRunJournalRecord(
+      { linearGrant },
+      { ...initial, claudeSessionId: "engine-example" },
+    );
+    const recovered = JSON.parse(JSON.stringify(upgraded));
+    expect(recovered.linearGrant).toEqual(linearGrant);
+    expect(recovered.linearGrant).not.toHaveProperty("accessToken");
+    expect(
+      buildRunJournalRecord({}, { runKey: "legacy", cwd: workspace.cwd })
+        .linearGrant,
+    ).toBeUndefined();
+  });
   test("an engine's own journal record keeps the Sandbox, not its token", () => {
     const record = buildRunJournalRecord(
       { remoteWorkspace: { ...workspace, rpcToken: "secret-token" } },

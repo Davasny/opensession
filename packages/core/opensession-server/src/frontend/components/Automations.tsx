@@ -1332,12 +1332,14 @@ function TypeChooser({
 
 /** Devin-style connector picker. `value` semantics match the server:
  *  undefined = all servers, [] = none, else the named allowlist. */
-function McpPicker({
+export function McpPicker({
   value,
   onChange,
+  allowAll = true,
 }: {
   value: string[] | undefined;
   onChange: (v: string[] | undefined) => void;
+  allowAll?: boolean;
 }) {
   const [servers, setServers] = useState<
     Array<{ name: string; status: string }>
@@ -1381,7 +1383,7 @@ function McpPicker({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline gap-2">
+      <div className="flex flex-wrap items-baseline gap-2">
         <span className="text-fg text-label font-medium">MCPs</span>
         <span className="text-dim text-label">
           Select which connectors this automation's runs can use
@@ -1406,28 +1408,31 @@ function McpPicker({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search MCPs…"
-            className="flex-1 bg-transparent border-0 outline-none text-label text-fg placeholder:text-faint"
+            aria-label="Search MCPs"
+            className="min-w-0 flex-1 bg-transparent border-0 outline-none text-label text-fg placeholder:text-faint phone:min-h-11 phone:text-input-phone"
             style={{ border: "none", padding: 0, background: "transparent" }}
           />
           <span className="text-faint text-meta shrink-0">
             {all ? "all connectors" : `${selected.length} selected`}
           </span>
         </div>
-        <label className="flex items-center gap-2.5 border-b border-line px-3 py-2 text-label cursor-pointer hover:bg-hover">
-          <Checkbox
-            checked={all}
-            onCheckedChange={() => onChange(all ? [] : undefined)}
-          />
-          <span className="text-fg">All connectors</span>
-          <span className="text-faint text-meta">
-            every configured server (pre-least-privilege default)
-          </span>
-        </label>
+        {allowAll && (
+          <label className="flex items-center gap-2.5 border-b border-line px-3 py-2 text-label cursor-pointer hover:bg-hover phone:min-h-11">
+            <Checkbox
+              checked={all}
+              onCheckedChange={() => onChange(all ? [] : undefined)}
+            />
+            <span className="text-fg">All connectors</span>
+            <span className="text-faint text-meta">
+              every configured server (pre-least-privilege default)
+            </span>
+          </label>
+        )}
         <div className="max-h-[180px] overflow-y-auto">
           {shown.map((s) => (
             <label
               key={s.name}
-              className="flex items-center gap-2.5 px-3 py-1.5 text-label cursor-pointer hover:bg-hover"
+              className="flex items-center gap-2.5 px-3 py-1.5 text-label cursor-pointer hover:bg-hover phone:min-h-11"
             >
               <Checkbox
                 checked={all || selected.includes(s.name)}

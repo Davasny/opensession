@@ -115,8 +115,8 @@ export const INTEGRATIONS: IntegrationSpec[] = [
     env: [
       {
         name: "LINEAR_API_KEY",
-        required: true,
-        description: "API key for issue reads/writes",
+        description:
+          "Optional API key for external tooling; agent sessions use OAuth",
       },
       {
         name: "LINEAR_WEBHOOK_SECRET",

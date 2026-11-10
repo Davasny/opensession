@@ -149,6 +149,7 @@ describe("hosted run journal", () => {
     const previousKernel = __setSessionKernelStoreForTest(kernelStore);
     const spec: RunHostSpec = {
       hostId: "rh-quiet-cancel",
+      linearGrant: { appId: "acme", organizationId: "org-example" },
       osSessionId: "os-quiet-cancel",
       prompt: "test",
       cwd: "/tmp",
@@ -187,6 +188,13 @@ describe("hosted run journal", () => {
       expect(activeRunRecords().some((run) => run.runKey === spec.hostId)).toBe(
         true,
       );
+      expect(
+        activeRunRecords().find((run) => run.runKey === spec.hostId)
+          ?.linearGrant,
+      ).toEqual(spec.linearGrant);
+      expect(
+        JSON.parse(await Bun.file(journalPath).text())[spec.hostId].linearGrant,
+      ).toEqual(spec.linearGrant);
       expect(handle.requestCancel()).toBe(true);
       if (!receive) throw new Error("Host connector did not attach");
       receive({ t: "end" });
@@ -2369,6 +2377,7 @@ describe("HostHandle model recovery", () => {
     const spec: RunHostSpec = {
       hostId: "rh-old",
       osSessionId: "bks-test",
+      linearGrant: { appId: "acme", organizationId: "org-example" },
       prompt: "test",
       cwd: "/tmp",
       model: "model-a",
@@ -2412,6 +2421,9 @@ describe("HostHandle model recovery", () => {
     expect(writtenSpec?.selectedModel).toBe("model-b");
     expect(writtenSpec?.model).toBe("model-c");
     expect(writtenSpec?.transientFallback).toBe(true);
+    expect(JSON.parse(JSON.stringify(writtenSpec)).linearGrant).toEqual(
+      spec.linearGrant,
+    );
     (handle as any).handleMsg({
       t: "transcript",
       engineSessionId: spec.osSessionId,

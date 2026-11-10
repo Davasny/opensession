@@ -225,6 +225,28 @@ export async function completeAgentSessionCatalogSources<
   return agentSessionCatalogSources(kind);
 }
 
+/** Read one known source without enumerating the agent's sessions or files. */
+export async function agentSessionCatalogSource<K extends AgentSessionKind>(
+  kind: K,
+  key: string,
+): Promise<AgentSessionSource<K> | null> {
+  const row = await sessionCatalogDocument({
+    op: "get",
+    namespace: AGENT_SESSION_CATALOG_NAMESPACES[kind],
+    key,
+  });
+  if (!row?.value) return null;
+  const projection = decode(row.value);
+  if (!projection)
+    throw new Error(`Invalid ${kind} session projection: ${key}`);
+  if (projection.data === null) return null;
+  return {
+    file: projection.file || `${key}.json`,
+    data: projection.data,
+    mtime: projection.mtime,
+  } as AgentSessionSource<K>;
+}
+
 const MIRROR_PUT_ATTEMPTS = 3;
 // Per-key write chains. Observations of one file from this process land in
 // order; the compare-and-set orders them against other writers.

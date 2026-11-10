@@ -95,6 +95,8 @@ export interface RunHostSpec {
    *  grant comes first for these servers only (see agent-runner
    *  RunAgentOpts.mcpRunAs). */
   mcpRunAs?: { user: string; servers: string[] };
+  /** Optional non-secret app/org binding for Linear MCP identity isolation. */
+  linearGrant?: { appId: string; organizationId: string };
   model?: string;
   selectedModel?: string;
   transientFallback?: boolean;

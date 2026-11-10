@@ -1089,6 +1089,7 @@ function linearSessionRowFromData(
     id,
     claudeSessionId: data.claudeSessionId,
     source: "linear",
+    mode: data.executionMode,
     branch,
     repo: data.repoId || undefined,
     workspaceId: data.workspaceId ?? undefined,

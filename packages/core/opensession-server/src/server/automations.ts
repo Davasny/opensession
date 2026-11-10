@@ -454,7 +454,7 @@ function isAutomationId(id: unknown): id is string {
     id.length <= 256 &&
     id !== "." &&
     id !== ".." &&
-    !/[\\/ -]/.test(id)
+    !/[\\/\u0000-\u001f]/.test(id)
   );
 }
 

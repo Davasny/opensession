@@ -27,6 +27,11 @@ import type { InProcessMcpServer } from "./inprocess-mcp";
 import { RPC_TOOL_CALL_TIMEOUT_MS } from "./run-rpc-protocol";
 import { workloadCommand } from "./workload-scope";
 import type { McpRunAs } from "./automation-mcp-run-as";
+import {
+  isOfficialLinearMcpUrl,
+  withLinearRunGrant,
+  type LinearMcpGrant,
+} from "./connections";
 
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 /** Open Session's own servers bound their calls themselves, and some wait on
@@ -343,6 +348,7 @@ export async function createMcpRuntime(opts: {
    *  lookup only: the allowedUsers gate below still sees `user` and
    *  `mcpGrantUser` exactly as before. */
   mcpRunAs?: McpRunAs;
+  linearGrant?: LinearMcpGrant;
   /** This session's web link, handed to stdio servers as
    *  OPENSESSION_SESSION_URL so what they post can link back (Slack's "via"
    *  line). */
@@ -383,6 +389,11 @@ export async function createMcpRuntime(opts: {
     name: string,
     cfg: Record<string, unknown>,
   ): Promise<ServerConn> => {
+    const linearGrant =
+      name === "linear" || isOfficialLinearMcpUrl(cfg.url)
+        ? opts.linearGrant
+        : undefined;
+    if (linearGrant) cfg = await withLinearRunGrant(cfg, linearGrant);
     const client = new Client({
       name: "opensession-mcp-runtime",
       version: "1.0.0",
@@ -391,12 +402,13 @@ export async function createMcpRuntime(opts: {
     live.add(record);
     let transport: Transport;
     if (cfg.type === "http" || cfg.type === "sse" || cfg.url) {
-      const candidates = mcpGrantCandidates(name, opts);
+      const candidates = linearGrant ? [] : mcpGrantCandidates(name, opts);
       const personal = candidates.find((user) =>
         mcpUserGrantHeader(name, user),
       );
       if (personal) grantedBy.set(name, personal);
-      const hasGrant = !!personal || !!mcpSharedGrantHeader(name);
+      const hasGrant =
+        !linearGrant && (!!personal || !!mcpSharedGrantHeader(name));
       let url = String(cfg.url);
       let headers = { ...((cfg.headers as Record<string, string>) || {}) };
       if (hasGrant) {

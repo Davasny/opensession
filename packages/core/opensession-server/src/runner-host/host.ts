@@ -588,6 +588,7 @@ try {
     mode: spec.mode,
     mcpGrantUser: spec.mcpGrantUser,
     mcpRunAs: spec.mcpRunAs,
+    linearGrant: spec.linearGrant,
     model: spec.model,
     selectedModel: spec.selectedModel,
     transientFallback: spec.transientFallback,

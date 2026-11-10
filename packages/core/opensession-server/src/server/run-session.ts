@@ -47,6 +47,7 @@ import { getRunState, transitionRunState } from "./run-state";
 import { settlePromptThrowRunState } from "./prompt-throw-settlement";
 import { retryOnKernelSaturation } from "./session-projection-executor";
 import { resolveSessionRunInputs, runAccountSpec } from "./session-run-inputs";
+import { linearSessionRunInputs } from "./linear-session-run-inputs";
 import type { McpRunAs } from "./automation-mcp-run-as";
 import {
   fixedSubscriptionTurnError,
@@ -2817,8 +2818,16 @@ async function runSessionPromptInner(
   slackProgress?: SlackTurnProgress,
 ): Promise<void> {
   const autoRetry = await retryAutoFallbackModel(sessionId);
-  const session = findSession(sessionId);
-  if (!session) return;
+  const cachedSession = findSession(sessionId);
+  if (!cachedSession) return;
+  const linearInputs = await linearSessionRunInputs(cachedSession);
+  const session = linearInputs
+    ? {
+        ...cachedSession,
+        mode: linearInputs.mode,
+        model: linearInputs.model ?? cachedSession.model,
+      }
+    : cachedSession;
   if (autoRetry) {
     broadcastToSession(sessionId, {
       type: "model_changed",
@@ -3139,7 +3148,10 @@ async function runSessionPromptInner(
   if (slackReplyTo) prompt += "\n\n" + SLACK_SESSION_NOTE;
   const runInputs = await resolveSessionRunInputs(session, { user });
   const isAutomationSession = runInputs.isAutomationSession;
-  const mcpServers = runInputs.mcpServers;
+  const mcpServers = linearInputs?.mcpServers ?? runInputs.mcpServers;
+  if (linearInputs?.instructions) {
+    prompt = `Agent instructions:\n${linearInputs.instructions}\n\nCurrent task:\n${prompt}`;
+  }
   const deniedTools = runInputs.deniedTools;
   // Folders on the prompter's own computer (local-folders.ts). Interactive
   // turns only, and only folders this prompter connected.
@@ -3491,6 +3503,7 @@ async function runSessionPromptInner(
           // ...except the automation's own opt-in "Run MCP sign-ins as"
           // teammate (Automation.mcpRunAs), for its pinned servers only.
           mcpRunAs: runInputs.mcpRunAs,
+          linearGrant: linearInputs?.linearGrant,
           model: session.model,
           images,
           mcpServers: mcpServers ?? "all",
@@ -3641,6 +3654,7 @@ async function runSessionPromptInner(
       // synthetic continuations such as worker reports and restart recovery.
       mcpGrantUser: runInputs.mcpGrantUser,
       mcpRunAs: runInputs.mcpRunAs,
+      linearGrant: linearInputs?.linearGrant,
       journal: { osSessionId: session.id, kind: "prompt" },
       startToken,
       onAskUser: makeAskHandler(sessionId),

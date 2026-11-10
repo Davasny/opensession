@@ -394,7 +394,7 @@ async function configuredRepoId(repoFull: string): Promise<string | null> {
 async function resolveToken(
   stored: StoredSession,
 ): Promise<ResolvedToken | null> {
-  const tokens = await loadTokens();
+  const tokens = await loadTokens(stored.appId ?? "primary");
   const orgs = Object.keys(tokens);
   const organizationId =
     stored.organizationId && tokens[stored.organizationId]

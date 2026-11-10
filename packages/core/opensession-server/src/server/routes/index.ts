@@ -57,6 +57,7 @@ import { handleSecurityRoutes } from "./security";
 import { handleGoalsRoutes } from "./goals";
 import { handleConnectionsRoutes } from "./connections";
 import { handleGithubAppsRoutes } from "./github-apps";
+import { handleLinearAppsRoutes } from "./linear-apps";
 import { handleAccountsRoutes } from "./accounts";
 import { handleModelsRoutes } from "./models";
 import { handleRunnersRoutes } from "./runners";
@@ -136,6 +137,7 @@ export const routeHandlers: RouteHandler[] = [
   handleSecurityRoutes,
   handleGoalsRoutes,
   handleGithubAppsRoutes,
+  handleLinearAppsRoutes,
   handleConnectionsRoutes,
   handleAccountsRoutes,
   handleModelsRoutes,
