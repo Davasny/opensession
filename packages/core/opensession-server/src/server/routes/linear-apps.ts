@@ -42,13 +42,14 @@ const AUTOMATION_FIELDS = [
   "mode",
   "model",
   "mcpServers",
+  "mcpAll",
   "enabled",
   "repo",
 ];
 type AutomationPatch = Partial<
   Pick<
     Automation,
-    "prompt" | "mode" | "model" | "mcpServers" | "enabled" | "repo"
+    "prompt" | "mode" | "model" | "mcpServers" | "mcpAll" | "enabled" | "repo"
   >
 >;
 
@@ -75,6 +76,7 @@ function summary(app: LinearApp, automation: Automation | undefined) {
           mode: automation.mode,
           model: automation.model ?? null,
           mcpServers: automation.mcpServers ?? [],
+          mcpAll: !!automation.mcpAll,
           enabled: automation.enabled,
           repo: automation.repo ?? null,
         }
@@ -209,6 +211,7 @@ export async function handleLinearAppsRoutes(
       );
     if (
       "mcpServers" in patch &&
+      patch.mcpServers !== null &&
       (!Array.isArray(patch.mcpServers) ||
         patch.mcpServers.length > 100 ||
         !patch.mcpServers.every(
@@ -216,7 +219,12 @@ export async function handleLinearAppsRoutes(
         ))
     )
       return Response.json(
-        { error: "Automation mcpServers must be a string array" },
+        { error: "Automation mcpServers must be a string array or null" },
+        { status: 400 },
+      );
+    if ("mcpAll" in patch && typeof patch.mcpAll !== "boolean")
+      return Response.json(
+        { error: "Automation mcpAll must be a boolean" },
         { status: 400 },
       );
     if (typeof patch.prompt === "string") automationPatch.prompt = patch.prompt;
@@ -230,10 +238,17 @@ export async function handleLinearAppsRoutes(
       automationPatch.mode = patch.mode;
     if (typeof patch.enabled === "boolean")
       automationPatch.enabled = patch.enabled;
-    if (Array.isArray(patch.mcpServers))
+    if (typeof patch.mcpAll === "boolean")
+      automationPatch.mcpAll = patch.mcpAll;
+    if (patch.mcpServers === null) {
+      automationPatch.mcpAll = true;
+      automationPatch.mcpServers = [];
+    } else if (Array.isArray(patch.mcpServers)) {
       automationPatch.mcpServers = patch.mcpServers.filter(
         (value: unknown): value is string => typeof value === "string",
       );
+      if (patch.mcpAll === undefined) automationPatch.mcpAll = false;
+    }
   }
   if (
     (creating || (id !== "primary" && "oauthClientId" in body)) &&
@@ -387,6 +402,8 @@ export async function handleLinearAppsRoutes(
             rollback.repo = previousAutomation.repo;
           if ("mcpServers" in automationPatch)
             rollback.mcpServers = previousAutomation.mcpServers;
+          if ("mcpAll" in automationPatch)
+            rollback.mcpAll = previousAutomation.mcpAll;
           if ("enabled" in automationPatch)
             rollback.enabled = previousAutomation.enabled;
           const restored = await updateAutomation(

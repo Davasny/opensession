@@ -314,6 +314,13 @@ export interface Automation {
    */
   mcpServers?: string[];
   /**
+   * Linear agent automations only: the app's agent settings explicitly chose
+   * "All connectors". For those records an omitted `mcpServers` still means
+   * none, so an old app profile cannot silently widen to every configured
+   * server. Ordinary automations keep the `undefined` = all convention.
+   */
+  mcpAll?: boolean;
+  /**
    * "Run MCP sign-ins as": one teammate whose personal MCP OAuth grants this
    * automation's own runs use, for the pinned servers that are still in
    * `mcpServers`. Unset = no personal grant (the workspace grant only). Only
@@ -933,6 +940,7 @@ const AUTOMATION_FIELDS: Record<string, AutomationFieldValidator> = {
   enabled: (v) => v !== false,
   eventKey: (v) => (typeof v === "string" ? v.trim() : "") || undefined,
   mcpServers: (v) => sanitizeMcpList(v),
+  mcpAll: (v) => (v === true ? true : undefined),
   linearConnection: parseAutomationLinearConnection,
   repo: (v) => sanitizeRepo(v),
   prReviewer: (v) => sanitizePrReviewer(v),
@@ -1121,6 +1129,7 @@ export async function createAutomation(
     enabled?: boolean;
     eventKey?: string;
     mcpServers?: string[];
+    mcpAll?: boolean;
     repo?: string;
     prReviewer?: string;
     readRepos?: string[];
@@ -1236,6 +1245,7 @@ export async function updateAutomation(
       | "eventKey"
       | "webhookMaxConcurrent"
       | "mcpServers"
+      | "mcpAll"
       | "repo"
       | "prReviewer"
       | "readRepos"
@@ -2727,7 +2737,7 @@ export async function runAutomation(
         },
         mode: automation.mode,
         model: runModel,
-        mcpServers: automation.mcpServers || [],
+        mcpServers: automation.mcpAll ? "all" : automation.mcpServers || [],
         mcpRunAs,
         linearGrant,
         proxyMcpServers: Object.keys(inProcessMcp),
@@ -2752,7 +2762,9 @@ export async function runAutomation(
         cwd,
         mode: automation.mode,
         model: runModel,
-        mcpServers: (automation.mcpServers ?? "all") as "all" | string[],
+        mcpServers: (automation.mcpAll
+          ? "all"
+          : (automation.mcpServers ?? "all")) as "all" | string[],
         mcpRunAs,
         linearGrant,
         deniedTools: AUTOMATION_DENIED_TOOLS,

@@ -70,6 +70,9 @@ configuration for the run.
   apps by display name only, and automation create/update choose an id
   explicitly rather than inferring one. PUT and the update tool accept
   `linearConnection: null` to clear the binding.
+  A Linear app's agent settings use the same allowlist plus an explicit
+  `mcpAll` choice for "All connectors"; an omitted or empty list stays empty,
+  so a legacy app profile cannot widen by omission.
   A root session with an explicit `automationId` fails unavailable if that
   automation was deleted. It never switches to a same-named automation or
   unrestricted connector access. Name lookup is for legacy sessions without

@@ -215,6 +215,8 @@ export interface Automation {
   webhookMaxConcurrent?: number;
   eventKey?: string;
   mcpServers?: string[];
+  /** Linear agent automations: "All connectors" was chosen explicitly. */
+  mcpAll?: boolean;
   /** "Run MCP sign-ins as": the teammate whose personal MCP sign-ins this
    *  automation's runs use, for these allowlisted servers. */
   mcpRunAs?: { person: string; servers: string[]; setAt: string };

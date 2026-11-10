@@ -39,6 +39,7 @@ import { getXaiAccountById } from "./xai-accounts";
 import { githubUserLoginForRun } from "./github-auth";
 import { sessionMemoryScopes } from "./session-memory";
 import { sessionRepoIds } from "./session-repos";
+import { linearSessionRunInputs } from "./linear-session-run-inputs";
 import {
   isRunnableSandboxProvider,
   sandboxProviderConfigured,
@@ -305,6 +306,19 @@ export async function buildSessionEffectiveConfig(
   opts: { user?: string; verbose?: boolean } = {},
 ): Promise<EffectiveConfig> {
   const inputs = await resolveSessionRunInputs(session, { user: opts.user });
+  // A Linear-source session's UI turns run with the app profile's MCP scope,
+  // not the session-run-inputs scope (run-session.ts overrides with this same
+  // resolver). Report the effective one, and say why when it is unavailable.
+  let linearError: string | undefined;
+  const linearInputs =
+    session.source === "linear"
+      ? await linearSessionRunInputs(session).catch((error: unknown) => {
+          linearError = error instanceof Error ? error.message : String(error);
+          return null;
+        })
+      : null;
+  const mcpScope = linearInputs?.mcpServers ?? inputs.mcpServers;
+  const mcpAllowlist = mcpScope === "all" ? undefined : mcpScope;
   const journalKind = "prompt";
   const requestedModel = session.model || interactiveDefaultModel();
   const routed = routeModel(requestedModel, { interactive: true });
@@ -388,10 +402,15 @@ export async function buildSessionEffectiveConfig(
   const inProcess = await inProcessServerNames(session, inputs);
   const mcp = {
     scope: row<string[] | "all">(
-      inputs.mcpServers ?? "all",
-      "session-run-inputs.ts MCP scope",
+      mcpScope ?? "all",
+      linearInputs
+        ? "linear-session-run-inputs.ts MCP scope"
+        : "session-run-inputs.ts MCP scope",
+      linearError
+        ? { note: `Linear app profile unavailable: ${linearError}` }
+        : undefined,
     ),
-    servers: describeMcpServers(inputs.mcpServers, inputs.user, grantUsers),
+    servers: describeMcpServers(mcpAllowlist, inputs.user, grantUsers),
     inProcess: {
       branch: row(
         inputs.inProcessMcpBranch,

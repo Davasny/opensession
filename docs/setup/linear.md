@@ -104,7 +104,12 @@ has the event key `linear:agent_session:<app-id>`. The connector owns dispatch
 and conversation continuation; it reads the automation's prompt, model, enabled
 flag, and MCP allowlist for each turn. The primary app keeps its legacy flow
 until agent settings are saved. New additional apps default to general tasks
-with no external MCP connectors selected.
+with no external MCP connectors selected. **All connectors** is an explicit
+choice; an empty list stays empty.
+
+The app's own **linear** connector is always offered in agent settings. It uses
+that app's Linear sign-in, needs no separate MCP server entry, and lets the
+agent read or comment on issues. Other configured connectors remain additive.
 
 - **General task** uses a durable scratch directory, without a repository,
   coding interview, automatic status changes, or automatic PR creation.
@@ -161,13 +166,16 @@ use a fallback only when its app has exactly one stored organization.
 
 ### Linear MCP
 
-The agent-session flow does not require an MCP server. If `mcp-config.json` has
-an HTTP server named `linear` whose URL contains `mcp.linear.app`,
-Linear agent turns bind the MCP connection to their app and organization after
-generic credential overlays. A personal or primary-app grant cannot supersede
-that binding. A missing grant fails closed, and a bound connection must use the
-official HTTPS `mcp.linear.app` endpoint. Other interactive sessions keep the
-existing personal/shared MCP credential behavior.
+The agent-session flow does not require an MCP server. The app's agent settings
+offer a built-in `linear` connector that binds the MCP connection to that app
+and organization after generic credential overlays; choosing **All connectors**
+includes it too. A personal or primary-app grant cannot supersede that binding.
+A missing grant fails closed, and a bound connection must use the official
+HTTPS `mcp.linear.app` endpoint. When no canonical `linear` server is
+configured, the logical mount uses `https://mcp.linear.app/mcp`. A configured
+`linear` server remains authoritative, including its endpoint and
+`allowedUsers` gate. Other interactive sessions keep the existing
+personal/shared MCP credential behavior.
 
 ## Webhook intake and lifecycle
 

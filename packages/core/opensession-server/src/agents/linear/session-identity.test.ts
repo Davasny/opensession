@@ -519,6 +519,34 @@ test("a writer app starts in scratch and keeps its instructions on recovered rep
   }
 });
 
+test("an app set to all connectors passes the unscoped MCP scope", async () => {
+  const id = "a3030303-0303-4303-8303-030303030303";
+  const config = appAutomation("writer", "scratch");
+  config.mcpAll = true;
+  const lookup = spyOn(agentConfig, "linearAgentConfig").mockResolvedValue(
+    config,
+  );
+  try {
+    runResult = "Article written.";
+    const response = await handleAgentSession(
+      webhook("created", id),
+      {},
+      "writer",
+    );
+    expect(response.status).toBe(200);
+    await awaitReady(id);
+    await waitForAssignmentSettled(id);
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0]?.mcpServers).toBe("all");
+    expect(runCalls[0]?.linearGrant).toEqual({
+      appId: "writer",
+      organizationId: "org-1",
+    });
+  } finally {
+    lookup.mockRestore();
+  }
+});
+
 test("another app cannot prompt, stop, or end an owned Linear session", async () => {
   const id = "a2020202-0202-4202-8202-020202020202";
   await handleAgentSession(webhook("created", id), {});

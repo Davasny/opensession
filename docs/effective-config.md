@@ -6,9 +6,12 @@ session. Each row names the file or code path that produced it.
 
 The report combines `mcp-config.json`, session, automation, or feed MCP scope,
 the session model or instance-wide interactive default, workspace model
-presets, and run-policy resolvers. It does not report Pi enablement, provider
-credentials, or engine readiness. It also does not forecast scheduled
-automations, goal wakes, create turns, or other journal kinds.
+presets, and run-policy resolvers. For a Linear-source session it uses the
+owning Linear app profile's MCP scope (`linear-session-run-inputs.ts`), which
+is what a UI turn on that session runs with; an unavailable profile is noted on
+the scope row. It does not report Pi enablement, provider credentials, or
+engine readiness. It also does not forecast scheduled automations, goal wakes,
+create turns, or other journal kinds.
 
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" \

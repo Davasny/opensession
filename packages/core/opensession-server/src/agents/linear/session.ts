@@ -1119,7 +1119,11 @@ export async function runAgentHeadless(
 
   try {
     for await (const event of runAgent({
-      mcpServers: config ? (config.mcpServers ?? []) : "all",
+      mcpServers: config
+        ? config.mcpAll
+          ? ("all" as const)
+          : (config.mcpServers ?? [])
+        : ("all" as const),
       ...(session?.appId && session.organizationId
         ? {
             linearGrant: {

@@ -24,6 +24,7 @@ export function LinearAppAutomation({
   const [model, setModel] = useState(app.automation?.model ?? "");
   const [repo, setRepo] = useState(app.automation?.repo ?? "");
   const [enabled, setEnabled] = useState(app.automation?.enabled ?? true);
+  const [mcpAll, setMcpAll] = useState(app.automation?.mcpAll ?? false);
   const [mcpServers, setMcpServers] = useState<string[]>(
     app.automation?.mcpServers ?? [],
   );
@@ -52,6 +53,7 @@ export function LinearAppAutomation({
     model !== (app.automation?.model ?? "") ||
     repo !== (app.automation?.repo ?? "") ||
     enabled !== (app.automation?.enabled ?? true) ||
+    mcpAll !== (app.automation?.mcpAll ?? false) ||
     JSON.stringify(mcpServers) !==
       JSON.stringify(app.automation?.mcpServers ?? []);
   async function save() {
@@ -69,7 +71,8 @@ export function LinearAppAutomation({
             model,
             repo: repo.trim(),
             enabled,
-            mcpServers,
+            mcpAll,
+            mcpServers: mcpAll ? [] : mcpServers,
           },
         },
         label: "Could not save Linear agent settings",
@@ -168,9 +171,17 @@ export function LinearAppAutomation({
         </label>
         {modelError && <InlineAlert>{modelError}</InlineAlert>}
         <McpPicker
-          value={mcpServers}
-          onChange={(value) => setMcpServers(value ?? [])}
-          allowAll={false}
+          value={mcpAll ? undefined : mcpServers}
+          onChange={(value) => {
+            if (value === undefined) {
+              setMcpAll(true);
+              return;
+            }
+            setMcpAll(false);
+            setMcpServers(value);
+          }}
+          allowAll
+          builtInServers={["linear"]}
           requiredServers={[]}
         />
       </fieldset>

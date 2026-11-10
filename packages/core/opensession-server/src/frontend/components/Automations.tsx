@@ -664,7 +664,7 @@ export function Automations({ onOpenSession, selectedId, onSelect }: Props) {
 
                     <DetailKey>MCPs</DetailKey>
                     <span className="text-dim min-w-0">
-                      {sel.mcpServers === undefined
+                      {sel.mcpAll || sel.mcpServers === undefined
                         ? "all connectors"
                         : sel.mcpServers.length === 0
                           ? "none"
@@ -1349,11 +1349,16 @@ export function McpPicker({
   onChange,
   allowAll = true,
   requiredServers,
+  builtInServers = [],
 }: {
   value: string[] | undefined;
   onChange: (v: string[] | undefined) => void;
   allowAll?: boolean;
   requiredServers: string[];
+  /** Valid allowlist names that are not configured MCP servers in their own
+   *  right, such as the app-bound `linear` mount. Shown like a ready server
+   *  so an operator can select the built-in without adding a config entry. */
+  builtInServers?: string[];
 }) {
   const [servers, setServers] = useState<
     Array<{ name: string; status: string }>
@@ -1378,12 +1383,15 @@ export function McpPicker({
 
   const all = value === undefined;
   const selected = value || [];
-  const available = [
-    ...servers,
-    ...requiredServers
-      .filter((name) => !servers.some((server) => server.name === name))
-      .map((name) => ({ name, status: "ready" })),
-  ];
+  const available = Array.from(
+    new Map(
+      [
+        ...servers,
+        ...builtInServers.map((name) => ({ name, status: "ready" })),
+        ...requiredServers.map((name) => ({ name, status: "ready" })),
+      ].map((server) => [server.name, server] as const),
+    ).values(),
+  );
   const shown = available.filter((s) =>
     s.name.toLowerCase().includes(search.trim().toLowerCase()),
   );
@@ -1442,9 +1450,9 @@ export function McpPicker({
               checked={all}
               onCheckedChange={() => onChange(all ? [] : undefined)}
             />
-            <span className="text-fg">All connectors</span>
+            <span className="shrink-0 text-fg">All connectors</span>
             <span className="text-faint text-meta">
-              every configured server (pre-least-privilege default)
+              every available connector
             </span>
           </label>
         )}

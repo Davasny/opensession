@@ -50,7 +50,11 @@ export async function linearSessionRunInputs(
     mode: stored.executionMode ?? session.mode,
     model: stored.model || config?.model || session.model,
     instructions: config?.prompt,
-    mcpServers: config ? (config.mcpServers ?? []) : undefined,
+    mcpServers: config
+      ? config.mcpAll
+        ? ("all" as const)
+        : (config.mcpServers ?? [])
+      : undefined,
     linearGrant: { appId, organizationId: stored.organizationId },
   };
 }

@@ -93,6 +93,14 @@ describe("Linear UI turn configuration", () => {
     ).toEqual([]);
   });
 
+  test("an explicit all-connectors profile uses every configured server", async () => {
+    const f = fixture();
+    f.config.mcpAll = true;
+    expect((await linearSessionRunInputs(f.session, f.deps))?.mcpServers).toBe(
+      "all",
+    );
+  });
+
   test("refuses disabled, deleted, or replaced profiles before issuing credentials", async () => {
     const f = fixture();
     f.config.enabled = false;

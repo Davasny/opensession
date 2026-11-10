@@ -50,11 +50,27 @@ describe("Linear app settings", () => {
           mode: "scratch",
           model: null,
           repo: null,
-          mcpServers: [],
+          mcpServers: ["linear"],
+          mcpAll: false,
           enabled: true,
         },
       }).automation?.mcpServers,
-    ).toEqual([]);
+    ).toEqual(["linear"]);
+    expect(
+      linearAppSchema.parse({
+        ...app,
+        automation: {
+          id: "automation-id",
+          prompt: "Review assigned tasks.",
+          mode: "scratch",
+          model: null,
+          repo: null,
+          mcpServers: [],
+          mcpAll: true,
+          enabled: true,
+        },
+      }).automation?.mcpAll,
+    ).toBe(true);
     expect(
       linearAppSchema.safeParse({ ...app, automation: { mode: "unknown" } })
         .success,

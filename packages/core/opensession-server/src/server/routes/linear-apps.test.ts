@@ -293,6 +293,51 @@ test("creates an app with a scoped scratch automation, updates it, then removes 
   expect(raw.integrations.linear.oauthClientSecret).toBe("primary-secret");
 });
 
+test("agent settings choose all connectors or the built-in Linear connector", async () => {
+  const created = await handleLinearAppsRoutes(
+    context(path, "POST", {
+      name: "Selector",
+      oauthClientId: "selector-client",
+      oauthClientSecret: "selector-secret",
+      webhookSecret: "selector-webhook",
+    }),
+  );
+  expect(created?.status).toBe(201);
+  const { app } = await created!.json();
+  const update = (automation: Record<string, unknown>) =>
+    handleLinearAppsRoutes(context(`${path}/${app.id}`, "PUT", { automation }));
+  const specific = await update({
+    mcpServers: ["yoast-seo", "linear"],
+  });
+  expect(specific?.status).toBe(200);
+  expect((await specific!.json()).app.automation).toMatchObject({
+    mcpAll: false,
+    mcpServers: ["yoast-seo", "linear"],
+  });
+  const all = await update({ mcpAll: true, mcpServers: [] });
+  expect(all?.status).toBe(200);
+  expect((await all!.json()).app.automation).toMatchObject({
+    mcpAll: true,
+    mcpServers: [],
+  });
+  const nullAll = await update({ mcpServers: null });
+  expect(nullAll?.status).toBe(200);
+  expect((await nullAll!.json()).app.automation).toMatchObject({
+    mcpAll: true,
+    mcpServers: [],
+  });
+  const backToList = await update({ mcpServers: ["linear"] });
+  expect(backToList?.status).toBe(200);
+  expect((await backToList!.json()).app.automation).toMatchObject({
+    mcpAll: false,
+    mcpServers: ["linear"],
+  });
+  expect(
+    (await handleLinearAppsRoutes(context(`${path}/${app.id}`, "DELETE")))
+      ?.status,
+  ).toBe(200);
+});
+
 test("primary automation is created only on explicit request", async () => {
   const response = await handleLinearAppsRoutes(
     context(`${path}/primary`, "PUT", {

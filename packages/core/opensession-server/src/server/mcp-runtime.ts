@@ -494,8 +494,8 @@ export async function createMcpRuntime(opts: {
   ) as Record<string, Record<string, unknown>>;
   if (
     opts.linearGrant &&
-    Array.isArray(opts.mcpServers) &&
-    opts.mcpServers.includes("linear")
+    (opts.mcpServers === "all" ||
+      (Array.isArray(opts.mcpServers) && opts.mcpServers.includes("linear")))
   ) {
     external.linear = runBoundLinearMcpConfig({
       servers: configuredServers,

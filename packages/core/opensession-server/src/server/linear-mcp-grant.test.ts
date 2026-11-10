@@ -161,11 +161,17 @@ describe("run-bound Linear MCP", () => {
         expect(requests.every(request => request.url === "https://mcp.linear.app/mcp" && request.authorization === "Bearer acme-token")).toBe(true);
         await implicit.close();
         requests.length = 0;
-        for (const scope of [[], "all", undefined]) {
+        for (const scope of [[], undefined]) {
           const noAllowlist = await createMcpRuntime({ mcpServers: scope, deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
           expect(await noAllowlist.catalog()).toEqual([]);
           await noAllowlist.close();
         }
+        const allScope = await createMcpRuntime({ mcpServers: "all", deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "org" } });
+        await allScope.catalog();
+        expect(requests.length).toBeGreaterThan(0);
+        expect(requests.every(request => request.url === "https://mcp.linear.app/mcp" && request.authorization === "Bearer acme-token")).toBe(true);
+        await allScope.close();
+        requests.length = 0;
         const disconnected = await createMcpRuntime({ mcpServers: ["linear"], deniedToolIds: new Set(), linearGrant: { appId: "acme", organizationId: "missing" } });
         expect(await disconnected.catalog()).toEqual([]);
         await disconnected.close();
