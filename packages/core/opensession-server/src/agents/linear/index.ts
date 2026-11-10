@@ -14,6 +14,7 @@ import {
   loadTokens,
   handleAuthorize,
   handleCallback,
+  linearAppIdFromState,
 } from "./oauth";
 import type { LinearTokens } from "./oauth";
 import { handleAgentSession, handleIssueUpdate } from "./handlers";
@@ -25,6 +26,7 @@ import { activeSessions, loadActiveSessionsOnStartup } from "./session";
 import {
   linearApps,
   linearAppById,
+  linearLegacyRedirectUri,
   validAdditionalLinearAppId,
 } from "../../server/linear-app-registry";
 
@@ -134,25 +136,27 @@ export class LinearAgent implements AgentModule {
     });
 
     routes.set("GET /oauth/callback", async (req, url) => {
-      return handleCallback(
-        req,
-        url,
-        await this.appTokens("primary"),
-        "primary",
-      );
+      const appId = linearAppIdFromState(url.searchParams.get("state"));
+      const app = linearAppById(appId);
+      if (!app)
+        return Response.json({ error: "Unknown Linear app" }, { status: 404 });
+      return handleCallback(req, url, await this.appTokens(appId), appId);
     });
     routes.set("GET /linear/oauth/*", async (req, url) => {
       const parts = url.pathname.slice("/linear/oauth/".length).split("/");
       const [id, action] = parts;
-      if (
-        parts.length !== 2 ||
-        !validAdditionalLinearAppId(id) ||
-        !linearAppById(id)
-      )
+      const app = linearAppById(id);
+      if (parts.length !== 2 || !validAdditionalLinearAppId(id) || !app)
         return Response.json({ error: "Unknown Linear app" }, { status: 404 });
       if (action === "authorize") return handleAuthorize(id);
       if (action === "callback")
-        return handleCallback(req, url, await this.appTokens(id), id);
+        return handleCallback(
+          req,
+          url,
+          await this.appTokens(id),
+          id,
+          linearLegacyRedirectUri(app),
+        );
       return new Response(null, { status: 404 });
     });
 

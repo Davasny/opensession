@@ -13,6 +13,7 @@ import {
   getValidToken,
   handleAuthorize,
   handleCallback,
+  linearAppIdFromState,
   loadTokens,
   refreshAccessToken,
   refreshToken,
@@ -247,8 +248,11 @@ describe("Linear app token isolation", () => {
     const redirect = new URL(additional.headers.get("Location")!);
     expect(redirect.searchParams.get("client_id")).toBe("acme-client");
     expect(redirect.searchParams.get("redirect_uri")).toEndWith(
-      "/linear/oauth/acme/callback",
+      "/oauth/callback",
     );
+    expect(state).toStartWith("acme.");
+    expect(linearAppIdFromState(state)).toBe("acme");
+    expect(linearAppIdFromState(stateFromAuthorize(primary))).toBe("primary");
     expect(cookie).not.toStartWith("__Host-linear-oauth-state=");
     const tokens = await loadTokens("acme");
     let calls = 0;
@@ -262,7 +266,7 @@ describe("Linear app token isolation", () => {
       );
     });
     const url = new URL(
-      `https://example.test/linear/oauth/acme/callback?code=code&state=${state}`,
+      `https://example.test/oauth/callback?code=code&state=${state}`,
     );
     const swapped = await handleCallback(
       new Request(url, {
@@ -304,7 +308,7 @@ describe("Linear app token isolation", () => {
     await saveTokens(primary);
     const authorize = handleAuthorize("acme");
     const url = new URL(
-      `https://example.test/linear/oauth/acme/callback?code=code&state=${stateFromAuthorize(authorize)}`,
+      `https://example.test/oauth/callback?code=code&state=${stateFromAuthorize(authorize)}`,
     );
     const req = new Request(url, {
       headers: {
@@ -361,6 +365,22 @@ describe("Linear OAuth state binding", () => {
     expect(response.headers.get("Set-Cookie")).toBe(
       `__Host-linear-oauth-state=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
     );
+  });
+
+  test("uses one callback and carries the additional app in state", () => {
+    const primary = new URL(handleAuthorize().headers.get("Location")!);
+    const additional = new URL(
+      handleAuthorize("acme").headers.get("Location")!,
+    );
+    const state = additional.searchParams.get("state")!;
+
+    expect(additional.searchParams.get("redirect_uri")).toBe(
+      primary.searchParams.get("redirect_uri"),
+    );
+    expect(linearAppIdFromState(state)).toBe("acme");
+    expect(linearAppIdFromState(null)).toBe("primary");
+    expect(linearAppIdFromState("not-an-app")).toBe("primary");
+    expect(linearAppIdFromState("../bad.nonce")).toBe("primary");
   });
 
   test("rejects callbacks without the browser-bound state before exchanging a code", async () => {

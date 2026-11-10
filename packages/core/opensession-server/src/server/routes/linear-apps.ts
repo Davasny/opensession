@@ -65,7 +65,7 @@ function summary(app: LinearApp, automation: Automation | undefined) {
     clientSecretConfigured: !!app.clientSecret,
     webhookConfigured: !!app.webhookSecret,
     authorizeUrl: `${base}${linearAuthorizePath(app.id)}`,
-    callbackUrl: linearRedirectUri(app),
+    callbackUrl: linearRedirectUri(),
     webhookUrl: `${base}${linearWebhookPath(app.id)}`,
     automationEventKey: `linear:agent_session:${app.id}`,
     automation: automation

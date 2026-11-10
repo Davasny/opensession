@@ -149,16 +149,16 @@ function guideFor(integration: SetupIntegration, publicBaseUrl: string): Guide {
             capability.
           </>,
           <>
-            Copy the app's OAuth callback URL from its settings above into
+            Enter the client ID, client secret, and webhook secret under the
+            matching app above. No API key is required.
+          </>,
+          <>
+            Add the app's OAuth callback URL shown above to its Redirect URLs in
             Linear.
           </>,
           <>
             Create a Linear webhook for agent-session and issue events. Use this
             app's webhook URL shown above.
-          </>,
-          <>
-            Enter the client ID, client secret, and webhook secret under the
-            matching app above. No API key is required.
           </>,
           <>
             If Linear is disabled, enable it, save, and restart Open Session.

@@ -82,9 +82,10 @@ export function LinearAgentSettings({ onChanged }: { onChanged: () => void }) {
         </Button>
       </div>
       <p className="m-0 px-1 text-supporting text-dim">
-        Each OAuth app has its own agent and instructions. App and credential
-        changes apply without a restart when Linear is enabled. Only enabling
-        Linear requires a restart.
+        Each OAuth app has its own agent and instructions. Add its callback URL
+        to the app's Redirect URLs in Linear before connecting. App and
+        credential changes apply without a restart when Linear is enabled. Only
+        enabling Linear requires a restart.
       </p>
       {error && (
         <InlineAlert onRetry={() => setReload((value) => value + 1)}>
@@ -133,6 +134,16 @@ export function LinearAgentSettings({ onChanged }: { onChanged: () => void }) {
               }
             />
           </div>
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="min-w-0">
+              <div className="mb-1 text-label text-dim">OAuth callback URL</div>
+              <CopyableCode value={app.callbackUrl} />
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1 text-label text-dim">Webhook URL</div>
+              <CopyableCode value={app.webhookUrl} />
+            </div>
+          </div>
           <div className="flex flex-wrap gap-2">
             {app.clientId && app.clientSecretConfigured && (
               <Button
@@ -157,16 +168,6 @@ export function LinearAgentSettings({ onChanged }: { onChanged: () => void }) {
                 {removing === app.id ? "Removing…" : "Remove app"}
               </Button>
             )}
-          </div>
-          <div className="flex min-w-0 flex-col gap-3">
-            <div className="min-w-0">
-              <div className="mb-1 text-label text-dim">OAuth callback URL</div>
-              <CopyableCode value={app.callbackUrl} />
-            </div>
-            <div className="min-w-0">
-              <div className="mb-1 text-label text-dim">Webhook URL</div>
-              <CopyableCode value={app.webhookUrl} />
-            </div>
           </div>
           <Disclosure
             title="App name and credentials"

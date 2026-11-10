@@ -8,6 +8,8 @@ import {
   linearAppById,
   linearAuthorizePath,
   linearCallbackPath,
+  linearLegacyCallbackPath,
+  linearLegacyRedirectUri,
   linearRedirectUri,
   linearWebhookPath,
   validAdditionalLinearAppId,
@@ -65,17 +67,17 @@ test("keeps the primary app and skips invalid and duplicate additional ids", () 
   expect(validAdditionalLinearAppId("app-2")).toBe(true);
 });
 
-test("preserves legacy paths and limits the redirect override to primary", () => {
+test("shares the callback while preserving app-scoped paths", () => {
   expect(linearWebhookPath()).toBe("/webhook");
   expect(linearAuthorizePath()).toBe("/oauth/authorize");
   expect(linearCallbackPath()).toBe("/oauth/callback");
   expect(linearWebhookPath("extra")).toBe("/linear/webhook/extra");
   expect(linearAuthorizePath("extra")).toBe("/linear/oauth/extra/authorize");
-  expect(linearCallbackPath("extra")).toBe("/linear/oauth/extra/callback");
-  expect(linearRedirectUri(linearApps()[0]!)).toBe(
-    "https://override.example.test/callback",
+  expect(linearLegacyCallbackPath("extra")).toBe(
+    "/linear/oauth/extra/callback",
   );
-  expect(linearRedirectUri(linearApps()[1]!)).toBe(
+  expect(linearRedirectUri()).toBe("https://override.example.test/callback");
+  expect(linearLegacyRedirectUri(linearApps()[1]!)).toBe(
     "https://hooks.example.test/linear/oauth/extra/callback",
   );
 });

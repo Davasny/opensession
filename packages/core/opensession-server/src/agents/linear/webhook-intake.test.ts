@@ -9,6 +9,7 @@ import {
 const savedConfig = JSON.stringify(getConfig());
 const savedSecret = process.env.LINEAR_WEBHOOK_SECRET;
 const calls: Array<{ appId: string; token: string | undefined }> = [];
+const callbacks: Array<{ appId: string; token: string | undefined }> = [];
 
 mock.module("./handlers", () => ({
   handleAgentSession: async (
@@ -27,7 +28,20 @@ mock.module("./oauth", () => ({
     org: { accessToken: `${appId}-token` },
   }),
   handleAuthorize: (appId: string) => Response.json({ appId }),
-  handleCallback: async () => Response.json({ ok: true }),
+  handleCallback: async (
+    _req: Request,
+    _url: URL,
+    tokens: Record<string, { accessToken: string }>,
+    appId = "primary",
+  ) => {
+    callbacks.push({ appId, token: tokens.org?.accessToken });
+    return Response.json({ ok: true });
+  },
+  linearAppIdFromState: (state: string | null) => {
+    if (!state) return "primary";
+    const separator = state.indexOf(".");
+    return separator < 0 ? "primary" : state.slice(0, separator);
+  },
 }));
 mock.module("./session", () => ({
   activeSessions: new Map(),
@@ -63,6 +77,7 @@ function configure(extra = true) {
 beforeEach(() => {
   configure();
   calls.length = 0;
+  callbacks.length = 0;
 });
 
 afterAll(() => {
@@ -152,6 +167,26 @@ test("apps added after route registration work without a connector restart", asy
   const request = signed("/linear/webhook/writer", "writer-secret");
   expect((await route(request, new URL(request.url))).status).toBe(200);
   expect(calls[0]?.appId).toBe("writer");
+});
+
+test("the shared callback selects the app named in the OAuth state", async () => {
+  const route = new LinearAgent().getRoutes().get("GET /oauth/callback");
+  if (!route) throw new Error("OAuth callback route missing");
+  const request = new Request(
+    "https://hooks.example.test/oauth/callback?code=code&state=writer.nonce",
+  );
+  expect((await route(request, new URL(request.url))).status).toBe(200);
+  expect(callbacks).toEqual([{ appId: "writer", token: "writer-token" }]);
+});
+
+test("an unknown app in the OAuth state does not fall back to primary", async () => {
+  const route = new LinearAgent().getRoutes().get("GET /oauth/callback");
+  if (!route) throw new Error("OAuth callback route missing");
+  const request = new Request(
+    "https://hooks.example.test/oauth/callback?code=code&state=unknown.nonce",
+  );
+  expect((await route(request, new URL(request.url))).status).toBe(404);
+  expect(callbacks).toEqual([]);
 });
 
 test("signed malformed events are rejected before lifecycle handlers", async () => {

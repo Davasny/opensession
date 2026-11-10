@@ -10,6 +10,7 @@ import {
   linearAppById,
   linearAuthorizePath,
   linearRedirectUri,
+  validAdditionalLinearAppId,
 } from "../../server/linear-app-registry";
 import { stateDir } from "../../server/paths";
 import { join } from "path";
@@ -301,13 +302,24 @@ function consumeState(response: Response, appId = "primary"): Response {
   return response;
 }
 
+/** Additional apps prefix the random state with their app id so the shared
+ *  callback can select the credentials that started the authorization. */
+export function linearAppIdFromState(state: string | null): string {
+  if (!state) return "primary";
+  const separator = state.indexOf(".");
+  if (separator < 0) return "primary";
+  const appId = state.slice(0, separator);
+  return validAdditionalLinearAppId(appId) ? appId : "primary";
+}
+
 export function handleAuthorize(appId = "primary"): Response {
   const app = configuredApp(appId);
   if (!app) return failed("This Linear app is not configured.", appId);
-  const state = randomBytes(32).toString("base64url");
+  const nonce = randomBytes(32).toString("base64url");
+  const state = appId === "primary" ? nonce : `${appId}.${nonce}`;
   const params = new URLSearchParams({
     client_id: app.clientId,
-    redirect_uri: linearRedirectUri(app),
+    redirect_uri: linearRedirectUri(),
     response_type: "code",
     scope: "app:assignable read write",
     actor: "app",
@@ -341,6 +353,7 @@ export async function handleCallback(
   url: URL,
   tokens: LinearTokens,
   appId = "primary",
+  redirectUri = linearRedirectUri(),
 ): Promise<Response> {
   const consume = (response: Response) => consumeState(response, appId);
   const fail = (message: string) => consume(failed(message, appId));
@@ -373,7 +386,7 @@ export async function handleCallback(
           client_id: app.clientId,
           client_secret: app.clientSecret,
           code,
-          redirect_uri: linearRedirectUri(app),
+          redirect_uri: redirectUri,
           grant_type: "authorization_code",
         }),
       },

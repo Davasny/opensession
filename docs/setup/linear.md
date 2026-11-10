@@ -93,10 +93,11 @@ automation. The tool returns display names and ids only, never tokens or client
 secrets. Ids are always chosen explicitly; the Desk never substitutes another
 app's credentials.
 
-For each app, Settings shows its callback and webhook URLs and a **Connect**
-action. Register those exact URLs in that app's Linear configuration, then
-connect it to the intended Linear workspace with `actor=app` authorization.
-Choose the corresponding app as the agent in Linear to route work to it.
+For each app, Settings shows the shared OAuth callback URL, that app's webhook
+URL, and a **Connect** action. Register the callback in each Linear app's
+Redirect URLs, register that app's webhook URL, then connect it to the intended
+Linear workspace with `actor=app` authorization. Choose the corresponding app as
+the agent in Linear to route work to it.
 
 Agent settings reuse event automations, as GitHub review settings do. Each app
 has the event key `linear:agent_session:<app-id>`. The connector owns dispatch
@@ -133,22 +134,26 @@ may still finish. Removing it does not uninstall the OAuth app in Linear.
 OAuth routes:
 
 - `GET /oauth/authorize` redirects to Linear's consent page.
-- `GET /oauth/callback` exchanges the code. Primary-app grants are stored by organization
-  in `~/.linear-agent-tokens.json`, written atomically and refreshed when an
-  agent API call finds a token within five minutes of expiry.
+- `GET /oauth/callback` exchanges the code for the app identified by the OAuth
+  state. Primary-app grants are stored by organization in
+  `~/.linear-agent-tokens.json`, written atomically and refreshed when an agent
+  API call finds a token within five minutes of expiry.
 
 The OAuth `redirect_uri` is `integrations.linear.oauthRedirectUrl` when that
 value is non-empty. Otherwise it is
 `<configuredServer().webhookBaseUrl>/oauth/callback`; that base resolves from
 `OPENSESSION_INGRESS_BASE`, then `ingress.publicBaseUrl`, then the private app
-origin. Register the resulting HTTPS URL exactly, including its scheme and
-path.
+origin. Every app uses this same URL, so register one HTTPS URL exactly,
+including its scheme and path.
 
-Additional apps use `GET /linear/oauth/<app-id>/authorize`,
-`GET /linear/oauth/<app-id>/callback`, and `POST /linear/webhook/<app-id>`.
-Their tokens live under the state directory at `linear-apps/<app-id>/tokens.json`
-with owner-only permissions. OAuth state cookies and refresh locks are scoped
-to the app. A webhook is verified only against the receiving app's secret.
+Additional apps use `GET /linear/oauth/<app-id>/authorize` and
+`POST /linear/webhook/<app-id>`. Their app id travels in the OAuth state, so
+their callbacks return through the shared `/oauth/callback`.
+`GET /linear/oauth/<app-id>/callback` remains for authorizations that started
+before the shared callback. Their tokens live under the state directory at
+`linear-apps/<app-id>/tokens.json` with owner-only permissions. OAuth state
+cookies and refresh locks are scoped to the app. A webhook is verified only
+against the receiving app's secret.
 
 Sessions persist both app and organization identity. Startup restoration and
 replies select that exact grant. A legacy session without an organization may

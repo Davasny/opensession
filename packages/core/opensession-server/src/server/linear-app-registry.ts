@@ -70,15 +70,28 @@ export function linearAuthorizePath(appId = "primary"): string {
     : `/linear/oauth/${appId}/authorize`;
 }
 
-export function linearCallbackPath(appId = "primary"): string {
+/** Every Linear app returns to the same gateway callback. The OAuth state
+ *  carries the app id, so the callback can select that app's credentials. */
+export function linearCallbackPath(): string {
+  return "/oauth/callback";
+}
+
+/** App-scoped callback from the first multi-app release. Kept so an
+ *  authorization started before the shared callback can still finish. */
+export function linearLegacyCallbackPath(appId: string): string {
   return appId === "primary"
-    ? "/oauth/callback"
+    ? linearCallbackPath()
     : `/linear/oauth/${appId}/callback`;
 }
 
-export function linearRedirectUri(app: LinearApp): string {
+export function linearRedirectUri(): string {
   const configured = text(configuredIntegration("linear").oauthRedirectUrl);
-  return app.id === "primary" && configured
-    ? configured
-    : `${configuredServer().webhookBaseUrl.replace(/\/+$/, "")}${linearCallbackPath(app.id)}`;
+  return (
+    configured ||
+    `${configuredServer().webhookBaseUrl.replace(/\/+$/, "")}${linearCallbackPath()}`
+  );
+}
+
+export function linearLegacyRedirectUri(app: LinearApp): string {
+  return `${configuredServer().webhookBaseUrl.replace(/\/+$/, "")}${linearLegacyCallbackPath(app.id)}`;
 }

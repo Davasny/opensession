@@ -24,6 +24,8 @@ const {
   linearWebhookPath,
   linearAuthorizePath,
   linearCallbackPath,
+  linearLegacyCallbackPath,
+  linearLegacyRedirectUri,
   linearRedirectUri,
 } = await import("../linear-app-registry");
 
@@ -151,17 +153,19 @@ test("primary env credentials win while extra app credentials remain independent
   expect(linearAppById("primary")?.clientSecret).toBe("primary-secret");
 });
 
-test("paths preserve the primary endpoints and redirect override", () => {
+test("paths share the callback and preserve the redirect override", () => {
   expect(linearWebhookPath()).toBe("/webhook");
   expect(linearAuthorizePath()).toBe("/oauth/authorize");
   expect(linearCallbackPath()).toBe("/oauth/callback");
   expect(linearWebhookPath("extra")).toBe("/linear/webhook/extra");
   expect(linearAuthorizePath("extra")).toBe("/linear/oauth/extra/authorize");
-  expect(linearCallbackPath("extra")).toBe("/linear/oauth/extra/callback");
-  expect(linearRedirectUri(linearApps()[0]!)).toBe(
+  expect(linearLegacyCallbackPath("extra")).toBe(
+    "/linear/oauth/extra/callback",
+  );
+  expect(linearRedirectUri()).toBe(
     "https://callback.example.test/oauth/callback",
   );
-  expect(linearRedirectUri(linearApps()[1]!)).toBe(
+  expect(linearLegacyRedirectUri(linearApps()[1]!)).toBe(
     "https://hooks.example.test/linear/oauth/extra/callback",
   );
 });
