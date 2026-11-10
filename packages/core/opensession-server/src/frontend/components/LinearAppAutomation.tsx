@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { fetchModels, type ModelOption } from "../lib/api/automations";
+import { fetchRepos, type RepoInfo } from "../lib/api/repos";
 import { request } from "../lib/api/request";
 import { errorMessage } from "../lib/error-message";
 import type { LinearApp } from "../lib/linear-apps";
 import { Button } from "../ui/button";
-import { Input, Textarea } from "../ui/input";
+import { Textarea } from "../ui/input";
 import { OptionSelect } from "../ui/select";
 import { InlineAlert } from "../ui/state";
 import { Switch } from "../ui/switch";
@@ -29,8 +30,10 @@ export function LinearAppAutomation({
     app.automation?.mcpServers ?? [],
   );
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [repoError, setRepoError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   useEffect(() => {
@@ -42,6 +45,20 @@ export function LinearAppAutomation({
       .catch((cause: unknown) => {
         if (!ignore)
           setModelError(errorMessage(cause, "Could not load models"));
+      });
+    return () => {
+      ignore = true;
+    };
+  }, []);
+  useEffect(() => {
+    let ignore = false;
+    fetchRepos()
+      .then((result) => {
+        if (!ignore) setRepos(result);
+      })
+      .catch((cause: unknown) => {
+        if (!ignore)
+          setRepoError(errorMessage(cause, "Could not load repositories"));
       });
     return () => {
       ignore = true;
@@ -84,6 +101,20 @@ export function LinearAppAutomation({
     }
     setSaving(false);
   }
+  const defaultRepo = repos.find((item) => item.default);
+  const repoOptions = [
+    {
+      value: "",
+      label: `Instance default${defaultRepo ? ` · ${defaultRepo.label || defaultRepo.id}` : ""}`,
+    },
+    ...repos.map((item) => ({
+      value: item.id,
+      label: item.label || item.id,
+    })),
+    ...(repos.length > 0 && repo && !repos.some((item) => item.id === repo)
+      ? [{ value: repo, label: `${repo} · not registered` }]
+      : []),
+  ];
   return (
     <form
       className="flex min-w-0 flex-col gap-4"
@@ -130,16 +161,15 @@ export function LinearAppAutomation({
         {mode !== "scratch" && (
           <label className="flex flex-col gap-1.5 text-label text-fg">
             Repository
-            <Input
+            <OptionSelect
+              label="Repository"
               value={repo}
-              onChange={(event) => setRepo(event.target.value)}
-              placeholder="acme/project"
-              className="phone:min-h-11 phone:text-input-phone"
-              autoComplete="off"
-              spellCheck={false}
+              options={repoOptions}
+              onChange={setRepo}
+              className="phone:min-h-11"
             />
             <span className="text-supporting text-dim">
-              Leave blank to use the instance default repository.
+              Coding and read-only tasks check out this repository.
             </span>
           </label>
         )}
@@ -170,6 +200,7 @@ export function LinearAppAutomation({
           />
         </label>
         {modelError && <InlineAlert>{modelError}</InlineAlert>}
+        {repoError && <InlineAlert>{repoError}</InlineAlert>}
         <McpPicker
           value={mcpAll ? undefined : mcpServers}
           onChange={(value) => {
