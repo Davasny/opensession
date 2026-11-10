@@ -236,11 +236,6 @@ export async function handleLinearAppsRoutes(
       );
   }
   if (
-    (creating || "name" in body) &&
-    (typeof body.name !== "string" || !body.name.trim())
-  )
-    return Response.json({ error: "Name required" }, { status: 400 });
-  if (
     (creating || (id !== "primary" && "oauthClientId" in body)) &&
     (typeof body.oauthClientId !== "string" || !body.oauthClientId.trim())
   )
@@ -323,7 +318,7 @@ export async function handleLinearAppsRoutes(
         const result = automation
           ? await updateAutomation(automation.id, automationPatch)
           : await createAutomation({
-              name: `Linear: ${typeof body.name === "string" ? body.name.trim() : linearAppById(id)?.name || id}`,
+              name: `Linear: ${(typeof body.name === "string" ? body.name.trim() : linearAppById(id)?.name) || "Linear"}`,
               prompt:
                 "Complete the assigned Linear task and report the result in Linear.",
               mode: "scratch",

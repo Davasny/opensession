@@ -122,6 +122,7 @@
     },
     "linear": {
       "enabled": false,
+      "name": "",
       "oauthRedirectUrl": "https://sessions.example.com/oauth/callback"
     },
     "plain": {

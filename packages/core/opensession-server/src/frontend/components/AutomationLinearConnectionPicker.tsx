@@ -59,7 +59,7 @@ export function AutomationLinearConnectionPicker({
     { value: "", label: "No app connection" },
     ...connections.map((connection) => ({
       value: linearConnectionKey(connection),
-      label: linearConnectionLabel(connection),
+      label: linearConnectionLabel(connection, connections),
     })),
     ...(value &&
     !connections.some(

@@ -169,7 +169,7 @@ export function LinearAgentSettings({ onChanged }: { onChanged: () => void }) {
             </div>
           </div>
           <Disclosure
-            title="App credentials"
+            title="App name and credentials"
             defaultOpen={!app.clientSecretConfigured}
           >
             <LinearAppCredentials app={app} onSaved={changed} />
@@ -204,14 +204,14 @@ function LinearAppCredentials({
   const [error, setError] = useState<string | null>(null);
   const dirty =
     !app ||
-    name.trim() !== app.name ||
+    (name.trim() || "Linear") !== app.name ||
     oauthClientId.trim() !== app.clientId ||
     Boolean(oauthClientSecret.trim() || webhookSecret.trim());
   const valid =
-    name.trim() &&
-    oauthClientId.trim() &&
-    (app?.clientSecretConfigured || oauthClientSecret.trim()) &&
-    (app?.webhookConfigured || webhookSecret.trim());
+    app !== null ||
+    Boolean(
+      oauthClientId.trim() && oauthClientSecret.trim() && webhookSecret.trim(),
+    );
   async function save() {
     if (saving || !dirty || !valid) return;
     setSaving(true);
@@ -249,16 +249,19 @@ function LinearAppCredentials({
       }}
     >
       <label className="flex flex-col gap-1.5 text-label text-fg">
-        App name
+        App name (optional)
         <Input
           value={name}
           autoFocus={!app}
           onChange={(event) => setName(event.target.value)}
           disabled={saving}
-          required
+          placeholder="Linear"
           className="phone:min-h-11 phone:text-input-phone"
           autoComplete="off"
         />
+        <span className="text-supporting text-dim">
+          Shown in automation connection pickers. Leave blank to use Linear.
+        </span>
       </label>
       <label className="flex flex-col gap-1.5 text-label text-fg">
         OAuth client ID
@@ -267,7 +270,7 @@ function LinearAppCredentials({
           readOnly={Boolean(app?.clientId)}
           onChange={(event) => setClientId(event.target.value)}
           disabled={saving}
-          required
+          required={!app}
           className="phone:min-h-11 phone:text-input-phone"
           autoComplete="off"
           autoCapitalize="none"
@@ -290,7 +293,7 @@ function LinearAppCredentials({
               ? "Configured. Leave blank to keep."
               : "Client secret"
           }
-          required={!app?.clientSecretConfigured}
+          required={!app}
           disabled={saving}
           className="phone:min-h-11 phone:text-input-phone"
           autoComplete="new-password"
@@ -307,7 +310,7 @@ function LinearAppCredentials({
               ? "Configured. Leave blank to keep."
               : "Webhook signing secret"
           }
-          required={!app?.webhookConfigured}
+          required={!app}
           disabled={saving}
           className="phone:min-h-11 phone:text-input-phone"
           autoComplete="new-password"
@@ -325,7 +328,7 @@ function LinearAppCredentials({
           className="phone:min-h-11"
           disabled={saving || !dirty || !valid}
         >
-          {saving ? "Saving…" : app ? "Save credentials" : "Add app"}
+          {saving ? "Saving…" : app ? "Save app" : "Add app"}
         </Button>
         {onCancel && (
           <Button

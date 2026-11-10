@@ -77,7 +77,12 @@ No personal API key is required to enable the connector.
 
 The primary app keeps the existing config fields and URLs. Additional apps are
 stored in `integrations.linear.apps`, following the GitHub app registry pattern.
-Each has a stable local ID, name, OAuth client ID and secret, and webhook secret.
+Each has a stable local ID, optional name, OAuth client ID and secret, and webhook secret.
+Set **App name (optional)** under **App name and credentials** to give an app a
+recognizable label in automation connection pickers. In config, use
+`integrations.linear.name` for the primary app or `name` on an additional app.
+An omitted or blank name displays as `Linear`. Workspace IDs appear in the
+picker only when needed to distinguish connections with the same name.
 An app's client ID cannot be replaced once configured; create another app for a
 different OAuth identity. Secrets can be rotated without changing the app ID.
 

@@ -42,12 +42,11 @@ export function linearApps(): LinearApp[] {
     const id = "id" in raw ? text(raw.id) : "";
     const name = "name" in raw ? text(raw.name) : "";
     const clientId = "oauthClientId" in raw ? text(raw.oauthClientId) : "";
-    if (!validAdditionalLinearAppId(id) || ids.has(id) || !name || !clientId)
-      continue;
+    if (!validAdditionalLinearAppId(id) || ids.has(id) || !clientId) continue;
     ids.add(id);
     apps.push({
       id,
-      name,
+      name: name || "Linear",
       clientId,
       clientSecret:
         "oauthClientSecret" in raw ? text(raw.oauthClientSecret) : "",

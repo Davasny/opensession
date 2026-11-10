@@ -96,6 +96,45 @@ test("registry skips invalid, reserved, incomplete, and duplicate entries", () =
   expect(validAdditionalLinearAppId("x".repeat(64))).toBe(false);
 });
 
+test("app names are optional, can be changed alone, and clear back to Linear", async () => {
+  const response = await handleLinearAppsRoutes(
+    context(path, "POST", {
+      oauthClientId: "unnamed-client",
+      oauthClientSecret: "example-secret",
+      webhookSecret: "example-webhook",
+    }),
+  );
+  expect(response?.status).toBe(201);
+  const { app } = await response!.json();
+  expect(app.name).toBe("Linear");
+  expect(linearAppById(app.id)?.name).toBe("Linear");
+  const renamed = await handleLinearAppsRoutes(
+    context(`${path}/${app.id}`, "PUT", { name: " Dependency agent " }),
+  );
+  expect(renamed?.status).toBe(200);
+  expect((await renamed!.json()).app.name).toBe("Dependency agent");
+  expect(linearAppById(app.id)).toMatchObject({
+    name: "Dependency agent",
+    clientId: "unnamed-client",
+    clientSecret: "example-secret",
+    webhookSecret: "example-webhook",
+  });
+  const cleared = await handleLinearAppsRoutes(
+    context(`${path}/${app.id}`, "PUT", { name: " " }),
+  );
+  expect(cleared?.status).toBe(200);
+  expect((await cleared!.json()).app.name).toBe("Linear");
+  expect(linearAppById(app.id)?.name).toBe("Linear");
+  await handleLinearAppsRoutes(context(`${path}/${app.id}`, "DELETE"));
+  for (const name of ["Primary agent", ""]) {
+    const primary = await handleLinearAppsRoutes(
+      context(`${path}/primary`, "PUT", { name }),
+    );
+    expect(primary?.status).toBe(200);
+    expect((await primary!.json()).app.name).toBe(name || "Linear");
+  }
+});
+
 test("primary env credentials win while extra app credentials remain independent", () => {
   process.env.LINEAR_CLIENT_ID = "env-client";
   process.env.LINEAR_CLIENT_SECRET = "env-secret";

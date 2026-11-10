@@ -24,8 +24,19 @@ export const linearConnectionKey = (connection: AutomationLinearConnection) =>
 
 export const linearConnectionLabel = (
   connection: AutomationLinearConnectionOption,
-) =>
-  `${connection.appName} · ${connection.organizationName || connection.organizationId}`;
+  connections: readonly AutomationLinearConnectionOption[],
+) => {
+  const sameName = connections.filter(
+    (item) => item.appName === connection.appName,
+  );
+  if (sameName.length < 2) return connection.appName;
+  const sameWorkspace = sameName.some(
+    (item) =>
+      item.appId !== connection.appId &&
+      item.organizationId === connection.organizationId,
+  );
+  return `${connection.appName} · ${sameWorkspace ? connection.appId : connection.organizationName || connection.organizationId}`;
+};
 
 export const fetchAutomationLinearConnections = async () => {
   const result = await request<unknown>("/automations/linear-connections", {

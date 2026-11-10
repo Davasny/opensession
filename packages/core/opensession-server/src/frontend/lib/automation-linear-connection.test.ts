@@ -40,10 +40,28 @@ describe("automation Linear connections", () => {
     const connections = await fetchAutomationLinearConnections();
     expect(new Set(connections.map(linearConnectionKey)).size).toBe(3);
     expect(connections[0]).not.toHaveProperty("accessToken");
-    expect(linearConnectionLabel(connections[2])).toBe(
-      "Other · Acme workspace",
+    expect(linearConnectionLabel(connections[2], connections)).toBe("Other");
+    expect(linearConnectionLabel(connections[0], connections)).toBe(
+      "Acme · one",
     );
-    expect(linearConnectionLabel(connections[0])).toBe("Acme · one");
+  });
+
+  test("uses the optional app name without workspace ids when unambiguous", () => {
+    const connection = {
+      appId: "acme",
+      appName: "Dependency agent",
+      organizationId: "example-workspace",
+    };
+    expect(linearConnectionLabel(connection, [connection])).toBe(
+      "Dependency agent",
+    );
+    const other = { ...connection, appId: "other" };
+    expect(linearConnectionLabel(connection, [connection, other])).toBe(
+      "Dependency agent · acme",
+    );
+    expect(linearConnectionLabel(other, [connection, other])).toBe(
+      "Dependency agent · other",
+    );
   });
 
   test("rejects malformed connection metadata instead of offering an unusable app", async () => {
