@@ -34,6 +34,8 @@ import {
   removeMcpServer,
   setMcpAllowedUsers,
 } from "../../server/connections";
+import { listAutomationLinearConnections } from "../../server/automation-linear-connection";
+import { linearApps } from "../../server/linear-app-registry";
 import {
   addMemory,
   listMemory,
@@ -217,6 +219,37 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
         },
       ),
       tool(
+        "list_linear_connections",
+        "List the connected Linear apps and workspaces an automation can use. Each choice names its app plus the exact appId and organizationId to pass as linearConnection to create_automation or update_automation. Returns connection identities only, never tokens or client secrets. Native Linear apps are separate from MCP servers.",
+        {},
+        async () => {
+          const connections = await listAutomationLinearConnections();
+          if (!connections.length) {
+            const configured = linearApps().filter(
+              (app) => app.clientId && app.clientSecret,
+            );
+            if (!configured.length)
+              return text(
+                "No Linear apps configured. Add one in Settings → Integrations → Linear.",
+              );
+            return text(
+              `Linear apps are configured (${configured.map((app) => app.name).join(", ")}) but no workspace is connected. Open Settings → Integrations → Linear and choose Connect on the app.`,
+            );
+          }
+          return text(
+            [
+              "Connected Linear app/workspace choices:",
+              ...connections.map(
+                (connection) =>
+                  `• *${connection.appName}* — appId \`${connection.appId}\`, organizationId \`${connection.organizationId}\``,
+              ),
+              "",
+              'Pass one as `linearConnection: {"appId":"…","organizationId":"…"}`. It adds the `linear` tools to that automation\'s runs.',
+            ].join("\n"),
+          );
+        },
+      ),
+      tool(
         "get_automation",
         "Read one automation's full record by id: its prompt and every setting (schedule, mode, repo, model, MCP allowlist, inputs, outputs, triggers), plus its five most recent runs. Read it before update_automation so a prompt edit starts from the stored text. The webhook secret is never shown.",
         { id: z.string().describe("Automation id, from list_automations.") },
@@ -228,7 +261,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
       ),
       tool(
         "create_automation",
-        "Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only, 'scratch' for a full shell (curl, scripts, downloads) without a repository checkout, or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.",
+        "Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only, 'scratch' for a full shell (curl, scripts, downloads) without a repository checkout, or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. To give it a connected Linear app, call list_linear_connections first and pass the chosen ids as linearConnection. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.",
         {
           name: z.string().describe("Short display name."),
           prompt: z
@@ -252,6 +285,12 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
             .optional()
             .describe(
               "Optional allowlist of MCP server names this run may use. Required with sandbox true; use [] for none.",
+            ),
+          linearConnection: z
+            .object({ appId: z.string(), organizationId: z.string() })
+            .optional()
+            .describe(
+              "Connected Linear app and workspace to give the runs. Get the exact ids from list_linear_connections. Adds 'linear' to the run's MCP allowlist automatically.",
             ),
           sandbox: z
             .boolean()
@@ -321,6 +360,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
           mode?: "ask" | "code" | "scratch";
           repo?: string;
           mcpServers?: string[];
+          linearConnection?: { appId: string; organizationId: string };
           sandbox?: boolean;
           model?: string;
           accountId?: string;
@@ -340,6 +380,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
             createdBy: ctx.createdBy,
             repo: args.repo,
             mcpServers: args.mcpServers,
+            linearConnection: args.linearConnection,
             sandbox: args.sandbox,
             model: args.model,
             accountId: args.accountId,
@@ -363,6 +404,9 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
               `, mode ${res.mode}` +
               (runsIn
                 ? `, repo ${runsIn}${res.repo ? "" : " (instance default)"}`
+                : "") +
+              (res.linearConnection
+                ? `, Linear connection ${res.linearConnection.appId}/${res.linearConnection.organizationId}`
                 : "") +
               ".",
           );
@@ -392,6 +436,13 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
             .optional()
             .describe(
               "Explicit MCP allowlist. Required when enabling sandbox; use [] for none.",
+            ),
+          linearConnection: z
+            .object({ appId: z.string(), organizationId: z.string() })
+            .nullable()
+            .optional()
+            .describe(
+              "Switch the automation's connected Linear app and workspace; get the exact ids from list_linear_connections. Pass null to clear the binding. Adds 'linear' to the run's MCP allowlist automatically.",
             ),
           sandbox: z
             .boolean()
@@ -486,6 +537,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
           enabled?: boolean;
           repo?: string;
           mcpServers?: string[];
+          linearConnection?: { appId: string; organizationId: string } | null;
           sandbox?: boolean;
           model?: string;
           fallbackModel?: string;
@@ -530,7 +582,12 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
                 ? ""
                 : res.mcpRunAs
                   ? `, MCP sign-ins as ${res.mcpRunAs.person} for ${res.mcpRunAs.servers.join(", ")}`
-                  : ", MCP sign-ins: workspace connections only"),
+                  : ", MCP sign-ins: workspace connections only") +
+              (args.linearConnection === undefined
+                ? ""
+                : res.linearConnection
+                  ? `, Linear connection ${res.linearConnection.appId}/${res.linearConnection.organizationId}`
+                  : ", Linear connection cleared"),
           );
         },
       ),
@@ -680,12 +737,15 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
       // ---------------------------------------------------------------------
       tool(
         "list_mcp_servers",
-        `List the configured MCP servers (connections) ${personaName()} can use.`,
+        `List the configured MCP servers (connections) ${personaName()} can use. Native Linear apps are separate; use list_linear_connections for those.`,
         {},
         async () => {
           const cfg = readMcpConfig().mcpServers || {};
           const names = Object.keys(cfg);
-          if (!names.length) return text("No MCP servers configured.");
+          if (!names.length)
+            return text(
+              "No MCP servers configured. Native Linear apps are separate; use list_linear_connections for those.",
+            );
           const lines = names.map((n) => {
             const s = cfg[n] || {};
             const where = s.url

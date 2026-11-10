@@ -63,9 +63,13 @@ configuration for the run.
   access; if no alias permits the run, it fails before model launch. An
   existing canonical server remains authoritative, including its endpoint
   and `allowedUsers` gate. The app token overrides other credentials on any
-  allowlisted official Linear MCP alias. The connection-options endpoint
-  returns identifiers and display names only, never tokens or client secrets.
-  PUT accepts `linearConnection: null` to clear the binding.
+  allowlisted official Linear MCP alias. The connection-options endpoint and
+  the interactive `list_linear_connections` admin tool return identifiers and
+  display names only, never tokens or client secrets. That tool is admin-gated
+  and unmounted from automation runs. It reports configured-but-unconnected
+  apps by display name only, and automation create/update choose an id
+  explicitly rather than inferring one. PUT and the update tool accept
+  `linearConnection: null` to clear the binding.
   A root session with an explicit `automationId` fails unavailable if that
   automation was deleted. It never switches to a same-named automation or
   unrestricted connector access. Name lookup is for legacy sessions without

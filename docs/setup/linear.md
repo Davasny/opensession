@@ -86,6 +86,13 @@ picker only when needed to distinguish connections with the same name.
 An app's client ID cannot be replaced once configured; create another app for a
 different OAuth identity. Secrets can be rotated without changing the app ID.
 
+From the Desk, ask which Linear connections are available. Its
+`list_linear_connections` tool lists connected apps and workspaces with the
+exact ids to pass as `linearConnection` when creating or updating an
+automation. The tool returns display names and ids only, never tokens or client
+secrets. Ids are always chosen explicitly; the Desk never substitutes another
+app's credentials.
+
 For each app, Settings shows its callback and webhook URLs and a **Connect**
 action. Register those exact URLs in that app's Linear configuration, then
 connect it to the intended Linear workspace with `actor=app` authorization.
