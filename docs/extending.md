@@ -42,7 +42,9 @@ Two things worth knowing:
   ticket text can never reach a sensitive tool.
 - Servers carry **their own credentials**. Runs do not inherit Open Session's
   full server environment; each MCP server receives only its own configured or
-  granted credentials.
+  granted credentials. An HTTP server takes them in its `headers` map (for
+  example `Authorization` or a provider-specific API-key header); a stdio
+  server takes them in `env`.
 
 The MCP config is watched. Changes invalidate its parsed cache, and the next use
 reloads it, so adding or changing a server does not require a service restart.

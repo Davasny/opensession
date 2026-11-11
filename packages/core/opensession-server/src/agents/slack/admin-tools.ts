@@ -775,6 +775,12 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
             .describe("Required for stdio transport."),
           args: z.array(z.string()).optional(),
           env: z.record(z.string(), z.string()).optional(),
+          headers: z
+            .record(z.string(), z.string())
+            .optional()
+            .describe(
+              "HTTP transport only. Custom request headers such as Authorization or a provider-specific API-key header.",
+            ),
           allowedUsers: z
             .array(z.string())
             .optional()
@@ -789,6 +795,7 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
           command?: string;
           args?: string[];
           env?: Record<string, string>;
+          headers?: Record<string, string>;
           allowedUsers?: string[];
         }) => {
           const res = await addMcpServer(args);

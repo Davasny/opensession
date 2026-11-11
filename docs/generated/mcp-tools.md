@@ -41,7 +41,7 @@ touches an in-process tool:
 | Server | Tools | Runs | Condition |
 | --- | --- | --- | --- |
 | [`opensession-sessions`](#opensession-sessions) | 25 | interactive, Slack loop, automation | Automation runs get it ONLY with the human-set `selfImprove` flag, and then in the `automationSelf` build below. A person's own turn in an automation-owned session gets the full build (`isAdmin` + `humanResume`). |
-| [`opensession-admin`](#opensession-admin) | 15 | interactive, Slack loop | – |
+| [`opensession-admin`](#opensession-admin) | 16 | interactive, Slack loop | – |
 | [`opensession-runners`](#opensession-runners) | 5 | interactive | – |
 | [`opensession-goals`](#opensession-goals) | 8 | interactive | – |
 | [`opensession-search`](#opensession-search) | 2 | interactive, automation | – |
@@ -79,7 +79,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-38 servers, 187 tools.
+38 servers, 188 tools.
 
 ## opensession-sessions
 
@@ -282,6 +282,12 @@ Forget a remembered entry by its id (from list_memory).
 
 List all of Assistant's automations (routines): scheduled, event- and webhook-triggered jobs. Prompts are omitted; read one with get_automation.
 
+### `list_linear_connections`
+
+`mcp__opensession-admin__list_linear_connections` · input: none
+
+List the connected Linear apps and workspaces an automation can use. Each choice names its app plus the exact appId and organizationId to pass as linearConnection to create_automation or update_automation. Returns connection identities only, never tokens or client secrets. Native Linear apps are separate from MCP servers.
+
 ### `get_automation`
 
 `mcp__opensession-admin__get_automation` · input: `id` (string, required)
@@ -290,13 +296,13 @@ Read one automation's full record by id: its prompt and every setting (schedule,
 
 ### `create_automation`
 
-`mcp__opensession-admin__create_automation` · input: `name` (string, required), `prompt` (string, required), `schedule` (string), `mode` ("ask" | "code" | "scratch"), `repo` (string), `mcpServers` (string[]), `sandbox` (boolean), `model` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `attachRepos` (string[]), `owner` (string), `workspaceId` (string)
+`mcp__opensession-admin__create_automation` · input: `name` (string, required), `prompt` (string, required), `schedule` (string), `mode` ("ask" | "code" | "scratch"), `repo` (string), `mcpServers` (string[]), `linearConnection` (object), `sandbox` (boolean), `model` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `attachRepos` (string[]), `owner` (string), `workspaceId` (string)
 
-Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only, 'scratch' for a full shell (curl, scripts, downloads) without a repository checkout, or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.
+Create a new automation (routine). Provide a clear prompt describing the task. Set `repo` to the repository it works in, or it runs against the instance default. Use a 5-field UTC cron `schedule` for recurring jobs (omit for manual/webhook only). Pick mode 'ask' for read-only, 'scratch' for a full shell (curl, scripts, downloads) without a repository checkout, or 'code' if it must edit and commit files. Ordinary automations receive no GitHub credential, so code mode alone cannot push or open a GitHub PR. To give it a connected Linear app, call list_linear_connections first and pass the chosen ids as linearConnection. Set sandbox true to use a fresh disposable Executor. Sandboxed automations require an explicit mcpServers list, a pinned accountId, a supported model, and a configured qualified provider.
 
 ### `update_automation`
 
-`mcp__opensession-admin__update_automation` · input: `id` (string, required), `name` (string), `prompt` (string), `schedule` (string), `mode` ("ask" | "code" | "scratch"), `enabled` (boolean), `repo` (string), `mcpServers` (string[]), `sandbox` (boolean), `model` (string), `fallbackModel` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `attachRepos` (string[]), `owner` (string), `workspaceId` (string), `webhookMaxConcurrent` (integer), `mcpRunAs` (string), `mcpRunAsServers` (string[])
+`mcp__opensession-admin__update_automation` · input: `id` (string, required), `name` (string), `prompt` (string), `schedule` (string), `mode` ("ask" | "code" | "scratch"), `enabled` (boolean), `repo` (string), `mcpServers` (string[]), `linearConnection` (object | null), `sandbox` (boolean), `model` (string), `fallbackModel` (string), `accountId` (string), `accountStrict` (boolean), `usageCredits` (boolean), `prReviewer` (string), `readRepos` (string[]), `attachRepos` (string[]), `owner` (string), `workspaceId` (string), `webhookMaxConcurrent` (integer), `mcpRunAs` (string), `mcpRunAsServers` (string[])
 
 Update an existing automation by id. Only provided fields change. Use enabled to pause/resume.
 
@@ -328,11 +334,11 @@ Schedule a ONE-OFF run at a future time, after which it auto-deletes — use for
 
 `mcp__opensession-admin__list_mcp_servers` · input: none
 
-List the configured MCP servers (connections) Assistant can use.
+List the configured MCP servers (connections) Assistant can use. Native Linear apps are separate; use list_linear_connections for those.
 
 ### `add_mcp_server`
 
-`mcp__opensession-admin__add_mcp_server` · input: `name` (string, required), `transport` ("http" | "stdio", required), `url` (string), `command` (string), `args` (string[]), `env` (object), `allowedUsers` (string[])
+`mcp__opensession-admin__add_mcp_server` · input: `name` (string, required), `transport` ("http" | "stdio", required), `url` (string), `command` (string), `args` (string[]), `env` (object), `headers` (object), `allowedUsers` (string[])
 
 Install/configure a new MCP server. For 'http' provide url; for 'stdio' provide command (and optional args/env). Picked up on the next message — no restart. Secrets go in env/headers and aren't echoed back. Pass allowedUsers to restrict the server to specific people (least-privilege); omit for a server everyone can use.
 

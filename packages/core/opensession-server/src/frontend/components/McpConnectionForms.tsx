@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { displayName } from "../brand-logos";
 import { request } from "../lib/api/request";
 import { errorMessage } from "../lib/error-message";
-import { parseMcpEnvironment } from "../lib/mcp-form";
+import { parseMcpEnvironment, parseMcpHeaders } from "../lib/mcp-form";
 import { TOKEN_CONNECT_URLS, type McpConnection } from "../lib/mcp-connections";
 import { Button } from "../ui/button";
 import { cn } from "../ui/cn";
@@ -152,6 +152,7 @@ export function AddMcpForm({
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
   const [env, setEnv] = useState("");
+  const [headers, setHeaders] = useState("");
   const [allowedUsers, setAllowedUsers] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +162,7 @@ export function AddMcpForm({
     setError(null);
     try {
       const envValues = parseMcpEnvironment(env);
+      const headerValues = parseMcpHeaders(headers);
       const allowed = allowedUsers
         .split(",")
         .map((user) => user.trim())
@@ -177,6 +179,7 @@ export function AddMcpForm({
               ? args.split(/\s+/).filter(Boolean)
               : undefined,
           env: transport === "stdio" ? envValues : undefined,
+          headers: transport === "http" ? headerValues : undefined,
           allowedUsers: allowed.length ? allowed : undefined,
         },
         label: "Could not add MCP server",
@@ -222,15 +225,27 @@ export function AddMcpForm({
       </SettingsFormRow>
 
       {transport === "http" ? (
-        <SettingsField>
-          URL
-          <input
-            className={settingsInputClass}
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://api.example.com/mcp"
-          />
-        </SettingsField>
+        <>
+          <SettingsField>
+            URL
+            <input
+              className={settingsInputClass}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://api.example.com/mcp"
+            />
+          </SettingsField>
+          <SettingsField>
+            Headers (NAME=VALUE, one per line, stored in mcp-config.json)
+            <textarea
+              className={cn(settingsInputClass, "resize-y font-mono")}
+              value={headers}
+              onChange={(e) => setHeaders(e.target.value)}
+              rows={2}
+              placeholder={"Authorization=Bearer <api-key>"}
+            />
+          </SettingsField>
+        </>
       ) : (
         <>
           <SettingsFormRow>

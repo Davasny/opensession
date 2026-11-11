@@ -1,7 +1,7 @@
 /**
  * Connection status + management for the MCP servers agent sessions
  * run with (mcp-config.json). Targets are sanitized — never expose URL
- * query strings (they can embed tokens) or env values.
+ * query strings (they can embed tokens) or env/header values.
  */
 import { homeDir } from "./paths";
 import { unwatchFile, watchFile } from "fs";
@@ -288,6 +288,12 @@ export interface AddMcpInput {
   args?: string[];
   env?: Record<string, string>;
   /**
+   * Custom HTTP headers, e.g. `Authorization` or a provider-specific API key
+   * header. Stored in mcp-config.json and sent with every request to this
+   * server; values are never returned by the connections API.
+   */
+  headers?: Record<string, string>;
+  /**
    * Optional per-user allowlist. When set (non-empty), only sessions whose user
    * resolves (via user-mappings) to one of these people get this server's tools;
    * everyone else's runs never see it. Omitted/empty = available to every
@@ -304,6 +310,40 @@ function cleanAllowedUsers(users?: string[]): string[] | undefined {
     new Set(users.map((u) => (u || "").trim()).filter(Boolean)),
   );
   return out.length ? out : undefined;
+}
+
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Validate the HTTP headers the Connections form (or opensession-admin) sends.
+ * Returns no headers for an empty/omitted value, and rejects anything Bun's
+ * fetch or the MCP transport would treat unexpectedly: malformed names,
+ * non-string or blank values, CR/LF injection, and case-insensitive duplicates.
+ */
+export function cleanMcpHeaders(
+  value: unknown,
+): { headers?: Record<string, string> } | { error: string } {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value))
+    return { error: "Headers must be an object of name/value pairs" };
+  const headers: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const [rawName, rawValue] of Object.entries(value)) {
+    const name = rawName.trim();
+    if (!HEADER_NAME.test(name))
+      return { error: `Invalid header name "${rawName}"` };
+    if (typeof rawValue !== "string")
+      return { error: `Header "${name}" value must be a string` };
+    const headerValue = rawValue.trim();
+    if (!headerValue) return { error: `Header "${name}" needs a value` };
+    if (/[\r\n\0]/.test(headerValue))
+      return { error: `Header "${name}" contains invalid characters` };
+    const key = name.toLowerCase();
+    if (seen.has(key)) return { error: `Duplicate header "${name}"` };
+    seen.add(key);
+    headers[name] = headerValue;
+  }
+  return Object.keys(headers).length ? { headers } : {};
 }
 
 /** Credentialed first-party release tools must never become fleet-wide. */
@@ -335,6 +375,8 @@ export async function addMcpServer(
       error: 'Server "apple-release" requires at least one allowed user',
     };
   }
+  const parsedHeaders = cleanMcpHeaders(input.headers);
+  if ("error" in parsedHeaders) return parsedHeaders;
 
   const config = readMcpConfig();
   if (config.mcpServers[name]) {
@@ -353,7 +395,11 @@ export async function addMcpServer(
       return { error: "URL must be http(s)" };
     }
     entry = { type: "http", url: input.url };
+    if (parsedHeaders.headers) entry.headers = parsedHeaders.headers;
   } else {
+    if (parsedHeaders.headers) {
+      return { error: "Headers are only supported for HTTP servers" };
+    }
     const command = (input.command || "").trim();
     if (!command) return { error: "Command is required for stdio servers" };
     entry = { command };
@@ -375,12 +421,12 @@ export async function addMcpServer(
  * path (src/server/plugins.ts, scripts/lib/plugins.ts).
  *
  * `addMcpServer` above is the Connections FORM: it builds the entry from
- * typed fields and deliberately drops anything it was not asked for, headers
- * included. A package's entry arrives whole and has already been validated to
- * carry credential REFERENCES (`${NAME}`) rather than values, so it is
- * written through as-is. `allowedUsers` is the installing operator's call and
- * never the package's, so any allowlist on the incoming entry is discarded in
- * favour of the one passed here.
+ * typed fields and deliberately drops anything it was not asked for, so a
+ * package's extra keys need this whole-entry path. A package's entry arrives
+ * whole and has already been validated to carry credential REFERENCES
+ * (`${NAME}`) rather than values, so it is written through as-is. `allowedUsers`
+ * is the installing operator's call and never the package's, so any allowlist
+ * on the incoming entry is discarded in favour of the one passed here.
  */
 export async function addMcpServerEntry(
   name: string,
@@ -519,14 +565,24 @@ async function checkServer(name: string, cfg: any): Promise<McpConnection> {
       // MCP servers typically reject bare GETs but still answer.
       const res = await fetch(cfg.url, {
         method: "GET",
+        // Configured headers may be what makes the endpoint answer at all.
+        headers:
+          cfg.headers && typeof cfg.headers === "object"
+            ? cfg.headers
+            : undefined,
         signal: controller.signal,
       });
       clearTimeout(timer);
       // Reachable, but an OAuth-protected server with no grant and no static
-      // Authorization header isn't usable yet — surface "Sign in required"
-      // instead of a misleading "Connected" (the GET's 401/405 only proves
-      // the endpoint is up). Use the same resource discovery as Connect.
-      if (!cfg.headers?.Authorization) {
+      // credentials isn't usable yet — surface "Sign in required" instead of a
+      // misleading "Connected" (the GET's 401/405 only proves the endpoint is
+      // up). Any configured header may be the credential (Authorization, an
+      // API-key header, …), so its presence means this is not an OAuth gap.
+      const hasConfiguredHeaders =
+        !!cfg.headers &&
+        typeof cfg.headers === "object" &&
+        Object.keys(cfg.headers).length > 0;
+      if (!hasConfiguredHeaders) {
         try {
           const st = mcpOauthStatus(name);
           if (!st.shared && st.users.length === 0) {
