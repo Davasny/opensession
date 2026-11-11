@@ -1,7 +1,10 @@
+import type React from "react";
+import { useEffect, useState } from "react";
 import { repoLabel } from "../lib/repo-label";
 import { Tooltip } from "../ui/tooltip";
 import { providerFromUrl } from "../lib/provider";
 import {
+  refAction,
   refChipText,
   refLabel,
   refState,
@@ -27,6 +30,7 @@ import {
 } from "../lib/workspace-summary-classes";
 import { cn } from "../ui/cn";
 import { IconArrowUpRight, IconPullRequest } from "./icons";
+import { PrRefStagingMark, usePrRefStaging } from "./PrRefStagingMark";
 
 /**
  * The PRs a session owns beyond the one its own branch carries, stacked under
@@ -46,19 +50,49 @@ import { IconArrowUpRight, IconPullRequest } from "./icons";
 
 /** Ref-only, so no per-row Merge: the row opens that PR's Review tab, which has
  *  the real detail (checks, mergeability) merging needs. */
+/** A row's fix: the band's action one size down, to fit a 31px row. */
+const ROW_ACTION =
+  "inline-flex h-6 shrink-0 items-center rounded-control border px-2 text-meta font-semibold whitespace-nowrap " +
+  "transition-[background-color,filter] duration-150 focus-ring disabled:cursor-default disabled:opacity-60";
+const ROW_ACTION_TONE = {
+  red: "border-[color-mix(in_srgb,var(--red)_78%,black)] bg-[var(--red)] text-white hover:brightness-[1.08]",
+  "status-red":
+    "border-[color-mix(in_srgb,var(--red)_45%,transparent)] bg-[color-mix(in_srgb,var(--red)_12%,var(--control-surface))] text-red hover:bg-red-soft",
+} as const;
+
 export function PrSeriesRow({
   prRef,
   primaryRepo,
   onOpen,
   variant = "bar",
+  sessionId,
+  refreshTick,
+  onPrompt,
 }: {
   prRef: SessionPrRef;
+  /** Summary variant: asks the session to fix this PR (its row's action). */
+  onPrompt?: (content: string) => void;
+  /** Summary variant: the session whose PR API reads this row's preview. */
+  sessionId?: string;
+  refreshTick?: number;
   /** The session's own repo. A PR inside it needs no repo hint on its chip. */
   primaryRepo?: string;
   onOpen?: (r: { repo: string; branch: string }) => void;
   variant?: "bar" | "summary";
 }) {
   const tone = refTone(prRef);
+  const staging = usePrRefStaging(
+    variant === "summary" ? sessionId : undefined,
+    prRef,
+    refreshTick,
+  );
+  const action = variant === "summary" && onPrompt ? refAction(prRef) : null;
+  const [prompted, setPrompted] = useState(false);
+  useEffect(() => {
+    if (!prompted) return;
+    const timer = setTimeout(() => setPrompted(false), 6000);
+    return () => clearTimeout(timer);
+  }, [prompted]);
   const provider = providerFromUrl(prRef.url || "");
   const target = { repo: prRef.repo, branch: prRef.branch };
   const ariaLabel = `Review ${repoLabel(prRef.repo)} pull request #${prRef.number}`;
@@ -66,21 +100,71 @@ export function PrSeriesRow({
     const body = (
       <>
         <span className={WS_SUMMARY_RAIL}>
-          <IconPullRequest size={20} className={WS_SUMMARY_ICON} />
+          {!staging && (
+            <IconPullRequest size={20} className={WS_SUMMARY_ICON} />
+          )}
         </span>
         <span className={WS_SUMMARY_LABEL}>
           {refChipText(prRef, primaryRepo)}
           {prRef.title && <span className="text-dim"> · {prRef.title}</span>}
         </span>
-        <span className={cn(WS_SUMMARY_STATE, PR_STATE_TEXT[tone])}>
-          {refState(prRef)}
-        </span>
+        {action ? (
+          // Holds the action's room so the title truncates before it.
+          <span
+            aria-hidden="true"
+            className={cn(ROW_ACTION, "invisible border-transparent")}
+          >
+            {prompted ? action.pending : action.label}
+          </span>
+        ) : (
+          <span className={cn(WS_SUMMARY_STATE, PR_STATE_TEXT[tone])}>
+            {refState(prRef)}
+          </span>
+        )}
       </>
     );
     const className = cn(WS_SUMMARY_ROW, "gap-2 no-underline");
     const title = refLabel(prRef);
+    // The preview link takes the PR glyph's place in the rail, the way the
+    // primary band leads with its globe, and the fix takes the state's place
+    // on the right, the way the band ends in its action. Both sit over the
+    // row rather than inside it: the row is itself a link, and links and
+    // buttons do not nest.
+    const withPreview = (row: React.ReactNode) =>
+      staging || action ? (
+        <div className="relative flex min-w-0">
+          {row}
+          {staging && (
+            <PrRefStagingMark
+              staging={staging}
+              number={prRef.number}
+              className="absolute left-3 top-1/2 -translate-y-1/2"
+            />
+          )}
+          {action && (
+            <button
+              type="button"
+              className={cn(
+                ROW_ACTION,
+                ROW_ACTION_TONE[action.tone],
+                "absolute right-4 top-1/2 -translate-y-1/2",
+              )}
+              title={refLabel(prRef)}
+              disabled={prompted}
+              onClick={() => {
+                onPrompt?.(action.prompt);
+                setPrompted(true);
+              }}
+            >
+              {prompted ? action.pending : action.label}
+            </button>
+          )}
+        </div>
+      ) : (
+        row
+      );
     if (prRef.url) {
-      return (
+      return withPreview(
         <a
           className={className}
           href={prRef.url}
@@ -103,10 +187,10 @@ export function PrSeriesRow({
           }}
         >
           {body}
-        </a>
+        </a>,
       );
     }
-    return (
+    return withPreview(
       <button
         type="button"
         className={className}
@@ -116,7 +200,7 @@ export function PrSeriesRow({
         onClick={() => onOpen?.(target)}
       >
         {body}
-      </button>
+      </button>,
     );
   }
   return (
@@ -158,8 +242,14 @@ export function PrSeriesRows({
   primaryRepo,
   onOpen,
   variant = "bar",
+  sessionId,
+  refreshTick,
+  onPrompt,
 }: {
   refs: SessionPrRef[];
+  onPrompt?: (content: string) => void;
+  sessionId?: string;
+  refreshTick?: number;
   primaryRepo?: string;
   onOpen?: (r: { repo: string; branch: string }) => void;
   variant?: "bar" | "summary";
@@ -174,6 +264,9 @@ export function PrSeriesRows({
           primaryRepo={primaryRepo}
           onOpen={onOpen}
           variant={variant}
+          sessionId={sessionId}
+          refreshTick={refreshTick}
+          onPrompt={onPrompt}
         />
       ))}
     </>

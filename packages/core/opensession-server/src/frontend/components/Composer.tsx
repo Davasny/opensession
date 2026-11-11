@@ -123,6 +123,9 @@ import { getVimModePref, onVimModeChanged } from "../lib/vim-pref";
 import { useVimMode } from "../hooks/useVimMode";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { motion, AnimatePresence } from "motion/react";
+
+/** How long the first Escape of a run stays armed waiting for the second. */
+const ESC_STOP_WINDOW_MS = 1500;
 import { composerMorph } from "../ui/motion";
 import { shortModelLabel } from "./ModelEffortSelect";
 import type {
@@ -671,7 +674,7 @@ export function Composer({
   const sendKeyCaps =
     sendKey === "mod-enter" ? [MOD_ENTER_GLYPH] : [isApple ? "↵" : "Enter"];
 
-  // Escape asked to stop the run and is waiting on an answer. A turn that
+  // ⌘. asked to stop the run and is waiting on an answer. A turn that
   // finishes on its own while the question is up leaves nothing to stop, so
   // the dialog goes away with it rather than stopping the NEXT turn.
   const [stopConfirm, setStopConfirm] = useState(false);
@@ -679,8 +682,21 @@ export function Composer({
   useLayoutEffect(() => {
     busyRef.current = busy;
   });
+  // The first Escape during a run only arms the stop; a second Escape within
+  // ESC_STOP_WINDOW_MS stops the turn. The pending timer is the armed state. A
+  // turn that ends on its own disarms it, so a late Escape never stops the
+  // NEXT turn.
+  const escArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function disarmEsc() {
+    if (escArmTimer.current) clearTimeout(escArmTimer.current);
+    escArmTimer.current = null;
+  }
+  useEffect(() => () => disarmEsc(), []);
   useEffect(() => {
-    if (!busy) setStopConfirm(false);
+    if (!busy) {
+      setStopConfirm(false);
+      disarmEsc();
+    }
   }, [busy]);
   /** Raise the question. Deferred a microtask so the dialog mounts AFTER the
    *  keystroke that asked for it has finished dispatching: Base UI's dismissal
@@ -1391,12 +1407,18 @@ export function Composer({
     // falls through here to the busy-stop below), and Enter is never consumed,
     // so the send combos keep working in any mode.
     if (vim.handleKeyDown(e)) return;
-    // Esc while a run is busy asks before interrupting the turn (the stop
-    // button itself still stops on the press).
+    // Esc twice while a run is busy interrupts the turn: the first press arms
+    // it, the second within the window stops.
     if (e.key === "Escape" && busy && onStop && !disabled) {
       e.preventDefault();
       e.stopPropagation();
-      requestStop();
+      if (e.repeat) return;
+      if (escArmTimer.current) {
+        disarmEsc();
+        onStop();
+        return;
+      }
+      escArmTimer.current = setTimeout(disarmEsc, ESC_STOP_WINDOW_MS);
       return;
     }
     // Inside an unclosed ``` fence, plain Enter inserts a newline instead of
@@ -2050,7 +2072,7 @@ export function Composer({
                   : "Stop. Interrupts the current turn; the session stays ready."
               }
               // The chord that reaches this from anywhere in the session.
-              // Escape does the same from inside the composer, but two chords
+              // Escape twice does the same from inside the composer, but two chords
               // side by side in one badge row would read as a single one.
               shortcut={stopKeys ?? undefined}
             >

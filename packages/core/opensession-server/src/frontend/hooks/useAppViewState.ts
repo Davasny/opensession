@@ -7,11 +7,11 @@ import {
   getActiveViewTabKeys,
   type ActiveViewTab,
 } from "../lib/active-view-tab";
-import { resolveWorkspaceApi } from "../lib/api";
+import { newSessionApi, resolveWorkspaceApi } from "../lib/api";
 import type { Route } from "../lib/app-route";
 import { resolveAnonymousUserPath } from "../lib/auth-ready";
 import { BASE_PATH } from "../lib/base";
-import { findPrWorkspaceId } from "../lib/pr-workspace";
+import { findPrSessionId, findPrWorkspaceId } from "../lib/pr-workspace";
 import { onTabSplitChanged } from "../lib/split-tabs";
 import { onTabOrderChanged } from "../lib/tab-order";
 import type { UnifiedSession, Workspace } from "../lib/types";
@@ -32,6 +32,7 @@ interface UseAppViewStateOptions {
   workspacesRef: RefObject<Workspace[]>;
   refreshWorkspaces: () => Promise<void>;
   openPrRef: RefObject<(repo: string, number: number) => void>;
+  inject: (session: UnifiedSession, opts?: { sticky?: boolean }) => void;
   addHandler: ReturnType<typeof useWebSocket>["addHandler"];
 }
 
@@ -42,6 +43,7 @@ export function useAppViewState({
   workspacesRef,
   refreshWorkspaces,
   openPrRef,
+  inject,
   addHandler,
 }: UseAppViewStateOptions) {
   // A "new tab" while a session is open is a *new session in that same session*, not
@@ -150,25 +152,45 @@ export function useAppViewState({
   const focusReviewPr = (focus: Omit<ReviewFocus, "seq">) => {
     requestReviewFocus(setReviewFocusPr, focus);
   };
-  // Open a PR named in prose (a `repo#123` chip) where it belongs: a Review tab
-  // in its workspace. The standalone /pr/ route is a page, so routing through it
-  // took the whole detail pane, title and tab strip included, for as long as the
-  // resolve took, even when the PR's workspace was the one already on screen.
-  // Most clicks need no server at all (the workspace and session lists already
-  // say where the PR lives), and the ones that do keep the current view up while
-  // they wait rather than blanking it. Only an unresolvable PR falls through to
-  // the standalone route, which is what says there is no such pull request.
+  // Open a PR named in prose (a `repo#123` chip) as its workspace's session:
+  // the conversation that made the PR, not a Review panel beside whatever is
+  // on screen. Most clicks need no server at all (the workspace and session
+  // lists already say where the PR lives); the rest resolve first and keep the
+  // current view up meanwhile. With no session of its own yet, the PR gets a
+  // new empty one in its workspace, on its branch, so the summary card shows
+  // the PR beside a fresh chat; if that create fails the workspace composer
+  // takes over. Only an unresolvable PR falls through to the standalone
+  // route, which says there is no such PR.
+  const startingPrSession = useRef<string | null>(null);
   const openPrByRef = (repo: string, number: number) => {
-    const open = (
-      workspaceId: string,
-      pr: { repo: string; branch?: string; number?: number },
-    ) => {
-      focusReviewPr({ ...pr, workspaceId });
-      navigate({
-        view: "workspace",
-        id: workspaceId,
-        tab: "review",
+    const open = (workspaceId: string) => {
+      const sessionId = findPrSessionId(sessionsRef.current, workspaceId, {
+        repo,
+        number,
       });
+      if (sessionId) {
+        setActiveViewTabState(null);
+        navigate({ view: "session", id: sessionId });
+        return;
+      }
+      if (startingPrSession.current === workspaceId) return;
+      startingPrSession.current = workspaceId;
+      newSessionApi(`workspace:${workspaceId}`, getCurrentUser(), "share")
+        .then(({ id, session }) => {
+          if (session) inject(session, { sticky: true });
+          refreshWorkspaces();
+          setActiveViewTabState(null);
+          navigate({ view: "session", id });
+        })
+        .catch(() => {
+          composeInWorkspaceRef.current = workspaceId;
+          setActiveViewTabState(null);
+          navigate({ view: "workspace", id: workspaceId });
+        })
+        .finally(() => {
+          if (startingPrSession.current === workspaceId)
+            startingPrSession.current = null;
+        });
     };
     const known = findPrWorkspaceId(
       workspacesRef.current,
@@ -176,17 +198,13 @@ export function useAppViewState({
       { repo, number },
     );
     if (known) {
-      open(known, { repo, number });
+      open(known);
       return;
     }
     resolveWorkspaceApi({ pr: { repo, number } })
-      .then(({ workspaceId, pr }) => {
+      .then(({ workspaceId }) => {
         refreshWorkspaces();
-        open(workspaceId, {
-          repo: pr?.repo ?? repo,
-          branch: pr?.branch,
-          number: pr?.number ?? number,
-        });
+        open(workspaceId);
       })
       .catch(() => {
         navigate({ view: "pr", repo, number });
@@ -198,6 +216,10 @@ export function useAppViewState({
   // One-shot guard consumed by the workspace default-pane seeding effect (set
   // when closing a view tab replaces the workspace URL — see onCloseView).
   const suppressWsSeedRef = useRef(false);
+  // One-shot: the workspace a PR chip opened on its composer (no session of
+  // its own yet), so the landing effect keeps the composer instead of jumping
+  // to another session or seeding Review.
+  const composeInWorkspaceRef = useRef<string | null>(null);
 
   // Set for the render right after opening a workspace from the sidebar or
   // clicking a session tab, so the session it lands on autofocuses its
@@ -295,6 +317,7 @@ export function useAppViewState({
     takePendingReviewFocus,
     focusReviewPr,
     suppressWsSeedRef,
+    composeInWorkspaceRef,
     focusComposerOnOpen,
     setFocusComposerOnOpen,
     sessionComposerPrefills,

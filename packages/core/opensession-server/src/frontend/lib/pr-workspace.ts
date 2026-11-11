@@ -99,6 +99,28 @@ export function findPrWorkspaceId(
   return (person ?? carriers[0])?.workspaceId ?? null;
 }
 
+/**
+ * The session in a workspace that carries this PR: the newest live one a
+ * person drove. A review run does not count. Null when none does, and the
+ * caller opens the workspace's composer to start one.
+ */
+export function findPrSessionId(
+  sessions: UnifiedSession[],
+  workspaceId: string,
+  pr: PrIdentity,
+): string | null {
+  const carriers = sessions
+    .filter(
+      (s) =>
+        !s.archived &&
+        s.workspaceId === workspaceId &&
+        !isAutomationSession(s) &&
+        sessionCarriesPr(s, pr),
+    )
+    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  return carriers[0]?.id ?? null;
+}
+
 /** One branch a workspace's sessions work on. */
 export interface WorkspaceBranchRef {
   repo: string;
