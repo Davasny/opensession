@@ -1,4 +1,5 @@
 import { configuredIntegration, configuredServer } from "./config";
+import type { LinearStartMode } from "../agents/linear/start-mode";
 
 export interface LinearApp {
   id: string;
@@ -6,6 +7,29 @@ export interface LinearApp {
   clientId: string;
   clientSecret: string;
   webhookSecret: string;
+  startMode?: LinearStartMode;
+}
+
+const warnedStartModes = new Set<string>();
+
+/** Accept only a known mode; a hand-edited invalid value falls back to the
+ *  unset default. Warnings are deduplicated because this projection is read
+ *  for every app list and session setup. */
+function startMode(
+  value: unknown,
+  source: string,
+): LinearStartMode | undefined {
+  if (value === "ask" || value === "plan" || value === "implement")
+    return value;
+  if (value === undefined || value === null) return undefined;
+  const warning = `${source}=${String(value).slice(0, 80)}`;
+  if (warnedStartModes.size < 32 && !warnedStartModes.has(warning)) {
+    warnedStartModes.add(warning);
+    console.warn(
+      `[linear] Unknown start mode from ${source}; using the default`,
+    );
+  }
+  return undefined;
 }
 
 export function validAdditionalLinearAppId(id: unknown): id is string {
@@ -33,6 +57,7 @@ export function linearApps(): LinearApp[] {
         text(config.oauthClientSecret),
       webhookSecret:
         text(process.env.LINEAR_WEBHOOK_SECRET) || text(config.webhookSecret),
+      startMode: startMode(config.startMode, "integrations.linear.startMode"),
     },
   ];
   const ids = new Set(["primary"]);
@@ -51,6 +76,10 @@ export function linearApps(): LinearApp[] {
       clientSecret:
         "oauthClientSecret" in raw ? text(raw.oauthClientSecret) : "",
       webhookSecret: "webhookSecret" in raw ? text(raw.webhookSecret) : "",
+      startMode: startMode(
+        "startMode" in raw ? raw.startMode : undefined,
+        `integrations.linear.apps.${id}.startMode`,
+      ),
     });
   }
   return apps;

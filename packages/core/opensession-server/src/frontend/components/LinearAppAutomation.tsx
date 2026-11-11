@@ -23,6 +23,9 @@ export function LinearAppAutomation({
   const [mode, setMode] = useState<"scratch" | "ask" | "code">(
     app.automation?.mode ?? "code",
   );
+  const [startMode, setStartMode] = useState<"ask" | "plan" | "implement">(
+    app.startMode ?? "ask",
+  );
   const [model, setModel] = useState(app.automation?.model ?? "");
   const [effort, setEffort] = useState(app.automation?.effort ?? "");
   const [repo, setRepo] = useState(app.automation?.repo ?? "");
@@ -81,6 +84,7 @@ export function LinearAppAutomation({
   const dirty =
     prompt !== (app.automation?.prompt ?? "") ||
     mode !== (app.automation?.mode ?? "code") ||
+    startMode !== (app.startMode ?? "ask") ||
     model !== (app.automation?.model ?? "") ||
     effort !== (app.automation?.effort ?? "") ||
     repo !== (app.automation?.repo ?? "") ||
@@ -97,6 +101,7 @@ export function LinearAppAutomation({
       await request(`/connections/linear/apps/${encodeURIComponent(app.id)}`, {
         method: "PUT",
         body: {
+          startMode,
           automation: {
             prompt,
             mode,
@@ -202,6 +207,37 @@ export function LinearAppAutomation({
             </span>
           </label>
         )}
+        {mode === "code" ? (
+          <label className="flex flex-col gap-1.5 text-label text-fg">
+            On assignment
+            <OptionSelect
+              label="On assignment"
+              value={startMode}
+              options={[
+                { value: "ask", label: "Wait for a reply" },
+                { value: "plan", label: "Start planning" },
+                { value: "implement", label: "Start implementation" },
+              ]}
+              onChange={(value) => {
+                if (
+                  value === "ask" ||
+                  value === "plan" ||
+                  value === "implement"
+                )
+                  setStartMode(value);
+              }}
+              className="phone:min-h-11"
+            />
+            <span className="text-supporting text-dim">
+              Planning posts a plan for review before coding. Implementation
+              starts coding and moves the issue to In Progress.
+            </span>
+          </label>
+        ) : (
+          <p className="m-0 text-supporting text-dim">
+            This agent starts the assigned task as soon as an issue is assigned.
+          </p>
+        )}
         <label className="flex flex-col gap-1.5 text-label text-fg">
           Instructions
           <Textarea
@@ -270,8 +306,8 @@ export function LinearAppAutomation({
         </Button>
         <span role="status" className="text-meta text-faint">
           {saved
-            ? "Saved. Instructions, model, effort, and tools apply to the next turn. Task mode and repository apply to new assignments."
-            : "Instructions, model, effort, and tools apply to the next turn. Task mode and repository apply to new assignments. No restart needed."}
+            ? "Saved. Instructions, model, effort, and tools apply to the next turn. Task mode, assignment start, and repository apply to new assignments."
+            : "Instructions, model, effort, and tools apply to the next turn. Task mode, assignment start, and repository apply to new assignments. No restart needed."}
         </span>
       </div>
     </form>

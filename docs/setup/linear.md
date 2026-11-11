@@ -52,7 +52,6 @@ configuration, OAuth connections, and instructions do not require a restart.
 | `LINEAR_CLIENT_ID`         | OAuth                     | Linear OAuth app client ID                                                               |
 | `LINEAR_CLIENT_SECRET`     | OAuth                     | authorization-code exchange and token refresh                                            |
 | `LINEAR_WEBHOOK_SECRET`    | webhooks                  | HMAC secret; unset or empty rejects every webhook with 401                               |
-| `LINEAR_START_MODE`        | optional assignment start | `ask`, `plan`, or `implement`; overrides `integrations.linear.startMode`                 |
 | `ENABLE_LINEAR_AGENT`      | loading the agent         | optional env override; only the literal `true` enables, and any other set value disables |
 | `LINEAR_API_KEY`           | optional external tooling | the Linear session agent uses OAuth, not this key                                        |
 | `OPENSESSION_INGRESS_BASE` | optional global override  | public origin used by the default OAuth callback URL                                     |
@@ -64,13 +63,15 @@ wins when present. See [boot guards](integrations-misc.md#boot-guards).
 Restart Open Session after changing the enable flag. Env changes also require
 a restart; app credentials saved in Settings are read live.
 
-Assignments default to `ask`, which keeps the existing greeting. Set
-`integrations.linear.startMode` to `plan` (recommended) to start the planning
-interview as soon as the issue is assigned, or to `implement` to explicitly
-opt into starting implementation and moving the issue to **In Progress**
-without a reply. `LINEAR_START_MODE` overrides the config value. Unknown values
-warn and fall back to `ask`. Planning still waits for approval and moves the
-issue to **Ready**; implementation remains gated by the existing workflow.
+Each app sets its own assignment start under **Agent instructions and tools**:
+`ask` keeps the greeting until a person replies `plan` or `implement`, `plan`
+starts the planning interview as soon as the issue is assigned, and `implement`
+starts implementation and moves the issue to **In Progress** without a reply.
+Coding agents default to `ask`. General and read-only agents always start their
+assigned task. Planning still waits for approval and moves the issue to
+**Ready**; implementation remains gated by the existing workflow. The primary
+app stores the setting as `integrations.linear.startMode`; additional apps store
+it on their entry in `integrations.linear.apps`.
 
 No personal API key is required to enable the connector.
 
@@ -103,7 +104,8 @@ the agent in Linear to route work to it.
 Agent settings reuse event automations, as GitHub review settings do. Each app
 has the event key `linear:agent_session:<app-id>`. The connector owns dispatch
 and conversation continuation; it reads the automation's prompt, model,
-reasoning effort, enabled flag, and MCP allowlist for each turn. The primary app
+reasoning effort, enabled flag, and MCP allowlist for each turn. The app's
+assignment start comes from the app record, not the automation. The primary app
 keeps its legacy flow until agent settings are saved. New additional apps
 default to general tasks with no external MCP connectors selected. **All
 connectors** is an explicit choice; an empty list stays empty.
@@ -118,11 +120,12 @@ agent read or comment on issues. Other configured connectors remain additive.
 - **Coding** uses the existing planning and implementation flow, including PR
   creation after implementation completes.
 
-Instructions and tool selection apply to the next turn. Task mode and repository
-are locked when an assignment creates its workspace; changing them affects new
-assignments. Disabling an app's automation prevents new turns. Removing an app
-rejects its future webhook and authorization requests; an already running turn
-may still finish. Removing it does not uninstall the OAuth app in Linear.
+Instructions and tool selection apply to the next turn. Task mode, assignment
+start, and repository are locked when an assignment creates its workspace;
+changing them affects new assignments. Disabling an app's automation prevents
+new turns. Removing an app rejects its future webhook and authorization
+requests; an already running turn may still finish. Removing it does not
+uninstall the OAuth app in Linear.
 
 ## OAuth app setup
 
@@ -189,8 +192,9 @@ and `handlers.ts`):
 
 - `AgentSessionEvent` / `AgentSession`:
   - `created` prepares the default repo, persists the session, files its
-    workspace, and starts work according to `startMode`: `ask` posts the
-    legacy greeting, while `plan` and `implement` start one automatic turn.
+    workspace, and starts work according to the app's assignment start: `ask`
+    posts the legacy greeting, while `plan` and `implement` start one automatic
+    turn.
   - `prompted` runs planning, implementation, or a free-form coding turn.
     `signal: "stop"` cancels the current engine run.
   - Planning completion posts a `# Implementation Plan` issue comment, moves

@@ -123,6 +123,7 @@
     "linear": {
       "enabled": false,
       "name": "",
+      "startMode": "ask",
       "oauthRedirectUrl": "https://sessions.example.com/oauth/callback"
     },
     "plain": {

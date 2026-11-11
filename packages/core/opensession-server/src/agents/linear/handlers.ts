@@ -59,7 +59,7 @@ import {
   linearGreetingEntry,
   linearUserEntry,
 } from "./transcript";
-import { linearStartMode, type LinearStartMode } from "./start-mode";
+import { linearStartModeFor } from "./start-mode";
 import { linearAgentConfig, linearTaskPrompt } from "./agent-config";
 import { createLinearTaskWorkspace } from "./workspace";
 
@@ -1582,10 +1582,7 @@ Help with whatever they're asking. You have a worktree ready at ${session.worktr
     ready,
     updatedAt: new Date().toISOString(),
     greetingAt: agentSession.createdAt ?? new Date().toISOString(),
-    startMode:
-      agentConfig && agentConfig.mode !== "code"
-        ? "implement"
-        : linearStartMode(),
+    startMode: linearStartModeFor(effectiveAppId, agentConfig?.mode),
     planningConversation: [],
     participants: [],
     lastActiveUser: null,

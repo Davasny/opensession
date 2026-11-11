@@ -11,6 +11,7 @@ export const linearAppSchema = z.object({
   callbackUrl: z.string(),
   webhookUrl: z.string(),
   automationEventKey: z.string(),
+  startMode: z.enum(["ask", "plan", "implement"]).nullish(),
   automation: z
     .object({
       id: z.string(),

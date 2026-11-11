@@ -164,6 +164,10 @@ export class LinearAgent implements AgentModule {
   }
 
   async startup(): Promise<void> {
+    if (process.env.LINEAR_START_MODE?.trim())
+      console.warn(
+        "[linear] LINEAR_START_MODE is ignored; set the assignment start on each app in Settings",
+      );
     for (const app of linearApps()) {
       await loadActiveSessionsOnStartup(await this.appTokens(app.id), app.id);
     }

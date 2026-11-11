@@ -38,9 +38,16 @@ describe("Linear app settings", () => {
       callbackUrl: "https://example.test/callback",
       webhookUrl: "https://example.test/webhook",
       automationEventKey: "linear:agent_session:primary",
+      startMode: null,
       automation: null,
     };
     expect(linearAppSchema.parse(app).automation).toBeNull();
+    expect(linearAppSchema.parse({ ...app, startMode: "plan" }).startMode).toBe(
+      "plan",
+    );
+    expect(
+      linearAppSchema.safeParse({ ...app, startMode: "launch" }).success,
+    ).toBe(false);
     expect(
       linearAppSchema.parse({
         ...app,

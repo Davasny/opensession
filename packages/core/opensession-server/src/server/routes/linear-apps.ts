@@ -77,6 +77,7 @@ function summary(app: LinearApp, automation: Automation | undefined) {
     callbackUrl: linearRedirectUri(),
     webhookUrl: `${base}${linearWebhookPath(app.id)}`,
     automationEventKey: `linear:agent_session:${app.id}`,
+    startMode: app.startMode ?? null,
     automation: automation
       ? {
           id: automation.id,
@@ -154,15 +155,27 @@ export async function handleLinearAppsRoutes(
   if (
     !record(body) ||
     Object.keys(body).some(
-      (key) => !FIELDS.includes(key) && key !== "automation",
+      (key) =>
+        !FIELDS.includes(key) && key !== "automation" && key !== "startMode",
     ) ||
     FIELDS.some((key) => key in body && typeof body[key] !== "string")
   )
     return Response.json(
       {
         error:
-          "Use name, oauthClientId, oauthClientSecret, webhookSecret, and automation fields",
+          "Use name, oauthClientId, oauthClientSecret, webhookSecret, startMode, and automation fields",
       },
+      { status: 400 },
+    );
+  if (
+    "startMode" in body &&
+    body.startMode !== null &&
+    body.startMode !== "ask" &&
+    body.startMode !== "plan" &&
+    body.startMode !== "implement"
+  )
+    return Response.json(
+      { error: "Invalid assignment start mode" },
       { status: 400 },
     );
   const automationPatch: AutomationPatch = {};
@@ -386,6 +399,15 @@ export async function handleLinearAppsRoutes(
           )
             continue;
           target[field] = value.trim();
+        }
+        if ("startMode" in body) {
+          if (
+            body.startMode === "ask" ||
+            body.startMode === "plan" ||
+            body.startMode === "implement"
+          )
+            target.startMode = body.startMode;
+          else delete target.startMode;
         }
         if (creating) apps.push(target);
       }

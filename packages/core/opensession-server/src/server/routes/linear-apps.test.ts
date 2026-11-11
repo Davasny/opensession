@@ -297,6 +297,57 @@ test("creates an app with a scoped scratch automation, updates it, then removes 
   expect(raw.integrations.linear.oauthClientSecret).toBe("primary-secret");
 });
 
+test("each app stores and reports its own assignment start mode", async () => {
+  const created = await handleLinearAppsRoutes(
+    context(path, "POST", {
+      name: "Planner",
+      oauthClientId: "planner-client",
+      oauthClientSecret: "planner-secret",
+      webhookSecret: "planner-webhook",
+      startMode: "plan",
+    }),
+  );
+  expect(created?.status).toBe(201);
+  const { app } = await created!.json();
+  expect(app.startMode).toBe("plan");
+  expect(linearAppById(app.id)?.startMode).toBe("plan");
+
+  const listed = await handleLinearAppsRoutes(context(path));
+  const listedApp = (await listed!.json()).apps.find(
+    (entry: { id: string }) => entry.id === app.id,
+  );
+  expect(listedApp.startMode).toBe("plan");
+
+  const updated = await handleLinearAppsRoutes(
+    context(`${path}/${app.id}`, "PUT", { startMode: "implement" }),
+  );
+  expect((await updated!.json()).app.startMode).toBe("implement");
+  expect(linearAppById(app.id)?.startMode).toBe("implement");
+  expect(
+    (
+      await handleLinearAppsRoutes(
+        context(`${path}/${app.id}`, "PUT", { startMode: "launch" }),
+      )
+    )?.status,
+  ).toBe(400);
+
+  const primary = await handleLinearAppsRoutes(
+    context(`${path}/primary`, "PUT", { startMode: "plan" }),
+  );
+  expect((await primary!.json()).app.startMode).toBe("plan");
+  expect(linearAppById("primary")?.startMode).toBe("plan");
+
+  const cleared = await handleLinearAppsRoutes(
+    context(`${path}/${app.id}`, "PUT", { startMode: null }),
+  );
+  expect((await cleared!.json()).app.startMode).toBeNull();
+  expect(linearAppById(app.id)?.startMode).toBeUndefined();
+  await handleLinearAppsRoutes(
+    context(`${path}/primary`, "PUT", { startMode: null }),
+  );
+  await handleLinearAppsRoutes(context(`${path}/${app.id}`, "DELETE"));
+});
+
 test("agent settings choose all connectors or the built-in Linear connector", async () => {
   const created = await handleLinearAppsRoutes(
     context(path, "POST", {

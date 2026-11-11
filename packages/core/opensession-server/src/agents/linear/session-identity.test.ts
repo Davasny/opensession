@@ -22,6 +22,7 @@ import {
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Automation } from "../../server/automations";
+import { getConfigAsync } from "../../server/config";
 import * as agentConfig from "./agent-config";
 
 const worktreeRoot = "/synthetic-worktrees";
@@ -370,6 +371,18 @@ function writeStored(key: string, value: Record<string, unknown>) {
   writeFileSync(storedPath(key), JSON.stringify(value));
 }
 
+/** Each app owns its assignment mode; write the primary app's value directly
+ *  instead of relying on a process-wide environment override. */
+async function setPrimaryStartMode(
+  mode: "ask" | "plan" | "implement",
+): Promise<void> {
+  writeFileSync(
+    process.env.OPENSESSION_CONFIG!,
+    JSON.stringify({ integrations: { linear: { startMode: mode } } }),
+  );
+  await getConfigAsync();
+}
+
 async function awaitReady(id: string) {
   const session = activeSessions.get(id);
   if (session?.ready) await session.ready;
@@ -393,7 +406,7 @@ async function waitForAssignmentSettled(id: string) {
   }, "assignment settlement");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   prRepo = { ghRepo: "acme/linear-repo", host: "github" };
   headBranch = "fix-the-eng1";
   ghResponses = [];
@@ -416,7 +429,7 @@ beforeEach(() => {
   prBodyUpdates.length = 0;
   movedStatuses.length = 0;
   runResult = "";
-  delete process.env.LINEAR_START_MODE;
+  await setPrimaryStartMode("ask");
   createGate = null;
   runGate = null;
   apiGate = null;
@@ -440,7 +453,6 @@ afterEach(() => {
   activeSessions.clear();
   processedSessions.clear();
   (globalThis as any).__linearEndedAgentSessions?.clear();
-  delete process.env.LINEAR_START_MODE;
 });
 
 // Module mocks are process-wide in Bun's test runner: leaving them installed
@@ -1352,7 +1364,7 @@ test("an end during deferred initial API setup leaves no worktree behind", async
 });
 
 test("stop during deferred initial API setup prevents later autostart", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "12121212-1212-4212-8212-121212121212";
   let release!: () => void;
   let reached!: () => void;
@@ -1502,7 +1514,7 @@ test("ask mode keeps the greeting and starts no assignment run", async () => {
 });
 
 test("plan mode starts planning, skips the greeting and keeps the Ready gate", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   runResult = "Plan body PLANNING_COMPLETE";
   const id = "05050505-0505-4505-8505-050505050505";
 
@@ -1533,7 +1545,7 @@ test("plan mode starts planning, skips the greeting and keeps the Ready gate", a
 });
 
 test("implement mode is explicit opt-in, moves In Progress and skips the greeting", async () => {
-  process.env.LINEAR_START_MODE = "implement";
+  await setPrimaryStartMode("implement");
   const id = "06060606-0606-4606-8606-060606060606";
 
   await handleAgentSession(webhook("created", id), {});
@@ -1562,7 +1574,7 @@ test("implement mode is explicit opt-in, moves In Progress and skips the greetin
 });
 
 test("a completed assignment is not launched again after restart", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "07070707-0707-4707-8707-070707070707";
   await handleAgentSession(webhook("created", id), {});
   await awaitReady(id);
@@ -1583,7 +1595,7 @@ test("a completed assignment is not launched again after restart", async () => {
 });
 
 test("stop during setup prevents the assignment run", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "08080808-0808-4808-8808-080808080808";
   let release!: () => void;
   createGate = new Promise<void>((resolve) => {
@@ -1605,7 +1617,7 @@ test("stop during setup prevents the assignment run", async () => {
 });
 
 test("concurrent duplicate created during an assignment run starts only one turn", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a";
   let release!: () => void;
   runGate = new Promise<void>((resolve) => {
@@ -1628,7 +1640,7 @@ test("concurrent duplicate created during an assignment run starts only one turn
 });
 
 test("a setup failure retry starts the assignment once after setup succeeds", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   workspaceFailures = 1;
   const id = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b";
 
@@ -1650,7 +1662,7 @@ test("a setup failure retry starts the assignment once after setup succeeds", as
 });
 
 test("a completed plan waits for approval before implementation", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   runResult = "Plan body PLANNING_COMPLETE";
   const id = "0d0d0d0d-0d0d-4d0d-8d0d-0d0d0d0d0d0d";
   await handleAgentSession(webhook("created", id), {});
@@ -1669,7 +1681,7 @@ test("a completed plan waits for approval before implementation", async () => {
 });
 
 test("a replay ACKs after dispatch without waiting for the model turn", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "11111111-2222-4333-8444-555555555555";
   const key = linearSessionFileKey(id);
   writeStored(key, {
@@ -1707,7 +1719,7 @@ test("a replay ACKs after dispatch without waiting for the model turn", async ()
 });
 
 test("an uncertain assignment claim reports needs-retry without running", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c";
   const key = linearSessionFileKey(id);
   writeStored(key, {
@@ -1749,7 +1761,7 @@ test("an uncertain assignment claim reports needs-retry without running", async 
 });
 
 test("assignment status and thought side effects wait for the claimed guard", async () => {
-  process.env.LINEAR_START_MODE = "implement";
+  await setPrimaryStartMode("implement");
   const id = "0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e";
   let release!: () => void;
   let reached!: () => void;
@@ -1805,7 +1817,7 @@ test("assignment status and thought side effects wait for the claimed guard", as
 });
 
 test("ending during a pending claim never starts the runner or revives the file", async () => {
-  process.env.LINEAR_START_MODE = "implement";
+  await setPrimaryStartMode("implement");
   const id = "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f";
   const key = linearSessionFileKey(id);
   let release!: () => void;
@@ -1829,7 +1841,7 @@ test("ending during a pending claim never starts the runner or revives the file"
 });
 
 test("stop during a pending claim cancels the assignment without a runner", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "10101010-1010-4010-8010-101010101010";
   const key = linearSessionFileKey(id);
   let release!: () => void;
@@ -1860,7 +1872,7 @@ test("stop during a pending claim cancels the assignment without a runner", asyn
 });
 
 test("stop after the runner returns cancels instead of completing the assignment", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "13131313-1313-4313-8313-131313131313";
   let release!: () => void;
   runGate = new Promise<void>((resolve) => {
@@ -1888,7 +1900,7 @@ test("stop after the runner returns cancels instead of completing the assignment
 });
 
 test("an assignment error is not silently retried", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   runResult = "Error: synthetic failure";
   const id = "09090909-0909-4909-8909-090909090909";
   await handleAgentSession(webhook("created", id), {});
@@ -1907,7 +1919,7 @@ test("an assignment error is not silently retried", async () => {
 });
 
 test("ending during a slow worktree create removes the checkout and skips the greeting", async () => {
-  process.env.LINEAR_START_MODE = "plan";
+  await setPrimaryStartMode("plan");
   const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   let release!: () => void;
   createGate = new Promise<void>((resolve) => {
