@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parseMcpEnvironment, parseMcpHeaders } from "./mcp-form";
+import {
+  parseMcpEnvironment,
+  parseMcpHeaderRows,
+  type McpHeaderRow,
+} from "./mcp-form";
 
 describe("parseMcpEnvironment", () => {
   test("parses values after the first separator", () => {
@@ -19,19 +23,34 @@ describe("parseMcpEnvironment", () => {
   });
 });
 
-describe("parseMcpHeaders", () => {
-  test("parses header values after the first separator", () => {
+describe("parseMcpHeaderRows", () => {
+  const row = (name: string, value: string): McpHeaderRow => ({ name, value });
+
+  test("builds headers from named rows and skips blank rows", () => {
     expect(
-      parseMcpHeaders("Authorization=Bearer abc123\nX-API-Key=key=with=equals"),
+      parseMcpHeaderRows([
+        row(" Authorization ", " Bearer abc123 "),
+        row("", ""),
+        row("X-API-Key", "key=with=equals"),
+      ]),
     ).toEqual({
       Authorization: "Bearer abc123",
       "X-API-Key": "key=with=equals",
     });
   });
 
-  test("rejects malformed header lines", () => {
-    expect(() => parseMcpHeaders("Authorization")).toThrow(
-      'Header line "Authorization" must be NAME=VALUE',
+  test("rejects partial and duplicate rows", () => {
+    expect(() => parseMcpHeaderRows([row("Authorization", "")])).toThrow(
+      'Header "Authorization" needs a value',
     );
+    expect(() => parseMcpHeaderRows([row("", "Bearer abc123")])).toThrow(
+      "Header name is required",
+    );
+    expect(() =>
+      parseMcpHeaderRows([
+        row("Authorization", "Bearer one"),
+        row("authorization", "Bearer two"),
+      ]),
+    ).toThrow('Duplicate header "authorization"');
   });
 });

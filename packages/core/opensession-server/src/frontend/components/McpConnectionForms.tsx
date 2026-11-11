@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import { displayName } from "../brand-logos";
 import { request } from "../lib/api/request";
 import { errorMessage } from "../lib/error-message";
-import { parseMcpEnvironment, parseMcpHeaders } from "../lib/mcp-form";
+import {
+  parseMcpEnvironment,
+  parseMcpHeaderRows,
+  type McpHeaderRow,
+} from "../lib/mcp-form";
 import { TOKEN_CONNECT_URLS, type McpConnection } from "../lib/mcp-connections";
 import { Button } from "../ui/button";
 import { cn } from "../ui/cn";
@@ -10,6 +14,7 @@ import { Modal } from "../ui/modal";
 import { OptionSelect } from "../ui/select";
 import { Segmented, SegmentedOption } from "../ui/segmented";
 import { InlineAlert } from "../ui/state";
+import { IconPlus, IconX } from "./icons";
 import {
   SettingsField,
   SettingsForm,
@@ -152,17 +157,31 @@ export function AddMcpForm({
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
   const [env, setEnv] = useState("");
-  const [headers, setHeaders] = useState("");
+  const [headerRows, setHeaderRows] = useState<McpHeaderRow[]>([
+    { name: "", value: "" },
+  ]);
   const [allowedUsers, setAllowedUsers] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function updateHeaderRow(
+    index: number,
+    field: "name" | "value",
+    value: string,
+  ) {
+    setHeaderRows((rows) =>
+      rows.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [field]: value } : row,
+      ),
+    );
+  }
 
   async function handleAdd() {
     setSaving(true);
     setError(null);
     try {
       const envValues = parseMcpEnvironment(env);
-      const headerValues = parseMcpHeaders(headers);
+      const headerValues = parseMcpHeaderRows(headerRows);
       const allowed = allowedUsers
         .split(",")
         .map((user) => user.trim())
@@ -235,16 +254,74 @@ export function AddMcpForm({
               placeholder="https://api.example.com/mcp"
             />
           </SettingsField>
-          <SettingsField>
-            Headers (NAME=VALUE, one per line, stored in mcp-config.json)
-            <textarea
-              className={cn(settingsInputClass, "resize-y font-mono")}
-              value={headers}
-              onChange={(e) => setHeaders(e.target.value)}
-              rows={2}
-              placeholder={"Authorization=Bearer <api-key>"}
-            />
-          </SettingsField>
+          <div className="mb-3 flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-label font-medium text-dim">Headers</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<IconPlus size={14} />}
+                className="phone:min-h-11"
+                onClick={() =>
+                  setHeaderRows((rows) => [...rows, { name: "", value: "" }])
+                }
+              >
+                Add header
+              </Button>
+            </div>
+            <div className="text-meta text-faint">
+              Sent with every request. Stored in mcp-config.json.
+            </div>
+            <div className="flex flex-col gap-3 phone:gap-4">
+              {headerRows.map((row, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-2 phone:grid-cols-[minmax(0,1fr)_auto]"
+                >
+                  <input
+                    className={cn(
+                      settingsInputClass,
+                      "min-w-0 font-mono phone:min-h-11 phone:text-input-phone",
+                    )}
+                    value={row.name}
+                    onChange={(e) =>
+                      updateHeaderRow(index, "name", e.target.value)
+                    }
+                    placeholder="Authorization"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={`Header ${index + 1} name`}
+                  />
+                  <input
+                    className={cn(
+                      settingsInputClass,
+                      "min-w-0 font-mono phone:col-span-2 phone:row-start-2 phone:min-h-11 phone:text-input-phone",
+                    )}
+                    value={row.value}
+                    onChange={(e) =>
+                      updateHeaderRow(index, "value", e.target.value)
+                    }
+                    placeholder="Bearer <api-key>"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={`Header ${index + 1} value`}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<IconX size={16} />}
+                    className="shrink-0 phone:col-start-2 phone:row-start-1 phone:size-11"
+                    onClick={() =>
+                      setHeaderRows((rows) =>
+                        rows.filter((_, rowIndex) => rowIndex !== index),
+                      )
+                    }
+                    aria-label={`Remove header ${index + 1}`}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
         </>
       ) : (
         <>
