@@ -998,70 +998,74 @@ export function ModelEffortSelect({
             <Menu.Separator className="my-1" />
           </>
         )}
-        <Menu.SubmenuRoot>
-          <Menu.SubmenuTrigger className="justify-between gap-3">
-            <span className="min-w-0 truncate">Model</span>
-            <span className="flex min-w-0 flex-none items-center gap-1 text-dim">
-              <span className="truncate">{modelLabel}</span>
-              <IconChevronRight className="shrink-0" size={17} />
-            </span>
-          </Menu.SubmenuTrigger>
-          <Menu.Popup className="max-w-[min(360px,calc(100vw-1rem))]">
-            {reuploadHint && <MenuHint>{reuploadHint}</MenuHint>}
-            {groupedPrimary
-              ? providerGroups.map((g, i) => (
-                  <React.Fragment key={g.provider}>
-                    {i > 0 && <Menu.Separator className="my-1" />}
-                    <Menu.Group>
-                      <Menu.GroupLabel>{g.label}</Menu.GroupLabel>
-                      {g.options.map((option) => renderModelOption(option))}
-                    </Menu.Group>
-                  </React.Fragment>
-                ))
-              : primaryOptions.map((option) => renderModelOption(option))}
-            {otherOptions.length > 0 && (
-              <Menu.SubmenuRoot>
-                <Menu.SubmenuTrigger
-                  className={cn(
-                    "justify-between gap-3",
-                    primaryFirst && "text-dim",
-                  )}
-                >
-                  <span className="min-w-0 truncate">
-                    {primaryFirst ? LEGACY_GROUP_LABEL : "Other models"}
-                  </span>
-                  <span className="flex flex-none items-center gap-1 text-dim">
-                    {selectedLegacyLabel && (
-                      <span className="text-faint">{selectedLegacyLabel}</span>
+        {(primaryOptions.length > 0 || otherOptions.length > 0) && (
+          <Menu.SubmenuRoot>
+            <Menu.SubmenuTrigger className="justify-between gap-3">
+              <span className="min-w-0 truncate">Model</span>
+              <span className="flex min-w-0 flex-none items-center gap-1 text-dim">
+                <span className="truncate">{modelLabel}</span>
+                <IconChevronRight className="shrink-0" size={17} />
+              </span>
+            </Menu.SubmenuTrigger>
+            <Menu.Popup className="max-w-[min(360px,calc(100vw-1rem))]">
+              {reuploadHint && <MenuHint>{reuploadHint}</MenuHint>}
+              {groupedPrimary
+                ? providerGroups.map((g, i) => (
+                    <React.Fragment key={g.provider}>
+                      {i > 0 && <Menu.Separator className="my-1" />}
+                      <Menu.Group>
+                        <Menu.GroupLabel>{g.label}</Menu.GroupLabel>
+                        {g.options.map((option) => renderModelOption(option))}
+                      </Menu.Group>
+                    </React.Fragment>
+                  ))
+                : primaryOptions.map((option) => renderModelOption(option))}
+              {otherOptions.length > 0 && (
+                <Menu.SubmenuRoot>
+                  <Menu.SubmenuTrigger
+                    className={cn(
+                      "justify-between gap-3",
+                      primaryFirst && "text-dim",
                     )}
-                    <IconChevronRight className="shrink-0" size={17} />
-                  </span>
-                </Menu.SubmenuTrigger>
-                <Menu.Popup className="max-w-[min(360px,calc(100vw-1rem))]">
-                  {!primaryFirst && otherGroups.length > 1
-                    ? otherGroups.map((g, i) => (
-                        <React.Fragment key={g.engine}>
-                          {i > 0 && <Menu.Separator className="my-1" />}
-                          <Menu.Group>
-                            <Menu.GroupLabel>{g.label}</Menu.GroupLabel>
-                            {g.options.map((option) =>
-                              renderModelOption(option),
-                            )}
-                          </Menu.Group>
-                        </React.Fragment>
-                      ))
-                    : otherOptions.map((option) => renderModelOption(option))}
-                </Menu.Popup>
-              </Menu.SubmenuRoot>
-            )}
-            {hiddenOnEngine > 0 && (
-              <MenuHint>
-                {hiddenOnEngine} {hiddenOnEngine === 1 ? "model" : "models"} not
-                available here
-              </MenuHint>
-            )}
-          </Menu.Popup>
-        </Menu.SubmenuRoot>
+                  >
+                    <span className="min-w-0 truncate">
+                      {primaryFirst ? LEGACY_GROUP_LABEL : "Other models"}
+                    </span>
+                    <span className="flex flex-none items-center gap-1 text-dim">
+                      {selectedLegacyLabel && (
+                        <span className="text-faint">
+                          {selectedLegacyLabel}
+                        </span>
+                      )}
+                      <IconChevronRight className="shrink-0" size={17} />
+                    </span>
+                  </Menu.SubmenuTrigger>
+                  <Menu.Popup className="max-w-[min(360px,calc(100vw-1rem))]">
+                    {!primaryFirst && otherGroups.length > 1
+                      ? otherGroups.map((g, i) => (
+                          <React.Fragment key={g.engine}>
+                            {i > 0 && <Menu.Separator className="my-1" />}
+                            <Menu.Group>
+                              <Menu.GroupLabel>{g.label}</Menu.GroupLabel>
+                              {g.options.map((option) =>
+                                renderModelOption(option),
+                              )}
+                            </Menu.Group>
+                          </React.Fragment>
+                        ))
+                      : otherOptions.map((option) => renderModelOption(option))}
+                  </Menu.Popup>
+                </Menu.SubmenuRoot>
+              )}
+              {hiddenOnEngine > 0 && (
+                <MenuHint>
+                  {hiddenOnEngine} {hiddenOnEngine === 1 ? "model" : "models"}{" "}
+                  not available here
+                </MenuHint>
+              )}
+            </Menu.Popup>
+          </Menu.SubmenuRoot>
+        )}
         {hasEffort && (
           <Menu.SubmenuRoot>
             <Menu.SubmenuTrigger className="justify-between gap-3">

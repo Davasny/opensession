@@ -131,6 +131,19 @@ export function LinearAppAutomation({
       ? [{ value: repo, label: `${repo} · not registered` }]
       : []),
   ];
+  // Keep the saved model and the instance default selectable even when the
+  // catalog is empty (a fresh instance with no provider configured yet).
+  const pickerModels = [...models];
+  for (const id of [defaultModel, model]) {
+    if (id && !pickerModels.some((item) => item.id === id))
+      pickerModels.push({
+        id,
+        provider: "pi",
+        label: id,
+        aliases: [],
+        efforts: [],
+      });
+  }
   return (
     <form
       className="flex min-w-0 flex-col gap-4"
@@ -203,19 +216,7 @@ export function LinearAppAutomation({
           <span className="text-label text-fg">Model</span>
           <ModelEffortSelect
             selection={{
-              models:
-                model && !models.some((item) => item.id === model)
-                  ? [
-                      ...models,
-                      {
-                        id: model,
-                        provider: "pi",
-                        label: model,
-                        aliases: [],
-                        efforts: [],
-                      },
-                    ]
-                  : models,
+              models: pickerModels,
               defaultModel,
               model,
               effort,
