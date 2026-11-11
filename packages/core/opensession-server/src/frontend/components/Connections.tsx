@@ -33,9 +33,9 @@ import {
 import {
   IconArrowUpRight,
   IconDotsHorizontal,
+  IconPencil,
   IconPlug,
   IconTrash,
-  IconSliders,
   IconHistory,
   IconPlus,
 } from "./icons";
@@ -48,7 +48,11 @@ import { GithubPrivateKeyField } from "./GithubPrivateKeyField";
 import { request } from "../lib/api/request";
 import { errorMessage } from "../lib/error-message";
 import type { McpConnection } from "../lib/mcp-connections";
-import { AddMcpForm, ConnectTokenDialog } from "./McpConnectionForms";
+import {
+  AddMcpForm,
+  ConnectTokenDialog,
+  EditMcpDialog,
+} from "./McpConnectionForms";
 
 interface ConnectionsData {
   mcpServers: McpConnection[];
@@ -147,6 +151,7 @@ export function Connections() {
   const [showAdd, setShowAdd] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [tokenConnect, setTokenConnect] = useState<McpConnection | null>(null);
+  const [editServer, setEditServer] = useState<McpConnection | null>(null);
 
   const load = useCallback(async (force = false) => {
     if (force) setRefreshing(true);
@@ -262,30 +267,6 @@ export function Connections() {
       void load(true);
     } catch (cause) {
       setRemoveError(errorMessage(cause, `Could not remove ${name}`));
-    }
-  }
-
-  async function handleRestrict(server: McpConnection) {
-    const current = (server.allowedUsers || []).join(", ");
-    const answer = prompt(
-      `Restrict "${server.name}" to these people (comma-separated configured names, e.g. "Alice, Bob").\n` +
-        "Leave blank to make it available to everyone.",
-      current,
-    );
-    if (answer === null) return;
-    const allowedUsers = answer
-      .split(",")
-      .map((user) => user.trim())
-      .filter(Boolean);
-    try {
-      await request(`/connections/mcp/${encodeURIComponent(server.name)}`, {
-        method: "PUT",
-        body: { allowedUsers },
-        label: `Could not update ${server.name}`,
-      });
-      void load(true);
-    } catch (cause) {
-      setRemoveError(errorMessage(cause, `Could not update ${server.name}`));
     }
   }
 
@@ -413,7 +394,7 @@ export function Connections() {
                     <Menu.Trigger
                       className={cn(
                         rowMenuTriggerClasses,
-                        "opacity-0 transition-[color,opacity,background] group-hover:opacity-100 data-[popup-open]:opacity-100",
+                        "opacity-0 transition-[color,opacity,background] group-hover:opacity-100 data-[popup-open]:opacity-100 phone:opacity-100",
                       )}
                       aria-label={`Manage ${s.name}`}
                     >
@@ -461,9 +442,9 @@ export function Connections() {
                           <Menu.Separator />
                         </>
                       )}
-                      <Menu.Item onClick={() => handleRestrict(s)}>
-                        <IconSliders size={16} className="text-faint" />
-                        {restricted ? "Edit access" : "Restrict access"}
+                      <Menu.Item onClick={() => setEditServer(s)}>
+                        <IconPencil size={16} className="text-faint" />
+                        Edit details
                       </Menu.Item>
                       <Menu.Item
                         onClick={() => handleRemove(s.name)}
@@ -490,6 +471,17 @@ export function Connections() {
           if (data?.mcpServers) void loadOauth(data.mcpServers);
         }}
       />
+      {editServer && (
+        <EditMcpDialog
+          key={editServer.name}
+          server={editServer}
+          onClose={() => setEditServer(null)}
+          onSaved={() => {
+            setEditServer(null);
+            void load(true);
+          }}
+        />
+      )}
     </SettingsPanel>
   );
 }

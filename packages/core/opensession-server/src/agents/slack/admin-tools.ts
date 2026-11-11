@@ -32,7 +32,7 @@ import {
   readMcpConfig,
   addMcpServer,
   removeMcpServer,
-  setMcpAllowedUsers,
+  updateMcpServer,
 } from "../../server/connections";
 import { listAutomationLinearConnections } from "../../server/automation-linear-connection";
 import { linearApps } from "../../server/linear-app-registry";
@@ -821,7 +821,9 @@ export function createAdminMcpServer(ctx: AdminToolContext) {
             ),
         },
         async (args: { name: string; allowedUsers?: string[] }) => {
-          const res = await setMcpAllowedUsers(args.name, args.allowedUsers);
+          const res = await updateMcpServer(args.name, {
+            allowedUsers: args.allowedUsers ?? [],
+          });
           if ("error" in res) return text(`Couldn't update it: ${res.error}`);
           return text(
             res.allowedUsers?.length

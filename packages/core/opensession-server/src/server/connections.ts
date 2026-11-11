@@ -453,28 +453,204 @@ export async function addMcpServerEntry(
   return { ok: true };
 }
 
+/** One editor row for a stored name/value map (headers, env). `value: null`
+ *  means keep the stored value: the API never sends credentials back, so an
+ *  untouched row has nothing new to write. */
+export interface McpValueUpdate {
+  name: string;
+  value: string | null;
+}
+
+export interface UpdateMcpInput {
+  /** Present only so a stale editor is refused instead of silently rewriting
+   *  the server as the other transport. */
+  transport?: "http" | "stdio";
+  /** A replacement URL. A stored query string survives unless the new URL
+   *  carries its own. */
+  url?: string;
+  command?: string;
+  args?: string[];
+  headers?: McpValueUpdate[];
+  env?: McpValueUpdate[];
+  /** Full allowlist; an empty/omitted list clears the restriction. */
+  allowedUsers?: string[];
+}
+
+function isHttpServer(cfg: any): boolean {
+  return cfg?.type === "http" || cfg?.type === "sse" || !!cfg?.url;
+}
+
+function storedStringValues(entry: any, key: "headers" | "env") {
+  const source = entry?.[key];
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  return Object.fromEntries(
+    Object.entries(source).filter(([, value]) => typeof value === "string"),
+  ) as Record<string, string>;
+}
+
+/** Merge the editor's rows into a stored map, keeping values the editor never
+ *  saw. `caseInsensitive` is right for HTTP headers and wrong for env keys. */
+function mergeMcpValues(
+  rows: McpValueUpdate[],
+  stored: Record<string, string>,
+  label: "Header" | "Env variable",
+  opts: { caseInsensitive?: boolean; blankNewValue?: boolean } = {},
+): { values: Record<string, string> } | { error: string } {
+  const match = (name: string) =>
+    opts.caseInsensitive ? name.toLowerCase() : name;
+  if (!Array.isArray(rows)) {
+    return { error: `${label} rows must be a name/value list` };
+  }
+  const saved = new Map(
+    Object.entries(stored).map(([name, value]) => [match(name), value]),
+  );
+  const values: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (!row || typeof row !== "object")
+      return { error: `${label} rows must have a name and value` };
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    const value = typeof row.value === "string" ? row.value.trim() : "";
+    if (!name) {
+      if (value) return { error: `${label} name is required` };
+      continue;
+    }
+    const key = match(name);
+    if (seen.has(key)) {
+      return { error: `Duplicate ${label.toLowerCase()} "${name}"` };
+    }
+    seen.add(key);
+    if (!value) {
+      const kept = saved.get(key);
+      if (kept !== undefined) {
+        values[name] = kept;
+        continue;
+      }
+      if (opts.blankNewValue) {
+        values[name] = "";
+        continue;
+      }
+      return { error: `${label} "${name}" needs a value` };
+    }
+    values[name] = value;
+  }
+  return { values };
+}
+
 /**
- * Set (or clear, with an empty/undefined list) the per-user allowlist on an
- * existing MCP server. Lets you restrict a server after it's been added — e.g.
- * lock a sensitive server down to specific teammates — without re-entering its secrets.
+ * Edit an existing MCP server without losing what the editor cannot see:
+ * credential values, a URL's query string, and keys this form does not own
+ * (a plugin's `oauthUrl`, comments, …). Only fields present in `input` change.
  */
-export async function setMcpAllowedUsers(
+export async function updateMcpServer(
   name: string,
-  allowedUsers?: string[],
-): Promise<{ ok: true; allowedUsers?: string[] } | { error: string }> {
+  input: UpdateMcpInput,
+): Promise<
+  { ok: true; allowedUsers?: string[] } | { error: string; notFound?: boolean }
+> {
   const config = readMcpConfig();
   const entry = config.mcpServers[name];
-  if (!entry) return { error: `Server "${name}" not found` };
-  const cleaned = cleanAllowedUsers(allowedUsers);
-  if (requiresAllowedUsers(name) && !cleaned) {
+  if (!entry) return { error: `Server "${name}" not found`, notFound: true };
+  const http = isHttpServer(entry);
+  if (input.transport && input.transport !== (http ? "http" : "stdio")) {
     return {
-      error: 'Server "apple-release" requires at least one allowed user',
+      error: "Transport can't be changed. Remove the server and add it again.",
     };
   }
-  if (cleaned) entry.allowedUsers = cleaned;
-  else delete entry.allowedUsers;
+
+  // Copy first: a rejected field must not leave the cached config mutated.
+  const next: Record<string, any> = { ...entry };
+
+  if (http) {
+    if (input.env !== undefined) {
+      return { error: "Environment is only supported for stdio servers" };
+    }
+    if (input.command !== undefined || input.args !== undefined) {
+      return { error: "Command is only supported for stdio servers" };
+    }
+    if (input.url !== undefined) {
+      let value = typeof input.url === "string" ? input.url.trim() : "";
+      let parsed: URL;
+      try {
+        parsed = new URL(value);
+      } catch {
+        return { error: "Invalid URL" };
+      }
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        return { error: "URL must be http(s)" };
+      }
+      // The form only ever sees the URL without its query string, so a
+      // replacement that omits one inherits the stored query rather than
+      // silently dropping the token it carries.
+      const previous = typeof entry.url === "string" ? entry.url : "";
+      const queryAt = previous.indexOf("?");
+      if (!value.includes("?") && queryAt !== -1) {
+        value += previous.slice(queryAt);
+      }
+      next.url = value;
+    }
+    if (input.headers !== undefined) {
+      const merged = mergeMcpValues(
+        input.headers,
+        storedStringValues(entry, "headers"),
+        "Header",
+        { caseInsensitive: true },
+      );
+      if ("error" in merged) return merged;
+      const cleaned = cleanMcpHeaders(merged.values);
+      if ("error" in cleaned) return cleaned;
+      if (cleaned.headers) next.headers = cleaned.headers;
+      else delete next.headers;
+    }
+  } else {
+    if (input.url !== undefined || input.headers !== undefined) {
+      return { error: "URL and headers are only supported for HTTP servers" };
+    }
+    if (input.command !== undefined) {
+      const command =
+        typeof input.command === "string" ? input.command.trim() : "";
+      if (!command) return { error: "Command is required for stdio servers" };
+      next.command = command;
+    }
+    if (input.args !== undefined) {
+      const args = (Array.isArray(input.args) ? input.args : [])
+        .map((arg) => String(arg).trim())
+        .filter(Boolean);
+      if (args.length > 0) next.args = args;
+      else delete next.args;
+    }
+    if (input.env !== undefined) {
+      const merged = mergeMcpValues(
+        input.env,
+        storedStringValues(entry, "env"),
+        "Env variable",
+        {
+          blankNewValue: true,
+        },
+      );
+      if ("error" in merged) return merged;
+      if (Object.keys(merged.values).length > 0) next.env = merged.values;
+      else delete next.env;
+    }
+  }
+
+  if (input.allowedUsers !== undefined) {
+    const allowedUsers = cleanAllowedUsers(input.allowedUsers);
+    if (requiresAllowedUsers(name) && !allowedUsers) {
+      return {
+        error: 'Server "apple-release" requires at least one allowed user',
+      };
+    }
+    if (allowedUsers) next.allowedUsers = allowedUsers;
+    else delete next.allowedUsers;
+    config.mcpServers[name] = next;
+    await writeMcpConfig(config);
+    return { ok: true, allowedUsers };
+  }
+
+  config.mcpServers[name] = next;
   await writeMcpConfig(config);
-  return { ok: true, allowedUsers: cleaned };
+  return { ok: true };
 }
 
 export async function replaceMcpServerEntries(
@@ -515,6 +691,15 @@ export interface McpConnection {
   name: string;
   transport: "http" | "stdio";
   target: string; // sanitized: origin+path for http, command for stdio
+  /** stdio: the executable and args the edit form prefills. */
+  command?: string;
+  args?: string[];
+  /** http: the stored URL without its query string, which may carry a token. */
+  url?: string;
+  /** http: a query string is stored and survives an edit that omits one. */
+  urlHasQuery?: boolean;
+  /** http: configured header names. Values are never exposed. */
+  headerNames?: string[];
   envKeys: string[];
   status:
     | "connected"
@@ -540,6 +725,27 @@ export async function getConnections(force = false): Promise<McpConnection[]> {
       const conn = await checkServer(name, cfg);
       const allowedUsers = cleanAllowedUsers(cfg?.allowedUsers);
       if (allowedUsers) conn.allowedUsers = allowedUsers;
+      if (isHttpServer(cfg)) {
+        const url = typeof cfg?.url === "string" ? cfg.url : "";
+        const queryAt = url.indexOf("?");
+        if (url) conn.url = queryAt === -1 ? url : url.slice(0, queryAt);
+        if (queryAt !== -1) conn.urlHasQuery = true;
+        const headerNames =
+          cfg?.headers &&
+          typeof cfg.headers === "object" &&
+          !Array.isArray(cfg.headers)
+            ? Object.keys(cfg.headers)
+            : [];
+        if (headerNames.length > 0) conn.headerNames = headerNames;
+      } else {
+        if (typeof cfg?.command === "string") conn.command = cfg.command;
+        if (Array.isArray(cfg?.args)) {
+          const args = cfg.args.filter(
+            (arg: unknown): arg is string => typeof arg === "string",
+          );
+          if (args.length > 0) conn.args = args;
+        }
+      }
       return conn;
     }),
   );
@@ -549,7 +755,7 @@ export async function getConnections(force = false): Promise<McpConnection[]> {
 }
 
 async function checkServer(name: string, cfg: any): Promise<McpConnection> {
-  const isHttp = cfg.type === "http" || cfg.type === "sse" || !!cfg.url;
+  const isHttp = isHttpServer(cfg);
 
   if (isHttp) {
     let target = cfg.url || "";

@@ -1,7 +1,18 @@
+import type { McpValueUpdate } from "./mcp-form";
+
 export interface McpConnection {
   name: string;
   transport: "http" | "stdio";
   target: string;
+  /** stdio: the executable and args the edit form prefills. */
+  command?: string;
+  args?: string[];
+  /** http: the stored URL without its query string, which may carry a token. */
+  url?: string;
+  /** http: a query string is stored and survives an edit that omits one. */
+  urlHasQuery?: boolean;
+  /** http: configured header names. Values are never exposed. */
+  headerNames?: string[];
   envKeys: string[];
   status:
     | "connected"
@@ -13,6 +24,17 @@ export interface McpConnection {
   detail?: string;
   /** Per-user allowlist, if this server is restricted (absent = everyone). */
   allowedUsers?: string[];
+}
+
+/** The PUT body for editing a configured server. Fields omitted are left as
+ *  they are; header/env rows with a null value keep their stored value. */
+export interface McpServerUpdateInput {
+  url?: string;
+  command?: string;
+  args?: string[];
+  headers?: McpValueUpdate[];
+  env?: McpValueUpdate[];
+  allowedUsers: string[];
 }
 
 const TOKEN_CONNECT_URL_VALUES = {

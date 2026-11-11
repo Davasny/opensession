@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   parseMcpEnvironment,
+  parseMcpEnvironmentUpdates,
   parseMcpHeaderRows,
+  parseMcpHeaderUpdates,
+  type McpEditRow,
   type McpHeaderRow,
 } from "./mcp-form";
 
@@ -52,5 +55,64 @@ describe("parseMcpHeaderRows", () => {
         row("authorization", "Bearer two"),
       ]),
     ).toThrow('Duplicate header "authorization"');
+  });
+});
+
+describe("parseMcpHeaderUpdates", () => {
+  const row = (name: string, value: string, saved?: boolean): McpEditRow => ({
+    name,
+    value,
+    saved,
+  });
+
+  test("keeps a saved value when the editor leaves it blank", () => {
+    expect(
+      parseMcpHeaderUpdates([
+        row("Authorization", "", true),
+        row("X-API-Key", " new-key "),
+        row("X-Trace", " 1 "),
+      ]),
+    ).toEqual([
+      { name: "Authorization", value: null },
+      { name: "X-API-Key", value: "new-key" },
+      { name: "X-Trace", value: "1" },
+    ]);
+  });
+
+  test("requires a value on a new row", () => {
+    expect(() => parseMcpHeaderUpdates([row("X-API-Key", "")])).toThrow(
+      'Header "X-API-Key" needs a value',
+    );
+  });
+});
+
+describe("parseMcpEnvironmentUpdates", () => {
+  const row = (name: string, value: string, saved?: boolean): McpEditRow => ({
+    name,
+    value,
+    saved,
+  });
+
+  test("keeps saved values and stores a blank new key as an empty value", () => {
+    expect(
+      parseMcpEnvironmentUpdates([
+        row("TOKEN", "", true),
+        row("NEW_KEY", ""),
+        row("ROTATED", " next "),
+      ]),
+    ).toEqual([
+      { name: "TOKEN", value: null },
+      { name: "NEW_KEY", value: "" },
+      { name: "ROTATED", value: "next" },
+    ]);
+  });
+
+  test("rejects blank names and duplicate keys", () => {
+    expect(() => parseMcpEnvironmentUpdates([row("", "value")])).toThrow(
+      "Env variable name is required",
+    );
+    expect(() =>
+      parseMcpEnvironmentUpdates([row("TOKEN", "a"), row("TOKEN", "b")]),
+    ).toThrow('Duplicate env variable "TOKEN"');
   });
 });

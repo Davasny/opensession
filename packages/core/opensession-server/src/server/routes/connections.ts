@@ -13,8 +13,8 @@ import {
   getConnections,
   readMcpConfig,
   removeMcpServer,
-  requiresAllowedUsers,
-  setMcpAllowedUsers,
+  updateMcpServer,
+  type UpdateMcpInput,
 } from "../connections";
 import { refreshPickerModels } from "../models";
 import {
@@ -248,8 +248,6 @@ export async function handleConnectionsRoutes(
   if (path === "/api/connections/mcp" && req.method === "POST") {
     const body = await req.json().catch(() => null);
     if (!body) return Response.json({ error: "Invalid JSON" }, { status: 400 });
-    if (typeof body.name === "string" && requiresAllowedUsers(body.name)) {
-    }
     const result = await addMcpServer(body);
     if ("error" in result) return Response.json(result, { status: 400 });
     return Response.json(result);
@@ -462,8 +460,6 @@ export async function handleConnectionsRoutes(
   const mcpDelMatch = path.match(/^\/api\/connections\/mcp\/([^/]+)$/);
   if (mcpDelMatch && (req.method === "DELETE" || req.method === "PUT")) {
     const name = decodeURIComponent(mcpDelMatch[1]);
-    if (requiresAllowedUsers(name)) {
-    }
 
     if (req.method === "DELETE") {
       const result = await removeMcpServer(name);
@@ -471,14 +467,20 @@ export async function handleConnectionsRoutes(
       return Response.json(result);
     }
 
-    // Restrict an existing MCP server to specific users (or clear the
-    // restriction with an empty/absent list).
+    // Edit an existing server: its target, credentials and allowlist. Values
+    // the browser never received (header/env secrets) stay as they are unless
+    // a replacement arrives.
     const body = await req.json().catch(() => null);
-    const allowedUsers = Array.isArray(body?.allowedUsers)
-      ? body.allowedUsers
-      : undefined;
-    const result = await setMcpAllowedUsers(name, allowedUsers);
-    if ("error" in result) return Response.json(result, { status: 404 });
+    if (!body || typeof body !== "object") {
+      return Response.json({ error: "Invalid JSON" }, { status: 400 });
+    }
+    const result = await updateMcpServer(name, body as UpdateMcpInput);
+    if ("error" in result) {
+      return Response.json(
+        { error: result.error },
+        { status: result.notFound ? 404 : 400 },
+      );
+    }
     return Response.json(result);
   }
 
