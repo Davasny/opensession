@@ -263,6 +263,8 @@ test("creates an app with a scoped scratch automation, updates it, then removes 
       automation: {
         prompt: "Handle this task.",
         mode: "ask",
+        model: "pi/openai/gpt-6.1-sol",
+        effort: "high",
         enabled: false,
         mcpServers: [],
       },
@@ -276,6 +278,8 @@ test("creates an app with a scoped scratch automation, updates it, then removes 
       id: app.automation.id,
       prompt: "Handle this task.",
       mode: "ask",
+      model: "pi/openai/gpt-6.1-sol",
+      effort: "high",
       enabled: false,
     },
   });
@@ -332,6 +336,13 @@ test("agent settings choose all connectors or the built-in Linear connector", as
     mcpAll: false,
     mcpServers: ["linear"],
   });
+  const badEffort = await update({ effort: "ultra" });
+  expect(badEffort?.status).toBe(400);
+  const badCombo = await update({
+    model: "pi/openai/gpt-6-astra",
+    effort: "max",
+  });
+  expect(badCombo?.status).toBe(400);
   expect(
     (await handleLinearAppsRoutes(context(`${path}/${app.id}`, "DELETE")))
       ?.status,
@@ -504,6 +515,8 @@ test("restores prior automation fields when config persistence fails", async () 
           prompt: "Should roll back.",
           enabled: false,
           mode: "ask",
+          model: "pi/openai/gpt-6.1-sol",
+          effort: "high",
         },
       }),
     );

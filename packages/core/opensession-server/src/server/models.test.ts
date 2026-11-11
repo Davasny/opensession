@@ -257,6 +257,16 @@ describe("Pi-only model routing", () => {
       "pi/opencode-go/gpt-6-sol",
     );
     expect(toPiModel("pi/openai/gpt-6-sol")).toBe("pi/openai/gpt-6.1-sol");
+    // Without an operator catalog row, a known OpenAI family still gets the
+    // standard reasoning ladder so the settings can offer an effort.
+    expect(modelEfforts("pi/opencode-go/gpt-6-sol")).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
   });
 
   test("routes GLM-5.3's pre-release id to the official model", async () => {

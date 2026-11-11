@@ -2,7 +2,8 @@
 
 The Linear agent (`packages/core/opensession-server/src/agents/linear/`) turns
 Linear agent-session assignments into Open Session sessions. Each OAuth app
-can have its own instructions, model, task mode, and MCP connector allowlist.
+can have its own instructions, model, reasoning effort, task mode, and MCP
+connector allowlist.
 For example, separate writing and testing apps can work in the same Linear
 workspace without sharing their OAuth grants or instructions.
 
@@ -101,11 +102,11 @@ the agent in Linear to route work to it.
 
 Agent settings reuse event automations, as GitHub review settings do. Each app
 has the event key `linear:agent_session:<app-id>`. The connector owns dispatch
-and conversation continuation; it reads the automation's prompt, model, enabled
-flag, and MCP allowlist for each turn. The primary app keeps its legacy flow
-until agent settings are saved. New additional apps default to general tasks
-with no external MCP connectors selected. **All connectors** is an explicit
-choice; an empty list stays empty.
+and conversation continuation; it reads the automation's prompt, model,
+reasoning effort, enabled flag, and MCP allowlist for each turn. The primary app
+keeps its legacy flow until agent settings are saved. New additional apps
+default to general tasks with no external MCP connectors selected. **All
+connectors** is an explicit choice; an empty list stays empty.
 
 The app's own **linear** connector is always offered in agent settings. It uses
 that app's Linear sign-in, needs no separate MCP server entry, and lets the

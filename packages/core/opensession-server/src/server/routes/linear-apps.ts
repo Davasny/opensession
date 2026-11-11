@@ -41,6 +41,7 @@ const AUTOMATION_FIELDS = [
   "prompt",
   "mode",
   "model",
+  "effort",
   "mcpServers",
   "mcpAll",
   "enabled",
@@ -49,7 +50,14 @@ const AUTOMATION_FIELDS = [
 type AutomationPatch = Partial<
   Pick<
     Automation,
-    "prompt" | "mode" | "model" | "mcpServers" | "mcpAll" | "enabled" | "repo"
+    | "prompt"
+    | "mode"
+    | "model"
+    | "effort"
+    | "mcpServers"
+    | "mcpAll"
+    | "enabled"
+    | "repo"
   >
 >;
 
@@ -75,6 +83,7 @@ function summary(app: LinearApp, automation: Automation | undefined) {
           prompt: automation.prompt,
           mode: automation.mode,
           model: automation.model ?? null,
+          effort: automation.effort ?? null,
           mcpServers: automation.mcpServers ?? [],
           mcpAll: !!automation.mcpAll,
           enabled: automation.enabled,
@@ -175,7 +184,7 @@ export async function handleLinearAppsRoutes(
         { error: "Unsupported automation field" },
         { status: 400 },
       );
-    for (const key of ["prompt", "model", "repo"]) {
+    for (const key of ["prompt", "model", "effort", "repo"]) {
       if (key in patch && typeof patch[key] !== "string")
         return Response.json(
           { error: `Automation ${key} must be a string` },
@@ -185,6 +194,7 @@ export async function handleLinearAppsRoutes(
     for (const [field, limit] of Object.entries({
       prompt: 65536,
       model: 512,
+      effort: 32,
       repo: 256,
     })) {
       const value = patch[field];
@@ -229,6 +239,7 @@ export async function handleLinearAppsRoutes(
       );
     if (typeof patch.prompt === "string") automationPatch.prompt = patch.prompt;
     if (typeof patch.model === "string") automationPatch.model = patch.model;
+    if (typeof patch.effort === "string") automationPatch.effort = patch.effort;
     if (typeof patch.repo === "string") automationPatch.repo = patch.repo;
     if (
       patch.mode === "scratch" ||
@@ -398,6 +409,8 @@ export async function handleLinearAppsRoutes(
             rollback.mode = previousAutomation.mode;
           if ("model" in automationPatch)
             rollback.model = previousAutomation.model;
+          if ("effort" in automationPatch)
+            rollback.effort = previousAutomation.effort;
           if ("repo" in automationPatch)
             rollback.repo = previousAutomation.repo;
           if ("mcpServers" in automationPatch)

@@ -236,6 +236,7 @@ export interface Automation {
   owner?: string;
   workspaceId?: string;
   model?: string;
+  effort?: string;
   fallbackModel?: string;
   accountId?: string;
   accountStrict?: boolean;
@@ -522,6 +523,7 @@ export async function createAutomationApi(input: {
   createdBy: string;
   eventKey?: string;
   model?: string;
+  effort?: string;
   fallbackModel?: string;
   accountId?: string;
   accountStrict?: boolean;

@@ -2827,6 +2827,7 @@ async function runSessionPromptInner(
         ...cachedSession,
         mode: linearInputs.mode,
         model: linearInputs.model ?? cachedSession.model,
+        effort: linearInputs.effort ?? cachedSession.effort,
       }
     : cachedSession;
   if (autoRetry) {

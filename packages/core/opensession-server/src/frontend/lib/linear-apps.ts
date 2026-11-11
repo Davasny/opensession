@@ -17,6 +17,7 @@ export const linearAppSchema = z.object({
       prompt: z.string(),
       mode: z.enum(["scratch", "ask", "code"]),
       model: z.string().nullish(),
+      effort: z.string().nullish(),
       mcpServers: z.array(z.string()).nullish(),
       mcpAll: z.boolean().optional(),
       enabled: z.boolean(),

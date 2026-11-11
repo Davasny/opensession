@@ -24,6 +24,7 @@ export function LinearAppAutomation({
     app.automation?.mode ?? "code",
   );
   const [model, setModel] = useState(app.automation?.model ?? "");
+  const [effort, setEffort] = useState(app.automation?.effort ?? "");
   const [repo, setRepo] = useState(app.automation?.repo ?? "");
   const [enabled, setEnabled] = useState(app.automation?.enabled ?? true);
   const [mcpAll, setMcpAll] = useState(app.automation?.mcpAll ?? false);
@@ -68,10 +69,20 @@ export function LinearAppAutomation({
       ignore = true;
     };
   }, []);
+  // The picker watches the selected model's ladder. Keep a stored effort only
+  // while the model still publishes it; otherwise fall back to the model's own
+  // default instead of saving a level this model cannot run.
+  const effectiveModel = model || defaultModel;
+  useEffect(() => {
+    if (!effort) return;
+    const entry = models.find((item) => item.id === effectiveModel);
+    if (entry && !entry.efforts.includes(effort)) setEffort("");
+  }, [models, effectiveModel, effort]);
   const dirty =
     prompt !== (app.automation?.prompt ?? "") ||
     mode !== (app.automation?.mode ?? "code") ||
     model !== (app.automation?.model ?? "") ||
+    effort !== (app.automation?.effort ?? "") ||
     repo !== (app.automation?.repo ?? "") ||
     enabled !== (app.automation?.enabled ?? true) ||
     mcpAll !== (app.automation?.mcpAll ?? false) ||
@@ -90,6 +101,7 @@ export function LinearAppAutomation({
             prompt,
             mode,
             model,
+            effort,
             repo: repo.trim(),
             enabled,
             mcpAll,
@@ -206,17 +218,26 @@ export function LinearAppAutomation({
                   : models,
               defaultModel,
               model,
+              effort,
             }}
             appearance={{
               triggerVariant: "field",
               disabled: saving,
               className: "phone:min-h-11",
-              title: "Model",
+              title: "Model and reasoning effort",
             }}
-            actions={{ changeModel: setModel }}
+            actions={{
+              changeModel: setModel,
+              changeEffort: setEffort,
+              reset: () => {
+                setModel("");
+                setEffort("");
+              },
+            }}
           />
           <span className="text-supporting text-dim">
-            Models are grouped by provider. Default follows the instance model.
+            Models are grouped by provider. Effort follows the selected model.
+            Default follows the instance model.
           </span>
         </div>
         {modelError && <InlineAlert>{modelError}</InlineAlert>}
@@ -248,8 +269,8 @@ export function LinearAppAutomation({
         </Button>
         <span role="status" className="text-meta text-faint">
           {saved
-            ? "Saved. Instructions, model, and tools apply to the next turn. Task mode and repository apply to new assignments."
-            : "Instructions, model, and tools apply to the next turn. Task mode and repository apply to new assignments. No restart needed."}
+            ? "Saved. Instructions, model, effort, and tools apply to the next turn. Task mode and repository apply to new assignments."
+            : "Instructions, model, effort, and tools apply to the next turn. Task mode and repository apply to new assignments. No restart needed."}
         </span>
       </div>
     </form>

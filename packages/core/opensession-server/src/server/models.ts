@@ -132,6 +132,12 @@ export function modelEfforts(
     ? configuredCatalogModel(provider, slug, providers)
     : null;
   if (configured?.efforts?.length) return [...configured.efforts];
+  // A custom gateway may serve a known OpenAI model without a catalog row
+  // that spells out its ladder. Use the family's standard levels; the
+  // operator row above still wins.
+  if (/^(?:gpt-6\.1-sol|gpt-6\.1-terra|gpt-6-sol|gpt-6-luna)$/.test(slug))
+    return [...OPENAI_EFFORTS, "max"];
+  if (/^gpt-5\./.test(slug) || slug === "gpt-6-astra") return OPENAI_EFFORTS;
   return [];
 }
 

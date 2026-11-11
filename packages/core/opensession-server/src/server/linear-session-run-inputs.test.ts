@@ -23,6 +23,7 @@ function fixture(fields: Partial<LinearSessionFile> = {}) {
     name: "Acme agent",
     prompt: "Follow the configured task workflow.",
     model: "pi/example-model",
+    effort: "high",
     mode: "code",
     schedule: "",
     enabled: true,
@@ -67,6 +68,7 @@ describe("Linear UI turn configuration", () => {
     expect(result).toEqual({
       mode: "ask",
       model: f.config.model,
+      effort: "high",
       instructions: f.config.prompt,
       mcpServers: ["linear-acme"],
       linearGrant: { appId: "acme", organizationId: "acme-org" },

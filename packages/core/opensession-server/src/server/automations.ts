@@ -49,7 +49,9 @@ import {
   providerFor,
   resolveModel,
   automaticFallbackModel,
+  modelEfforts,
   modelLabel,
+  SESSION_EFFORTS,
   toPiModel,
 } from "./models";
 import {
@@ -403,6 +405,12 @@ export interface Automation {
    */
   model?: string;
   /**
+   * Reasoning effort for new runs (see SESSION_EFFORTS). Omitted = the
+   * model's own default. Validated against the selected model's ladder when
+   * that model is explicit.
+   */
+  effort?: string;
+  /**
    * Model to switch to when the primary's whole account pool is exhausted.
    * Unset = no fallback; "none" also disables fallback.
    */
@@ -716,6 +724,16 @@ function sanitizeModel(
   return resolved.id;
 }
 
+function sanitizeEffort(
+  effort?: unknown,
+): string | { error: string } | undefined {
+  if (typeof effort !== "string" || !effort.trim()) return undefined;
+  const value = effort.trim().toLowerCase();
+  if (!(SESSION_EFFORTS as readonly string[]).includes(value))
+    return { error: `Unknown reasoning effort "${effort}"` };
+  return value;
+}
+
 function sanitizeRepo(repo?: unknown): string | { error: string } | undefined {
   if (typeof repo !== "string" || !repo.trim()) return undefined;
   const id = repo.trim();
@@ -964,6 +982,7 @@ const AUTOMATION_FIELDS: Record<string, AutomationFieldValidator> = {
   claudeCliEnv: (v) => v === true || undefined,
   codexCliEnv: (v) => v === true || undefined,
   model: (v) => sanitizeModel(v),
+  effort: (v) => sanitizeEffort(v),
   fallbackModel: (v) => sanitizeModel(v, true),
   accountId: (v) => sanitizeAccountId(v),
   // Only false is worth storing — unset/true both mean the hard-pin default.
@@ -1007,6 +1026,17 @@ function normalizeAutomation(
 ): Automation | { error: string } {
   if (!(next.name || "").trim()) return { error: "Name is required" };
   if (!(next.prompt || "").trim()) return { error: "Prompt is required" };
+  if (next.model && next.effort) {
+    const supported = modelEfforts(next.model);
+    if (
+      supported.length > 0 &&
+      !(supported as readonly string[]).includes(next.effort)
+    ) {
+      return {
+        error: `Model "${next.model}" does not support "${next.effort}" reasoning effort`,
+      };
+    }
+  }
   if (next.linearConnection) {
     next.mcpServers = [...new Set([...(next.mcpServers ?? []), "linear"])];
   }
@@ -1144,6 +1174,7 @@ export async function createAutomation(
     claudeCliEnv?: boolean;
     codexCliEnv?: boolean;
     model?: string;
+    effort?: string;
     fallbackModel?: string;
     accountId?: string;
     accountStrict?: boolean;
@@ -1258,6 +1289,7 @@ export async function updateAutomation(
       | "claudeCliEnv"
       | "codexCliEnv"
       | "model"
+      | "effort"
       | "fallbackModel"
       | "accountId"
       | "accountStrict"
@@ -2737,6 +2769,7 @@ export async function runAutomation(
         },
         mode: automation.mode,
         model: runModel,
+        effort: automation.effort,
         mcpServers: automation.mcpAll ? "all" : automation.mcpServers || [],
         mcpRunAs,
         linearGrant,
@@ -2762,6 +2795,7 @@ export async function runAutomation(
         cwd,
         mode: automation.mode,
         model: runModel,
+        effort: automation.effort,
         mcpServers: (automation.mcpAll
           ? "all"
           : (automation.mcpServers ?? "all")) as "all" | string[],

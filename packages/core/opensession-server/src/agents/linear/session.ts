@@ -1146,6 +1146,7 @@ export async function runAgentHeadless(
           }
         : {}),
       model: toPiModel(session?.model || config?.model || getDefaultModel()),
+      effort: config?.effort,
       user: actorEmail,
       author: commitAuthor,
       // Teammate-driven runs keep AWS read access — also keeps the shared

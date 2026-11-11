@@ -49,6 +49,7 @@ export async function linearSessionRunInputs(
   return {
     mode: stored.executionMode ?? session.mode,
     model: stored.model || config?.model || session.model,
+    effort: config?.effort,
     instructions: config?.prompt,
     mcpServers: config
       ? config.mcpAll
