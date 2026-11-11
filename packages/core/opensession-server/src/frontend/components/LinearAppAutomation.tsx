@@ -10,6 +10,7 @@ import { OptionSelect } from "../ui/select";
 import { InlineAlert } from "../ui/state";
 import { Switch } from "../ui/switch";
 import { McpPicker } from "./Automations";
+import { ModelEffortSelect } from "./ModelEffortSelect";
 
 export function LinearAppAutomation({
   app,
@@ -30,6 +31,7 @@ export function LinearAppAutomation({
     app.automation?.mcpServers ?? [],
   );
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [defaultModel, setDefaultModel] = useState("");
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -40,7 +42,9 @@ export function LinearAppAutomation({
     let ignore = false;
     fetchModels()
       .then((result) => {
-        if (!ignore) setModels(result.models);
+        if (ignore) return;
+        setModels(result.models);
+        setDefaultModel(result.automationDefault ?? result.default);
       })
       .catch((cause: unknown) => {
         if (!ignore)
@@ -183,22 +187,38 @@ export function LinearAppAutomation({
             className="phone:text-input-phone"
           />
         </label>
-        <label className="flex flex-col gap-1.5 text-label text-fg">
-          Model
-          <OptionSelect
-            label="Model"
-            value={model}
-            options={[
-              { value: "", label: "Default model" },
-              ...models.map((item) => ({ value: item.id, label: item.label })),
-              ...(model && !models.some((item) => item.id === model)
-                ? [{ value: model, label: model }]
-                : []),
-            ]}
-            onChange={setModel}
-            className="phone:min-h-11"
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className="text-label text-fg">Model</span>
+          <ModelEffortSelect
+            selection={{
+              models:
+                model && !models.some((item) => item.id === model)
+                  ? [
+                      ...models,
+                      {
+                        id: model,
+                        provider: "pi",
+                        label: model,
+                        aliases: [],
+                        efforts: [],
+                      },
+                    ]
+                  : models,
+              defaultModel,
+              model,
+            }}
+            appearance={{
+              triggerVariant: "field",
+              disabled: saving,
+              className: "phone:min-h-11",
+              title: "Model",
+            }}
+            actions={{ changeModel: setModel }}
           />
-        </label>
+          <span className="text-supporting text-dim">
+            Models are grouped by provider. Default follows the instance model.
+          </span>
+        </div>
         {modelError && <InlineAlert>{modelError}</InlineAlert>}
         {repoError && <InlineAlert>{repoError}</InlineAlert>}
         <McpPicker

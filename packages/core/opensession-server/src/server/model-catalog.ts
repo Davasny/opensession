@@ -1,6 +1,6 @@
 import { listAccountsPublic } from "./claude-accounts";
 import { listCodexAccountsPublic } from "./codex-accounts";
-import { modelProviders } from "./model-providers";
+import { modelProviders, type ModelProviderConfig } from "./model-providers";
 import { hasXaiAccounts } from "./xai-accounts";
 import { XAI_OAUTH_PROVIDER } from "./xai-provider-id";
 import {
@@ -21,6 +21,41 @@ export function configuredModelProviders(): Set<string> {
       .filter(([, provider]) => !!provider.apiKey)
       .map(([provider]) => provider),
   ]);
+}
+
+/** Display labels for the upstream providers we know by name. Configured
+ *  providers can override theirs with `name` in Settings. */
+const MODEL_PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  pi: "Pi",
+  "xai-oauth": "xAI SuperGrok",
+  xai: "xAI",
+  meta: "Meta",
+  google: "Google",
+  openrouter: "OpenRouter",
+  groq: "Groq",
+  mistral: "Mistral",
+  deepseek: "DeepSeek",
+  moonshotai: "Moonshot AI",
+  cerebras: "Cerebras",
+  wafer: "Wafer",
+};
+
+/** A person-facing name for a routed model's upstream provider. */
+export function modelVendorLabel(
+  vendor: string,
+  providers: Record<string, ModelProviderConfig> = modelProviders(),
+): string {
+  const configured = providers[vendor]?.name?.trim();
+  if (configured) return configured;
+  const known = MODEL_PROVIDER_LABELS[vendor];
+  if (known) return known;
+  return vendor
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 /** Upstream provider needed to run one selectable model. */

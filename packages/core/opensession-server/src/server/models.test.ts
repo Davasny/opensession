@@ -221,6 +221,44 @@ describe("Pi-only model routing", () => {
     expect(resolveModel("GLM 5.3")?.id).toBe("pi/openrouter/z-ai/glm-5.3");
   });
 
+  test("adds an explicit provider model to the picker", async () => {
+    pickerConfigDir = mkdtempSync(join(tmpdir(), "pi-provider-model-"));
+    process.env.OPENSESSION_PI_CONFIG = join(pickerConfigDir, "pi.json");
+    process.env.OPENSESSION_MODEL_PROVIDERS_CONFIG = join(
+      pickerConfigDir,
+      "providers.json",
+    );
+    writeFileSync(
+      process.env.OPENSESSION_PI_CONFIG,
+      JSON.stringify({ enabled: true }),
+    );
+    writeFileSync(
+      process.env.OPENSESSION_MODEL_PROVIDERS_CONFIG,
+      JSON.stringify({
+        providers: {
+          "opencode-go": {
+            apiKey: "test-key",
+            baseURL: "https://example.test/v1",
+            api: "openai-completions",
+          },
+        },
+        pickerModels: ["pi/opencode-go/gpt-6-sol"],
+      }),
+    );
+    await Promise.all([loadPiConfig(), loadModelProviders()]);
+    refreshPickerModels();
+
+    expect(
+      KNOWN_MODELS.some((model) => model.id === "pi/opencode-go/gpt-6-sol"),
+    ).toBe(true);
+    // A custom provider keeps the id its gateway serves. Only the retired
+    // OpenAI alias is rewritten to GPT-6.1 Sol.
+    expect(toPiModel("pi/opencode-go/gpt-6-sol")).toBe(
+      "pi/opencode-go/gpt-6-sol",
+    );
+    expect(toPiModel("pi/openai/gpt-6-sol")).toBe("pi/openai/gpt-6.1-sol");
+  });
+
   test("routes GLM-5.3's pre-release id to the official model", async () => {
     expect(toPiModel("pi/openrouter/stealth/ox-alpha")).toBe(
       "pi/openrouter/z-ai/glm-5.3",

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   chooseConfiguredDefaultModel,
   modelUpstreamProvider,
+  modelVendorLabel,
   pickerModelId,
 } from "./model-catalog";
 
@@ -21,6 +22,17 @@ describe("model catalog provider availability", () => {
     expect(pickerModelId("pi/orchestrator/fable-sol")).toBe(
       "pi/anthropic/claude-fable-5-2",
     );
+  });
+
+  test("labels upstream providers, preferring the configured name", () => {
+    expect(modelVendorLabel("openai")).toBe("OpenAI");
+    expect(modelVendorLabel("xai-oauth")).toBe("xAI SuperGrok");
+    expect(
+      modelVendorLabel("opencode-go", {
+        "opencode-go": { name: "OpenCode Go" },
+      }),
+    ).toBe("OpenCode Go");
+    expect(modelVendorLabel("opencode-go", {})).toBe("Opencode Go");
   });
 
   test("replaces an unavailable default with the first configured model", () => {

@@ -25,6 +25,8 @@ import {
   configuredInteractiveDefaultModel,
   configuredModelProviders,
   modelFitsConfiguredProviders,
+  modelUpstreamProvider,
+  modelVendorLabel,
   pickerModelId,
 } from "../model-catalog";
 import { type Sandbox } from "../sandbox";
@@ -66,13 +68,18 @@ export async function handleModelsRoutes(
       : getDefaultModel();
     // One provider config read for the whole catalog, not one per model.
     const providers = modelProviders();
-    const catalogModels = visibleModels.map((model) => ({
-      ...model,
-      efforts: modelEfforts(model.id, providers),
-      accountProvider: accountProviderForModel(model.id),
-      fastModeSupported: supportsOpenaiFastMode(toPiModel(model.id)),
-      ultrafastSupported: supportsOpenaiUltrafast(toPiModel(model.id)),
-    }));
+    const catalogModels = visibleModels.map((model) => {
+      const vendor = modelUpstreamProvider(model.id);
+      return {
+        ...model,
+        efforts: modelEfforts(model.id, providers),
+        vendor,
+        vendorLabel: vendor ? modelVendorLabel(vendor, providers) : undefined,
+        accountProvider: accountProviderForModel(model.id),
+        fastModeSupported: supportsOpenaiFastMode(toPiModel(model.id)),
+        ultrafastSupported: supportsOpenaiUltrafast(toPiModel(model.id)),
+      };
+    });
     const routedDefault = pickerModelId(interactiveDefault);
     const catalogDefault = catalogModels.some(
       (model) => model.id === routedDefault,
@@ -82,6 +89,10 @@ export async function handleModelsRoutes(
     return Response.json({
       models: catalogModels,
       default: catalogDefault,
+      // Unattended runs (Slack, Linear, workflows) use the global default,
+      // which can differ from the interactive default above. The Linear agent
+      // settings show this row when no model is pinned.
+      automationDefault: pickerModelId(getDefaultModel()),
       autoFallback: getModelFallbackAuto(),
       // The engines a model can be routed to, and which of them are ready
       // to run: the composer's Engine choice composes the engine's prefix

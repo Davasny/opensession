@@ -29,6 +29,9 @@ beforeEach(async () => {
     spyOn(models, "interactiveDefaultModel").mockImplementation(
       () => preferred,
     ),
+    spyOn(models, "getDefaultModel").mockReturnValue(
+      "pi/anthropic/claude-opus-5-5",
+    ),
   ];
   restores.push(...mocks.map((mock) => () => mock.mockRestore()));
   await catalogDocuments("workspaces").set("ws-acme", {
@@ -52,8 +55,14 @@ async function modelCatalog() {
     publicPrefix: "",
   });
   return (await response!.json()) as {
-    models: Array<{ id: string; label: string }>;
+    models: Array<{
+      id: string;
+      label: string;
+      vendor?: string;
+      vendorLabel?: string;
+    }>;
     default: string;
+    automationDefault?: string;
   };
 }
 
@@ -67,7 +76,22 @@ test("the catalog lists plain models only and keeps the default", async () => {
     ids.some((id) => /^pi\/(?:dial|orchestrator|workspace-preset)\//.test(id)),
   ).toBe(false);
   expect(result.default).toBe("pi/anthropic/claude-opus-5-5");
+  expect(result.automationDefault).toBe("pi/anthropic/claude-opus-5-5");
   expect(new Set(ids).size).toBe(ids.length);
+});
+
+test("each model names the upstream provider it runs on", async () => {
+  const result = await modelCatalog();
+  const openai = result.models.find(
+    (model) => model.id === "pi/openai/gpt-6.1-sol",
+  );
+  expect(openai?.vendor).toBe("openai");
+  expect(openai?.vendorLabel).toBe("OpenAI");
+  const anthropic = result.models.find(
+    (model) => model.id === "pi/anthropic/claude-opus-5-5",
+  );
+  expect(anthropic?.vendor).toBe("anthropic");
+  expect(anthropic?.vendorLabel).toBe("Anthropic");
 });
 
 test("a retired preset default resolves to the model it led", async () => {

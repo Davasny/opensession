@@ -15,6 +15,10 @@ export interface ModelOption {
   label: string;
   aliases: string[];
   efforts: string[];
+  /** Routed upstream provider from `pi/<vendor>/<model>`. */
+  vendor?: string;
+  /** Display name for `vendor`, from Settings or the built-in label map. */
+  vendorLabel?: string;
   /** Provider account pool available to this model, if any. */
   accountProvider?: "claude" | "codex" | "xai";
   /** This model has subscription-backend priority-tier variants configured. */
@@ -23,7 +27,12 @@ export interface ModelOption {
   ultrafastSupported?: boolean;
 }
 
-type ModelCatalog = { models: ModelOption[]; default: string };
+type ModelCatalog = {
+  models: ModelOption[];
+  default: string;
+  /** Global default used by unattended runs; absent on older servers. */
+  automationDefault?: string;
+};
 
 const suggestBranchResponseSchema = z.object({ branch: z.string().optional() });
 const transcribeResponseSchema = z

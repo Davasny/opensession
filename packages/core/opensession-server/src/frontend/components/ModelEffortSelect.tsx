@@ -598,7 +598,18 @@ export function ModelEffortSelect({
     // a flat list stops scanning well once third-party providers join the
     // picker. Falls back to flat when everything is one provider.
     const providerOf = (id: string) =>
-      routedModelParts(id)?.provider || "other";
+      modelById.get(id)?.vendor || routedModelParts(id)?.provider || "other";
+    const providerLabelOf = (id: string, provider: string) => {
+      const label = modelById.get(id)?.vendorLabel;
+      if (label) return label;
+      const known = PROVIDER_LABEL_BY_ID.get(provider);
+      if (known) return known;
+      return provider
+        .split("-")
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+    };
     const providerGroups: Array<{
       provider: string;
       label: string;
@@ -610,9 +621,7 @@ export function ModelEffortSelect({
       if (!group) {
         group = {
           provider,
-          label:
-            PROVIDER_LABEL_BY_ID.get(provider) ||
-            provider.charAt(0).toUpperCase() + provider.slice(1),
+          label: providerLabelOf(option.id, provider),
           options: [],
         };
         providerGroups.push(group);
